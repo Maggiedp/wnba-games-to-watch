@@ -4,49 +4,45 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# BPI observed range from 2025 season data. Offset shifts all values positive
+# before harmonic mean, since HM is only meaningful for positive numbers.
+_BPI_MIN = -10.0
+_BPI_MAX = 10.0
+_BPI_OFFSET = abs(_BPI_MIN) + 1.0  # 11.0 → shifted range is 1..21
 
-def harmonic_mean(bpi_a: float, bpi_b: float) -> float:
-    """Compute harmonic mean of two BPI ratings.
 
-    The harmonic mean penalizes lopsided matchups (high variance),
-    so a 5 vs 1 game scores lower than a 3 vs 3 game.
+def _shift(bpi: float) -> float:
+    """Shift a BPI value into the positive domain for harmonic mean."""
+    return bpi + _BPI_OFFSET
+
+
+def harmonic_mean_shifted(bpi_a: float, bpi_b: float) -> float:
+    """Compute harmonic mean of two BPI ratings after shifting to positive domain."""
+    sa, sb = _shift(bpi_a), _shift(bpi_b)
+    return 2 * sa * sb / (sa + sb)
+
+
+def normalize_quality_score(shifted_hm: float) -> float:
+    """Normalize a shifted harmonic mean to 0-100.
+
+    Shifted HM range: HM(1, 1)=1 at worst, HM(21, 21)=21 at best.
     """
-    denominator = bpi_a + bpi_b
-    if denominator == 0 or bpi_a == 0 or bpi_b == 0:
-        return 0.0
-
-    return 2 * bpi_a * bpi_b / denominator
-
-
-def normalize_quality_score(
-    quality: float, min_bpi: float = -10.0, max_bpi: float = 10.0
-) -> float:
-    """Normalize quality score to 0-100 scale.
-
-    BPI scores typically range from -10 to +10, where:
-    - +10 is an elite team
-    - 0 is league-average strength
-    - -10 is a very weak team
-
-    Harmonic mean of two BPI scores will also be in roughly this range.
-    """
-    # Clamp to expected range
-    clamped = max(min_bpi, min(max_bpi, quality))
-
-    # Linear normalization: -10 -> 0, +10 -> 100
-    # First shift to 0-20 range, then scale to 0-100
-    normalized = (clamped - min_bpi) / (max_bpi - min_bpi) * 100
-    return max(0.0, min(100.0, normalized))
+    shifted_min = _shift(_BPI_MIN)  # 1.0
+    shifted_max = _shift(_BPI_MAX)  # 21.0
+    clamped = max(shifted_min, min(shifted_max, shifted_hm))
+    return (clamped - shifted_min) / (shifted_max - shifted_min) * 100
 
 
 def compute_quality_score(bpi_a: float, bpi_b: float) -> float:
     """Compute normalized game quality score (0-100).
 
-    High quality games are those between similarly strong teams.
+    Higher = better matchup (strong teams, evenly matched).
+    Uses harmonic mean so a lopsided matchup (5 vs -5) scores lower
+    than an even one (0 vs 0), even if arithmetic means are similar.
     """
-    h_mean = harmonic_mean(bpi_a, bpi_b)
-    normalized = normalize_quality_score(h_mean)
+    hm = harmonic_mean_shifted(bpi_a, bpi_b)
+    score = normalize_quality_score(hm)
     logger.debug(
-        f"Quality score: BPI({bpi_a}, {bpi_b}) = HM({h_mean:.2f}) = {normalized:.1f}/100"
+        f"Quality: BPI({bpi_a:.2f}, {bpi_b:.2f}) → HM={hm:.2f} → {score:.1f}/100"
     )
-    return normalized
+    return score

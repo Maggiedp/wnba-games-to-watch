@@ -37,6 +37,50 @@ def get_all_teams(session: Session) -> list[Team]:
     return session.query(Team).all()
 
 
+def upsert_game(
+    session: Session,
+    team_a_id: int,
+    team_b_id: int,
+    date: str,
+    time: str,
+    broadcaster: str,
+    winner_id: int | None = None,
+    final_score_a: int | None = None,
+    final_score_b: int | None = None,
+) -> Game:
+    """Upsert a game (insert if not exists, update result if it has been played)."""
+    game = (
+        session.query(Game)
+        .filter(
+            Game.date == date, Game.team_a_id == team_a_id, Game.team_b_id == team_b_id
+        )
+        .first()
+    )
+    if game:
+        if winner_id is not None:
+            game.winner_id = winner_id
+            game.final_score_a = final_score_a
+            game.final_score_b = final_score_b
+        if broadcaster:
+            game.broadcaster = broadcaster
+        session.commit()
+        return game
+
+    game = Game(
+        team_a_id=team_a_id,
+        team_b_id=team_b_id,
+        date=date,
+        time=time,
+        broadcaster=broadcaster,
+        winner_id=winner_id,
+        final_score_a=final_score_a,
+        final_score_b=final_score_b,
+    )
+    session.add(game)
+    session.commit()
+    return game
+
+
 def insert_game(
     session: Session,
     team_a_id: int,

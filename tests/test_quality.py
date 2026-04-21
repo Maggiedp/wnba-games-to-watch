@@ -1,47 +1,57 @@
 """Tests for quality scoring."""
 
 from src.scoring.quality import (
-    harmonic_mean,
+    harmonic_mean_shifted,
     normalize_quality_score,
     compute_quality_score,
+    _shift,
 )
 
 
-def test_harmonic_mean():
-    """Test harmonic mean calculation."""
-    # Equal teams: HM(5, 5) = 5
-    assert harmonic_mean(5.0, 5.0) == 5.0
-
-    # Lopsided: HM(10, 0) = 0
-    assert harmonic_mean(10.0, 0.0) == 0.0
-
-    # Close teams: HM(5, 4) = 4.44...
-    result = harmonic_mean(5.0, 4.0)
-    assert 4.4 < result < 4.5
+def test_shift_makes_positive():
+    """All BPI values should be positive after shifting."""
+    assert _shift(-10.0) > 0
+    assert _shift(0.0) > 0
+    assert _shift(10.0) > 0
 
 
-def test_normalize_quality_score():
-    """Test normalization of quality scores."""
-    # Min value should map to 0
-    assert normalize_quality_score(-10.0) == 0.0
-
-    # Max value should map to 100
-    assert normalize_quality_score(10.0) == 100.0
-
-    # Mid value should map to 50
-    assert normalize_quality_score(0.0) == 50.0
-
-    # Clamping should work
-    assert normalize_quality_score(20.0) == 100.0
-    assert normalize_quality_score(-20.0) == 0.0
+def test_harmonic_mean_equal_teams():
+    """Equal teams should return a score equal to their shifted value."""
+    hm = harmonic_mean_shifted(5.0, 5.0)
+    assert hm == _shift(5.0)
 
 
-def test_compute_quality_score():
-    """Test full quality score computation."""
-    # High quality (both strong teams)
-    score = compute_quality_score(5.0, 4.0)
-    assert 70 < score < 80  # Should be in upper range
+def test_harmonic_mean_penalizes_lopsided():
+    """A lopsided matchup should score lower than an even one with similar average."""
+    # (10, -8) average ≈ 1, but very lopsided
+    # (1, 1) average = 1, evenly matched
+    hm_lopsided = harmonic_mean_shifted(10.0, -8.0)
+    hm_even = harmonic_mean_shifted(1.0, 1.0)
+    assert hm_lopsided < hm_even
 
-    # Low quality (lopsided)
-    score = compute_quality_score(10.0, -10.0)
-    assert score == 50.0  # Harmonic mean is 0, which maps to 50
+
+def test_harmonic_mean_mixed_signs():
+    """Should handle mixed positive/negative BPI without errors."""
+    result = harmonic_mean_shifted(5.668, -3.901)  # Lynx vs Mystics
+    assert result > 0
+
+
+def test_normalize_bounds():
+    """Extremes should map to 0 and 100."""
+    assert normalize_quality_score(_shift(-10.0)) == 0.0
+    assert normalize_quality_score(_shift(10.0)) == 100.0
+
+
+def test_compute_quality_score_ordering():
+    """Better matchups should score higher."""
+    # Two strong teams equally matched
+    top_game = compute_quality_score(5.0, 4.0)
+    # Two weak teams
+    weak_game = compute_quality_score(-4.0, -5.0)
+    # One strong, one weak (lopsided)
+    lopsided = compute_quality_score(5.0, -5.0)
+
+    assert top_game > lopsided
+    assert weak_game < top_game  # weak-vs-weak scores lower than strong-vs-strong
+    assert 0 <= top_game <= 100
+    assert 0 <= lopsided <= 100

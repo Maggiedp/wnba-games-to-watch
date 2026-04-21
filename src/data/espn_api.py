@@ -2,154 +2,183 @@
 
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+SITE_API = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba"
+CORE_API = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba"
+
 
 class ESPNAPIError(Exception):
-    """Exception for ESPN API errors."""
-
     pass
 
 
+def _get(url: str, **params) -> dict:
+    """GET with standard error handling."""
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as e:
+        raise ESPNAPIError(f"ESPN API request failed: {e}") from e
+
+
+def _team_id_from_ref(ref: str) -> Optional[int]:
+    """Parse team ID out of a $ref URL like .../teams/8?lang=..."""
+    try:
+        path = ref.split("?")[0]
+        return int(path.rstrip("/").split("/")[-1])
+    except (ValueError, IndexError):
+        return None
+
+
+def fetch_team_id_map() -> dict[int, str]:
+    """Return {espn_team_id: display_name} for all WNBA teams."""
+    data = _get(f"{SITE_API}/teams")
+    teams = data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+    return {int(t["team"]["id"]): t["team"]["displayName"] for t in teams}
+
+
 def fetch_bpi_ratings() -> dict[str, float]:
-    """Fetch current BPI ratings for all WNBA teams.
+    """Return {team_display_name: bpi_value} using the most recent season with data."""
+    team_names = fetch_team_id_map()
 
-    Returns a dict mapping team names to BPI scores.
+    for season in (2026, 2025):
+        data = _get(f"{CORE_API}/seasons/{season}/powerindex", limit=50)
+        items = data.get("items", [])
+        if not items:
+            logger.info(f"BPI season {season} has no data, trying previous season")
+            continue
+
+        ratings = {}
+        for item in items:
+            ref = item.get("team", {}).get("$ref", "")
+            team_id = _team_id_from_ref(ref)
+            if team_id is None:
+                continue
+            name = team_names.get(team_id)
+            if not name:
+                continue
+            for stat in item.get("stats", []):
+                if stat["name"] == "bpi":
+                    ratings[name] = stat["value"]
+                    break
+
+        if ratings:
+            logger.info(f"Fetched BPI for {len(ratings)} teams from {season} season")
+            return ratings
+
+    logger.error("Could not fetch BPI ratings from any season")
+    return {}
+
+
+def fetch_schedule_and_results(days_ahead: int = 7) -> list[dict]:
+    """Return upcoming + recent games from the ESPN scoreboard.
+
+    Fetches today + days_ahead days of games.
     """
-    url = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba/seasons/2025/powerindex"
+    today = datetime.now()
+    all_games = []
+    seen_ids = set()
 
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+    # Fetch a window: yesterday through days_ahead
+    for offset in range(-1, days_ahead + 1):
+        date = today + timedelta(days=offset)
+        date_str = date.strftime("%Y%m%d")
+        try:
+            data = _get(f"{SITE_API}/scoreboard", dates=date_str)
+        except ESPNAPIError as e:
+            logger.warning(f"Failed to fetch scoreboard for {date_str}: {e}")
+            continue
 
-        bpi_ratings = {}
-        if "items" in data:
-            for item in data["items"]:
-                team_ref = item.get("team", {})
-                team_id = team_ref.get("$ref", "").split("/")[-1]
-                team_name = item.get("name", "")
-                bpi = item.get("bpi", 0.0)
-
-                if team_name:
-                    bpi_ratings[team_name] = bpi
-                    logger.info(f"BPI: {team_name} = {bpi}")
-
-        return bpi_ratings
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch BPI ratings: {e}")
-        raise ESPNAPIError(f"Failed to fetch BPI ratings: {e}")
-
-
-def fetch_schedule_and_results(
-    season: int = 2025,
-) -> list[dict]:
-    """Fetch schedule and game results from ESPN.
-
-    Returns a list of games with team_a, team_b, date, time, winner_id, final_score_a, final_score_b.
-    """
-    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/schedule?season={season}"
-
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        games = []
-        events = data.get("events", [])
-
-        for event in events:
-            game = parse_game_event(event)
+        for event in data.get("events", []):
+            event_id = event.get("id")
+            if event_id in seen_ids:
+                continue
+            seen_ids.add(event_id)
+            game = _parse_event(event)
             if game:
-                games.append(game)
+                all_games.append(game)
 
-        logger.info(f"Fetched {len(games)} games from ESPN schedule")
-        return games
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch schedule: {e}")
-        raise ESPNAPIError(f"Failed to fetch schedule: {e}")
+    logger.info(f"Fetched {len(all_games)} games from ESPN scoreboard")
+    return all_games
 
 
-def parse_game_event(event: dict) -> Optional[dict]:
-    """Parse a single game event from ESPN API."""
+def _parse_event(event: dict) -> Optional[dict]:
+    """Parse a single scoreboard event into a flat game dict."""
     try:
-        event_id = event.get("id", "")
+        comp = event["competitions"][0]
         date_str = event.get("date", "")
-        status = event.get("status", {}).get("type", "")
-
-        # Extract date and time
-        if date_str:
-            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            date = dt.strftime("%Y-%m-%d")
-            time = dt.strftime("%H:%M")
-        else:
+        if not date_str:
             return None
 
-        competitors = event.get("competitors", [])
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        date = dt.strftime("%Y-%m-%d")
+        time = dt.strftime("%H:%M")
+
+        competitors = comp.get("competitors", [])
         if len(competitors) < 2:
             return None
 
-        team_a_info = competitors[0]
-        team_b_info = competitors[1]
+        # ESPN puts home team first in the competitors list
+        team_a_info = next(
+            (c for c in competitors if c.get("homeAway") == "home"), competitors[0]
+        )
+        team_b_info = next(
+            (c for c in competitors if c.get("homeAway") == "away"), competitors[1]
+        )
 
-        team_a = team_a_info.get("team", {}).get("displayName", "")
-        team_b = team_b_info.get("team", {}).get("displayName", "")
+        team_a = team_a_info["team"]["displayName"]
+        team_b = team_b_info["team"]["displayName"]
 
-        winner_id = None
+        status = comp["status"]["type"][
+            "name"
+        ]  # e.g. "STATUS_FINAL", "STATUS_SCHEDULED"
+        is_final = status == "STATUS_FINAL"
+
+        winner_team = None
         final_score_a = None
         final_score_b = None
 
-        if status == "final":
-            score_a = int(team_a_info.get("score", 0))
-            score_b = int(team_b_info.get("score", 0))
-            final_score_a = score_a
-            final_score_b = score_b
-
-            if score_a > score_b:
+        if is_final:
+            final_score_a = int(team_a_info.get("score", 0))
+            final_score_b = int(team_b_info.get("score", 0))
+            if final_score_a > final_score_b:
                 winner_team = team_a
-            elif score_b > score_a:
+            elif final_score_b > final_score_a:
                 winner_team = team_b
-            else:
-                winner_team = None
 
-        broadcaster = get_broadcaster_from_links(event.get("links", []))
+        broadcaster = _parse_broadcaster(comp)
 
         return {
-            "event_id": event_id,
+            "event_id": event["id"],
             "team_a": team_a,
             "team_b": team_b,
             "date": date,
             "time": time,
-            "winner_team": winner_team if status == "final" else None,
+            "winner_team": winner_team,
             "final_score_a": final_score_a,
             "final_score_b": final_score_b,
             "broadcaster": broadcaster,
             "status": status,
         }
-    except (KeyError, ValueError, TypeError) as e:
-        logger.warning(f"Failed to parse game event: {e}")
+    except (KeyError, ValueError, TypeError, IndexError) as e:
+        logger.warning(f"Failed to parse event {event.get('id')}: {e}")
         return None
 
 
-def get_broadcaster_from_links(links: list) -> str:
-    """Extract broadcaster info from event links."""
-    for link in links:
-        text = link.get("text", "").lower()
-        if "watch" in text or "live" in text:
-            # Try to extract broadcaster name
-            for broadcaster in [
-                "ESPN",
-                "NBC",
-                "Prime Video",
-                "CBS",
-                "Paramount+",
-                "ION",
-                "USA",
-                "League Pass",
-            ]:
-                if broadcaster.lower() in text:
-                    return broadcaster
+def _parse_broadcaster(comp: dict) -> str:
+    """Extract broadcaster name from competition data."""
+    from src.constants import BROADCASTER_NORMALIZE
+
+    for broadcast in comp.get("geoBroadcasts", []) + comp.get("broadcasts", []):
+        names = broadcast.get("names", [])
+        media = broadcast.get("media", {}).get("shortName", "")
+        for candidate in names + ([media] if media else []):
+            normalized = BROADCASTER_NORMALIZE.get(candidate.upper())
+            if normalized:
+                return normalized
+
     return ""
