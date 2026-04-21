@@ -4,13 +4,28 @@ from sqlalchemy.orm import Session
 from src.db.schema import Team, Game, DailyRanking
 
 
-def upsert_team(session: Session, name: str, bpi_rating: float) -> Team:
+def upsert_team(
+    session: Session,
+    name: str,
+    bpi_rating: float,
+    abbreviation: str = "",
+    logo_url: str = "",
+) -> Team:
     """Upsert a team (create if not exists, update if exists)."""
     team = session.query(Team).filter(Team.name == name).first()
     if team:
         team.bpi_rating = bpi_rating
+        if abbreviation:
+            team.abbreviation = abbreviation
+        if logo_url:
+            team.logo_url = logo_url
     else:
-        team = Team(name=name, bpi_rating=bpi_rating)
+        team = Team(
+            name=name,
+            bpi_rating=bpi_rating,
+            abbreviation=abbreviation,
+            logo_url=logo_url,
+        )
         session.add(team)
     session.commit()
     return team
@@ -213,7 +228,7 @@ def upsert_daily_ranking(
     team_a_id: int,
     team_b_id: int,
     quality_score: float,
-    importance_score: float,
+    importance_score: float | None,
     overall_score: float,
     broadcaster: str,
 ) -> DailyRanking:

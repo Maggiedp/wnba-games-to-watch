@@ -46,6 +46,28 @@ def fetch_team_id_map() -> dict[int, str]:
     return {int(t["team"]["id"]): t["team"]["displayName"] for t in teams}
 
 
+def fetch_team_details() -> dict[str, dict]:
+    """Return {display_name: {"abbreviation", "logo_url"}} for all WNBA teams."""
+    data = _get(f"{SITE_API}/teams")
+    teams = data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+    out: dict[str, dict] = {}
+    for t in teams:
+        team = t["team"]
+        # Prefer the default full-color logo; first "default" rel tag is consistent across teams.
+        logo_url = ""
+        for logo in team.get("logos", []):
+            if "default" in logo.get("rel", []):
+                logo_url = logo.get("href", "")
+                break
+        if not logo_url and team.get("logos"):
+            logo_url = team["logos"][0].get("href", "")
+        out[team["displayName"]] = {
+            "abbreviation": team.get("abbreviation", ""),
+            "logo_url": logo_url,
+        }
+    return out
+
+
 def fetch_bpi_ratings() -> dict[str, float]:
     """Return {team_display_name: bpi_value} using the most recent season with data."""
     team_names = fetch_team_id_map()
