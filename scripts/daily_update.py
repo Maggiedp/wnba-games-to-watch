@@ -228,25 +228,20 @@ def store_daily_rankings(session, scored_games):
 
 def main():
     """Main entry point for the daily update job."""
-    try:
-        logger.info("=== Starting daily update job ===")
+    logger.info("=== Starting daily update job ===")
 
-        # Initialize database
+    try:
         init_db()
         session = get_session()
 
         try:
-            # Fetch and store data
             bpi_ratings = fetch_and_store_bpi_ratings(session)
             games = fetch_and_store_games(session)
 
-            # Compute standings
             standings = compute_standings(session)
 
-            # Compute scores
             scored_games = compute_daily_scores(session, games, standings)
 
-            # Store rankings
             store_daily_rankings(session, scored_games)
 
             logger.info("=== Daily update job completed successfully ===")

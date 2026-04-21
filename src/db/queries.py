@@ -21,6 +21,11 @@ def get_team_by_name(session: Session, name: str) -> Team | None:
     return session.query(Team).filter(Team.name == name).first()
 
 
+def get_team_by_id(session: Session, team_id: int) -> Team | None:
+    """Get a team by ID."""
+    return session.query(Team).filter(Team.id == team_id).first()
+
+
 def get_all_teams(session: Session) -> list[Team]:
     """Get all teams."""
     return session.query(Team).all()

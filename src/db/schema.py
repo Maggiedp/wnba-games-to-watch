@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 import os
 
 Base = declarative_base()
+_engine = None
 
 
 class Team(Base):
@@ -40,6 +41,8 @@ class Game(Base):
     broadcaster = Column(String(50), default="")
     created_at = Column(DateTime, default=func.now())
 
+    __table_args__ = (Index("idx_game_date", "date"),)
+
 
 class DailyRanking(Base):
     __tablename__ = "daily_rankings"
@@ -53,6 +56,11 @@ class DailyRanking(Base):
     overall_score = Column(Float, default=0.0)
     broadcaster = Column(String(50), default="")
     created_at = Column(DateTime, default=func.now())
+
+    __table_args__ = (
+        Index("idx_ranking_date", "date"),
+        UniqueConstraint("date", "team_a_id", "team_b_id", name="uq_daily_ranking"),
+    )
 
 
 def get_database_url() -> str:
@@ -68,17 +76,23 @@ def get_database_url() -> str:
     return db_url
 
 
+def get_engine():
+    """Get or create the database engine (singleton pattern)."""
+    global _engine
+    if _engine is None:
+        _engine = create_engine(get_database_url(), echo=False)
+    return _engine
+
+
 def init_db():
     """Initialize the database and create tables if they don't exist."""
-    db_url = get_database_url()
-    engine = create_engine(db_url, echo=False)
+    engine = get_engine()
     Base.metadata.create_all(engine)
     return engine
 
 
 def get_session():
     """Create a new database session."""
-    db_url = get_database_url()
-    engine = create_engine(db_url, echo=False)
+    engine = get_engine()
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     return SessionLocal()

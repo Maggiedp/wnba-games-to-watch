@@ -68,18 +68,7 @@ async def get_games_by_broadcaster(broadcaster: str):
 @app.get("/api/broadcasters")
 async def get_broadcasters():
     """Get list of available broadcasters."""
-    broadcasters = [
-        "ESPN",
-        "NBC",
-        "Prime Video",
-        "CBS",
-        "Paramount+",
-        "ION",
-        "USA Network",
-        "League Pass",
-        "NBA TV",
-    ]
-    return {"broadcasters": broadcasters}
+    return {"broadcasters": Broadcasters.ALL}
 
 
 @app.on_event("startup")

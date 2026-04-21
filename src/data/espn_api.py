@@ -88,7 +88,6 @@ def parse_game_event(event: dict) -> Optional[dict]:
         else:
             return None
 
-        # Get competitor info
         competitors = event.get("competitors", [])
         if len(competitors) < 2:
             return None
@@ -99,7 +98,6 @@ def parse_game_event(event: dict) -> Optional[dict]:
         team_a = team_a_info.get("team", {}).get("displayName", "")
         team_b = team_b_info.get("team", {}).get("displayName", "")
 
-        # Get scores if game is completed
         winner_id = None
         final_score_a = None
         final_score_b = None
@@ -117,7 +115,6 @@ def parse_game_event(event: dict) -> Optional[dict]:
             else:
                 winner_team = None
 
-        # Get broadcaster info
         broadcaster = get_broadcaster_from_links(event.get("links", []))
 
         return {

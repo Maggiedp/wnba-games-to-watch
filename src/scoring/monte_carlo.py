@@ -92,19 +92,16 @@ def run_monte_carlo_simulation(
                 standings[team_b].wins += 1
                 standings[team_a].losses += 1
 
-        # Determine playoff teams (top 8 by wins)
         sorted_teams = sorted(standings.values(), key=lambda t: t.points, reverse=True)
         playoff_teams = sorted_teams[:PLAYOFF_TEAMS]
 
         for team in playoff_teams:
             playoff_counts[team.name] += 1
 
-    # Convert counts to probabilities
     playoff_probs = {
         name: count / num_simulations for name, count in playoff_counts.items()
     }
 
-    # Add teams with 0 probability
     for name in current_standings.keys():
         if name not in playoff_probs:
             playoff_probs[name] = 0.0

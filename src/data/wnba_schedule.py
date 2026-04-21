@@ -41,12 +41,10 @@ def fetch_wnba_schedule_broadcasters(date: str) -> dict[tuple[str, str], str]:
         soup = BeautifulSoup(response.content, "html.parser")
         broadcasters = {}
 
-        # Find all game cards on the schedule page
         game_cards = soup.find_all("div", class_="GameCard")
 
         for card in game_cards:
             try:
-                # Extract teams
                 teams = card.find_all("span", class_="TeamName")
                 if len(teams) < 2:
                     continue
@@ -54,7 +52,6 @@ def fetch_wnba_schedule_broadcasters(date: str) -> dict[tuple[str, str], str]:
                 team_a = teams[0].get_text(strip=True)
                 team_b = teams[1].get_text(strip=True)
 
-                # Extract broadcaster
                 broadcaster_elem = card.find("span", class_="Broadcaster")
                 if broadcaster_elem:
                     broadcaster_text = broadcaster_elem.get_text(strip=True).lower()
