@@ -12,5 +12,8 @@ COPY . .
 # Create logs directory
 RUN mkdir -p logs
 
+# Cloud Run requires binding to 0.0.0.0
+ENV API_HOST=0.0.0.0
+
 # Run the API
 CMD ["python", "main.py"]

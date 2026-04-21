@@ -77,170 +77,176 @@ _HOMEPAGE_HTML = """
             }
             body {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                background: #f0f0f0;
                 min-height: 100vh;
-                padding: 20px;
-            }
-            .container {
-                max-width: 1000px;
-                margin: 0 auto;
-                background: white;
-                border-radius: 12px;
-                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-                overflow: hidden;
             }
             .header {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                background: #0d1b2a;
                 color: white;
-                padding: 30px;
-                text-align: center;
+                padding: 24px 32px;
+                border-bottom: 3px solid #ff6b00;
             }
             .header h1 {
-                font-size: 2.5em;
-                margin-bottom: 10px;
+                font-size: 1.6em;
+                font-weight: 700;
+                letter-spacing: -0.02em;
+            }
+            .header h1 span {
+                color: #ff6b00;
             }
             .header p {
-                font-size: 1.1em;
-                opacity: 0.9;
+                font-size: 0.9em;
+                color: #8a9bb0;
+                margin-top: 4px;
             }
             .controls {
-                padding: 20px 30px;
-                border-bottom: 1px solid #eee;
+                background: white;
+                padding: 14px 32px;
+                border-bottom: 1px solid #e0e0e0;
                 display: flex;
                 gap: 20px;
                 align-items: center;
-                flex-wrap: wrap;
             }
             .filter-group {
                 display: flex;
                 align-items: center;
-                gap: 10px;
+                gap: 8px;
+                font-size: 0.9em;
             }
             .filter-group label {
                 font-weight: 600;
-                color: #333;
+                color: #444;
             }
             .filter-group select {
-                padding: 8px 12px;
-                border: 1px solid #ddd;
-                border-radius: 6px;
-                font-size: 1em;
+                padding: 6px 10px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                font-size: 0.95em;
                 cursor: pointer;
+                background: white;
+            }
+            .filter-group select:focus {
+                outline: none;
+                border-color: #ff6b00;
             }
             .content {
-                padding: 30px;
+                max-width: 1000px;
+                margin: 0 auto;
+                padding: 24px 16px;
             }
             .games-table {
                 width: 100%;
                 border-collapse: collapse;
-                margin-bottom: 20px;
+                background: white;
+                border-radius: 6px;
+                overflow: hidden;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.08);
             }
             .games-table thead {
-                background: #f5f5f5;
+                background: #0d1b2a;
             }
             .games-table th {
-                padding: 15px;
+                padding: 12px 16px;
                 text-align: left;
                 font-weight: 600;
-                color: #333;
-                border-bottom: 2px solid #ddd;
+                font-size: 0.8em;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: #8a9bb0;
             }
             .games-table td {
-                padding: 15px;
-                border-bottom: 1px solid #eee;
+                padding: 14px 16px;
+                border-bottom: 1px solid #f0f0f0;
+                font-size: 0.95em;
+            }
+            .games-table tbody tr:last-child td {
+                border-bottom: none;
             }
             .games-table tbody tr:hover {
-                background: #f9f9f9;
+                background: #fafafa;
             }
             .score-badge {
                 display: inline-block;
-                padding: 6px 12px;
-                border-radius: 6px;
-                font-weight: 600;
-                font-size: 0.95em;
+                padding: 4px 10px;
+                border-radius: 3px;
+                font-weight: 700;
+                font-size: 0.9em;
+                font-variant-numeric: tabular-nums;
             }
             .score-high {
-                background: #e8f5e9;
-                color: #2e7d32;
+                background: #ff6b00;
+                color: white;
             }
             .score-medium {
-                background: #fff3e0;
-                color: #e65100;
+                background: #ffe0cc;
+                color: #a03c00;
             }
             .score-low {
-                background: #f3e5f5;
-                color: #6a1b9a;
+                background: #f0f0f0;
+                color: #666;
             }
             .matchup {
-                font-weight: 500;
+                font-weight: 600;
+                color: #0d1b2a;
             }
             .broadcaster-badge {
                 display: inline-block;
-                padding: 4px 8px;
-                background: #e3f2fd;
-                color: #1565c0;
-                border-radius: 4px;
-                font-size: 0.85em;
+                padding: 3px 8px;
+                background: #eef2f7;
+                color: #444;
+                border-radius: 3px;
+                font-size: 0.82em;
                 font-weight: 500;
             }
-            .loading {
+            .empty-state {
                 text-align: center;
-                padding: 40px;
-                color: #666;
+                padding: 60px 20px;
+                color: #888;
+                background: white;
+                border-radius: 6px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.08);
             }
             .error {
-                background: #ffebee;
-                color: #c62828;
-                padding: 15px;
-                border-radius: 6px;
-                margin: 20px 0;
+                background: #fff0f0;
+                color: #c00;
+                padding: 14px;
+                border-radius: 4px;
+                border-left: 3px solid #c00;
             }
             @media (max-width: 768px) {
-                .controls {
-                    flex-direction: column;
-                    align-items: stretch;
-                }
-                .games-table {
-                    font-size: 0.9em;
-                }
-                .games-table th,
-                .games-table td {
-                    padding: 10px;
-                }
-                .header h1 {
-                    font-size: 1.8em;
-                }
+                .header { padding: 16px; }
+                .controls { padding: 12px 16px; }
+                .games-table th, .games-table td { padding: 10px 12px; }
+                .games-table { font-size: 0.88em; }
             }
         </style>
     </head>
     <body>
-        <div class="container">
-            <div class="header">
-                <h1>🏀 WNBA Games to Watch</h1>
-                <p>Find the most exciting WNBA games ranked by quality & playoff importance</p>
-            </div>
+        <div class="header">
+            <h1>WNBA <span>Games to Watch</span></h1>
+            <p>Upcoming games ranked by quality &amp; playoff importance</p>
+        </div>
 
-            <div class="controls">
-                <div class="filter-group">
-                    <label for="broadcaster-filter">Filter by broadcaster:</label>
-                    <select id="broadcaster-filter">
-                        <option value="">All Networks</option>
-                        <option value="ESPN">ESPN</option>
-                        <option value="NBC">NBC/Peacock</option>
-                        <option value="Prime Video">Prime Video</option>
-                        <option value="CBS">CBS/Paramount+</option>
-                        <option value="League Pass">League Pass</option>
-                        <option value="ION">ION</option>
-                        <option value="USA Network">USA Network</option>
-                        <option value="NBA TV">NBA TV</option>
-                    </select>
-                </div>
+        <div class="controls">
+            <div class="filter-group">
+                <label for="broadcaster-filter">Watch on:</label>
+                <select id="broadcaster-filter">
+                    <option value="">All Networks</option>
+                    <option value="ESPN">ESPN</option>
+                    <option value="NBC">NBC/Peacock</option>
+                    <option value="Prime Video">Prime Video</option>
+                    <option value="CBS">CBS/Paramount+</option>
+                    <option value="League Pass">League Pass</option>
+                    <option value="ION">ION</option>
+                    <option value="USA Network">USA Network</option>
+                    <option value="NBA TV">NBA TV</option>
+                </select>
             </div>
+        </div>
 
-            <div class="content">
-                <div id="games-container" class="loading">
-                    <p>Loading games...</p>
-                </div>
+        <div class="content">
+            <div id="games-container">
+                <p>Loading...</p>
             </div>
         </div>
 
@@ -250,7 +256,7 @@ _HOMEPAGE_HTML = """
                 const container = document.getElementById('games-container');
 
                 try {
-                    let url = '/api/games/today';
+                    let url = '/api/games/upcoming';
                     if (broadcaster) {
                         url = `/api/games/filter?broadcaster=${encodeURIComponent(broadcaster)}`;
                     }
@@ -259,7 +265,7 @@ _HOMEPAGE_HTML = """
                     const games = await response.json();
 
                     if (games.length === 0) {
-                        container.innerHTML = '<p style="text-align: center; padding: 40px;">No games found for today.</p>';
+                        container.innerHTML = '<div class="empty-state">No upcoming games found.</div>';
                         return;
                     }
 
@@ -267,6 +273,8 @@ _HOMEPAGE_HTML = """
                         <table class="games-table">
                             <thead>
                                 <tr>
+                                    <th>Date</th>
+                                    <th>Time</th>
                                     <th>Score</th>
                                     <th>Matchup</th>
                                     <th>Quality</th>
@@ -285,12 +293,19 @@ _HOMEPAGE_HTML = """
                 }
             }
 
+            function formatDate(dateStr) {
+                const [year, month, day] = dateStr.split('-');
+                const d = new Date(year, month - 1, day);
+                return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            }
+
             function renderGameRow(game) {
-                const scoreClass = getScoreClass(game.overall_score);
                 const scoreColor = game.overall_score >= 80 ? 'score-high' : game.overall_score >= 50 ? 'score-medium' : 'score-low';
 
                 return `
                     <tr>
+                        <td style="white-space: nowrap; color: #555;">${formatDate(game.date)}</td>
+                        <td style="white-space: nowrap; color: #666; font-size: 0.88em;">${game.time || 'TBD'}</td>
                         <td>
                             <span class="score-badge ${scoreColor}">
                                 ${game.overall_score.toFixed(0)}/100
@@ -304,12 +319,6 @@ _HOMEPAGE_HTML = """
                         </td>
                     </tr>
                 `;
-            }
-
-            function getScoreClass(score) {
-                if (score >= 80) return 'score-high';
-                if (score >= 50) return 'score-medium';
-                return 'score-low';
             }
 
             // Load games on page load and when filter changes

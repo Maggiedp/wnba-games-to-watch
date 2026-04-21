@@ -1,14 +1,19 @@
 """Fetch data from ESPN APIs for WNBA teams and games."""
 
-import requests
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
+
+import requests
 
 logger = logging.getLogger(__name__)
 
 SITE_API = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba"
 CORE_API = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba"
+
+_ET = ZoneInfo("America/New_York")
+_SEASON_END = date(2026, 9, 30)
 
 
 class ESPNAPIError(Exception):
@@ -74,23 +79,36 @@ def fetch_bpi_ratings() -> dict[str, float]:
     return {}
 
 
-def fetch_schedule_and_results(days_ahead: int = 7) -> list[dict]:
-    """Return upcoming + recent games from the ESPN scoreboard.
+def fetch_schedule_and_results() -> list[dict]:
+    """Return all games from today through end of season, WNBA teams only.
 
-    Fetches today + days_ahead days of games.
+    Uses monthly batch requests instead of day-by-day to minimize API calls.
+    Filters out exhibition games against non-WNBA opponents.
     """
-    today = datetime.now()
-    all_games = []
-    seen_ids = set()
+    wnba_teams = set(fetch_team_id_map().values())
 
-    # Fetch a window: yesterday through days_ahead
-    for offset in range(-1, days_ahead + 1):
-        date = today + timedelta(days=offset)
-        date_str = date.strftime("%Y%m%d")
+    today = date.today()
+    all_games: list[dict] = []
+    seen_ids: set[str] = set()
+
+    # Walk month by month from today through season end
+    cursor = today.replace(day=1)
+    while cursor <= _SEASON_END:
+        # Include yesterday to catch any games that just finished
+        range_start = max(today - timedelta(days=1), cursor)
+        # Last day of this month (or season end, whichever is sooner)
+        if cursor.month == 12:
+            next_month = cursor.replace(year=cursor.year + 1, month=1)
+        else:
+            next_month = cursor.replace(month=cursor.month + 1)
+        range_end = min(next_month - timedelta(days=1), _SEASON_END)
+
+        date_param = f"{range_start.strftime('%Y%m%d')}-{range_end.strftime('%Y%m%d')}"
         try:
-            data = _get(f"{SITE_API}/scoreboard", dates=date_str)
+            data = _get(f"{SITE_API}/scoreboard", dates=date_param)
         except ESPNAPIError as e:
-            logger.warning(f"Failed to fetch scoreboard for {date_str}: {e}")
+            logger.warning(f"Failed to fetch scoreboard for {date_param}: {e}")
+            cursor = next_month
             continue
 
         for event in data.get("events", []):
@@ -99,10 +117,12 @@ def fetch_schedule_and_results(days_ahead: int = 7) -> list[dict]:
                 continue
             seen_ids.add(event_id)
             game = _parse_event(event)
-            if game:
+            if game and game["team_a"] in wnba_teams and game["team_b"] in wnba_teams:
                 all_games.append(game)
 
-    logger.info(f"Fetched {len(all_games)} games from ESPN scoreboard")
+        cursor = next_month
+
+    logger.info(f"Fetched {len(all_games)} WNBA games through end of season")
     return all_games
 
 
@@ -114,15 +134,20 @@ def _parse_event(event: dict) -> Optional[dict]:
         if not date_str:
             return None
 
-        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        date = dt.strftime("%Y-%m-%d")
-        time = dt.strftime("%H:%M")
+        dt_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        dt_et = dt_utc.astimezone(_ET)
+        game_date = dt_et.strftime("%Y-%m-%d")
+
+        # 00:00 UTC typically means time TBD
+        if dt_utc.hour == 0 and dt_utc.minute == 0:
+            game_time = "TBD"
+        else:
+            game_time = dt_et.strftime("%-I:%M %p ET")
 
         competitors = comp.get("competitors", [])
         if len(competitors) < 2:
             return None
 
-        # ESPN puts home team first in the competitors list
         team_a_info = next(
             (c for c in competitors if c.get("homeAway") == "home"), competitors[0]
         )
@@ -133,9 +158,7 @@ def _parse_event(event: dict) -> Optional[dict]:
         team_a = team_a_info["team"]["displayName"]
         team_b = team_b_info["team"]["displayName"]
 
-        status = comp["status"]["type"][
-            "name"
-        ]  # e.g. "STATUS_FINAL", "STATUS_SCHEDULED"
+        status = comp["status"]["type"]["name"]
         is_final = status == "STATUS_FINAL"
 
         winner_team = None
@@ -156,8 +179,8 @@ def _parse_event(event: dict) -> Optional[dict]:
             "event_id": event["id"],
             "team_a": team_a,
             "team_b": team_b,
-            "date": date,
-            "time": time,
+            "date": game_date,
+            "time": game_time,
             "winner_team": winner_team,
             "final_score_a": final_score_a,
             "final_score_b": final_score_b,

@@ -178,23 +178,69 @@ def insert_daily_ranking(
 
 
 def get_daily_rankings(session: Session, date: str) -> list[DailyRanking]:
-    """Get all rankings for a specific date, sorted by overall score."""
     return (
         session.query(DailyRanking)
         .filter(DailyRanking.date == date)
         .order_by(DailyRanking.overall_score.desc())
+        .all()
+    )
+
+
+def get_upcoming_rankings(session: Session, start_date: str) -> list[DailyRanking]:
+    return (
+        session.query(DailyRanking)
+        .filter(DailyRanking.date >= start_date)
+        .order_by(DailyRanking.date, DailyRanking.overall_score.desc())
         .all()
     )
 
 
 def get_rankings_by_broadcaster(
-    session: Session, date: str, broadcaster: str
+    session: Session, start_date: str, broadcaster: str
 ) -> list[DailyRanking]:
-    """Get rankings for a specific date and broadcaster."""
     return (
         session.query(DailyRanking)
-        .filter(DailyRanking.date == date)
+        .filter(DailyRanking.date >= start_date)
         .filter(DailyRanking.broadcaster == broadcaster)
-        .order_by(DailyRanking.overall_score.desc())
+        .order_by(DailyRanking.date, DailyRanking.overall_score.desc())
         .all()
     )
+
+
+def upsert_daily_ranking(
+    session: Session,
+    date: str,
+    team_a_id: int,
+    team_b_id: int,
+    quality_score: float,
+    importance_score: float,
+    overall_score: float,
+    broadcaster: str,
+) -> DailyRanking:
+    ranking = (
+        session.query(DailyRanking)
+        .filter(
+            DailyRanking.date == date,
+            DailyRanking.team_a_id == team_a_id,
+            DailyRanking.team_b_id == team_b_id,
+        )
+        .first()
+    )
+    if ranking:
+        ranking.quality_score = quality_score
+        ranking.importance_score = importance_score
+        ranking.overall_score = overall_score
+        ranking.broadcaster = broadcaster
+    else:
+        ranking = DailyRanking(
+            date=date,
+            team_a_id=team_a_id,
+            team_b_id=team_b_id,
+            quality_score=quality_score,
+            importance_score=importance_score,
+            overall_score=overall_score,
+            broadcaster=broadcaster,
+        )
+        session.add(ranking)
+    session.commit()
+    return ranking

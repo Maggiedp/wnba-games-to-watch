@@ -3,10 +3,14 @@
 
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.constants import GameStatus
-from src.data.espn_api import fetch_bpi_ratings, fetch_schedule_and_results
+from src.data.espn_api import (
+    fetch_bpi_ratings,
+    fetch_schedule_and_results,
+    fetch_team_id_map,
+)
 from src.data.wnba_schedule import (
     enhance_games_with_broadcasters,
     fetch_wnba_schedule_broadcasters,
@@ -16,7 +20,7 @@ from src.db.queries import (
     get_completed_games,
     get_team_by_id,
     get_team_by_name,
-    insert_daily_ranking,
+    upsert_daily_ranking,
     upsert_game,
     upsert_team,
 )
@@ -35,6 +39,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Only compute playoff importance for games within this window.
+# Beyond it the standings will shift enough that the score is noise.
+_IMPORTANCE_WINDOW_DAYS = 30
+
 
 def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
     logger.info("Fetching BPI ratings from ESPN...")
@@ -44,13 +52,21 @@ def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
         return {}
     for name, bpi in ratings.items():
         upsert_team(session, name, bpi)
-    logger.info(f"Stored {len(ratings)} team BPI ratings")
+
+    # Expansion teams won't appear in historical BPI — seed them at 0.0 so
+    # their games still get stored and ranked by quality.
+    all_wnba_teams = set(fetch_team_id_map().values())
+    for name in all_wnba_teams - set(ratings):
+        upsert_team(session, name, 0.0)
+        logger.info(f"Seeded expansion team with BPI=0: {name}")
+
+    logger.info(f"Stored {len(all_wnba_teams)} teams")
     return ratings
 
 
 def fetch_and_store_games(session) -> list[dict]:
     logger.info("Fetching schedule and results from ESPN...")
-    games = fetch_schedule_and_results(days_ahead=7)
+    games = fetch_schedule_and_results()
     if not games:
         logger.warning("No games fetched from ESPN")
         return []
@@ -60,7 +76,6 @@ def fetch_and_store_games(session) -> list[dict]:
     broadcasters = fetch_wnba_schedule_broadcasters(today)
     games = enhance_games_with_broadcasters(games, broadcasters)
 
-    # Cache team lookups to avoid N+1 queries during insertion
     team_cache: dict[str, int | None] = {}
 
     def get_cached_team_id(name: str) -> int | None:
@@ -74,13 +89,11 @@ def fetch_and_store_games(session) -> list[dict]:
         team_a, team_b = game.get("team_a", ""), game.get("team_b", "")
         if not team_a or not team_b:
             continue
-
         team_a_id = get_cached_team_id(team_a)
         team_b_id = get_cached_team_id(team_b)
         if not team_a_id or not team_b_id:
             logger.warning(f"Unknown team(s): {team_a!r}, {team_b!r} — skipping")
             continue
-
         winner_team = game.get("winner_team")
         upsert_game(
             session,
@@ -100,12 +113,10 @@ def fetch_and_store_games(session) -> list[dict]:
 
 
 def compute_standings(session) -> dict[str, dict]:
-    """Build standings dict from DB team list + completed game results."""
     all_teams = get_all_teams(session)
     standings = {
         t.name: {"wins": 0, "losses": 0, "bpi": t.bpi_rating} for t in all_teams
     }
-
     completed = get_completed_games(session, season_year=2026)
     for game in completed:
         team_a = get_team_by_id(session, game.team_a_id)
@@ -118,21 +129,23 @@ def compute_standings(session) -> dict[str, dict]:
         else:
             standings[team_b.name]["wins"] += 1
             standings[team_a.name]["losses"] += 1
-
     logger.info(f"Computed standings for {len(standings)} teams")
     return standings
 
 
 def compute_daily_scores(session, games: list[dict], standings: dict) -> list[dict]:
     today = datetime.now().strftime("%Y-%m-%d")
-    todays_games = [
+    importance_cutoff = (
+        datetime.now() + timedelta(days=_IMPORTANCE_WINDOW_DAYS)
+    ).strftime("%Y-%m-%d")
+
+    upcoming_games = [
         g
         for g in games
-        if g.get("date") == today and g.get("status") != GameStatus.FINAL
+        if g.get("date", "") >= today and g.get("status") != GameStatus.FINAL
     ]
-
-    if not todays_games:
-        logger.info("No upcoming games today")
+    if not upcoming_games:
+        logger.info("No upcoming games to score")
         return []
 
     remaining_games = [
@@ -140,38 +153,43 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
     ]
 
     logger.info(
-        f"Running Monte Carlo simulation over {len(remaining_games)} remaining games..."
+        f"Running Monte Carlo over {len(remaining_games)} remaining games "
+        f"(importance only for games through {importance_cutoff})..."
     )
     playoff_probs = run_monte_carlo_simulation(
         standings, remaining_games, num_simulations=10000
     )
 
     scored = []
-    for game in todays_games:
+    for game in upcoming_games:
         team_a, team_b = game["team_a"], game["team_b"]
         bpi_a = standings.get(team_a, {}).get("bpi", 0.0)
         bpi_b = standings.get(team_b, {}).get("bpi", 0.0)
-
         quality = compute_quality_score(bpi_a, bpi_b)
 
-        try:
-            game_index = remaining_games.index((team_a, team_b))
-            importance = compute_importance_score(
-                standings, remaining_games, game_index, playoff_probs
-            )
-        except ValueError:
+        game_date = game.get("date", today)
+        if game_date <= importance_cutoff:
+            try:
+                game_index = remaining_games.index((team_a, team_b))
+                importance = compute_importance_score(
+                    standings, remaining_games, game_index, playoff_probs
+                )
+            except ValueError:
+                importance = 0.0
+        else:
             importance = 0.0
 
         overall = quality * 0.6 + importance * 0.4
-
         logger.info(
-            f"{team_a} vs {team_b}: quality={quality:.1f} importance={importance:.1f} overall={overall:.1f}"
+            f"{game_date} {team_a} vs {team_b}: "
+            f"quality={quality:.1f} importance={importance:.1f} overall={overall:.1f}"
         )
         scored.append(
             {
                 "team_a": team_a,
                 "team_b": team_b,
-                "date": today,
+                "date": game_date,
+                "time": game.get("time", ""),
                 "quality": quality,
                 "importance": importance,
                 "overall": overall,
@@ -200,7 +218,7 @@ def store_daily_rankings(session, scored_games: list[dict]) -> None:
                 f"Skipping ranking for {game['team_a']} vs {game['team_b']}: team not found"
             )
             continue
-        insert_daily_ranking(
+        upsert_daily_ranking(
             session,
             date=game["date"],
             team_a_id=team_a_id,
@@ -208,7 +226,7 @@ def store_daily_rankings(session, scored_games: list[dict]) -> None:
             quality_score=game["quality"],
             importance_score=game["importance"],
             overall_score=game["overall"],
-            broadcaster=game["broadcaster"],
+            broadcaster=game.get("broadcaster", ""),
         )
         stored += 1
 
