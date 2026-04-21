@@ -15,10 +15,8 @@ def upsert_team(
     team = session.query(Team).filter(Team.name == name).first()
     if team:
         team.bpi_rating = bpi_rating
-        if abbreviation:
-            team.abbreviation = abbreviation
-        if logo_url:
-            team.logo_url = logo_url
+        team.abbreviation = abbreviation
+        team.logo_url = logo_url
     else:
         team = Team(
             name=name,
