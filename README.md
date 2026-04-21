@@ -1,23 +1,30 @@
 # WNBA Games to Watch
 
-A WNBA game recommendation tool that combines game quality, playoff importance, and streaming availability to help fans decide what to watch.
+A nightly ranking of the best WNBA matchups, weighing team quality and playoff stakes. Filter by where you can watch.
 
-## Concept
+**Live site:** https://wnba-games-to-watch-1068218371131.us-central1.run.app
 
-Fills the gap left by FiveThirtyEight's defunct "Games to Watch" feature (538 shut down March 2025). Combines two pre-game metrics:
+## How it works
 
-- **Quality**: Harmonic mean of the two teams' Elo ratings (penalizes lopsided matchups)
-- **Importance**: Total playoff/title odds swing from Monte Carlo simulation of remaining schedule
+Every upcoming game gets a score out of 100:
 
-Plus a **where to watch** filter by streaming service (ESPN/ABC, NBC/Peacock, Prime Video, CBS/Paramount+, ION, USA Network, League Pass, NBA TV).
-
-### Phase 2 (future)
-In-game excitement tracking via win probability swings.
-
-## Data sources
-- ESPN API (via `wehoop` package)
-- balldontlie free API
-- WNBA.com schedule (broadcaster info)
+- **Quality (60%)** — harmonic mean of both teams' [ESPN BPI](https://www.espn.com/wnba/bpi) ratings. Penalizes lopsided matchups: a +5 vs +5 game scores much higher than +5 vs -5.
+- **Importance (40%)** — Monte Carlo simulation (10,000 runs) of the remaining schedule, measuring how much each team's playoff odds swing on tonight's result.
 
 ## Tech stack
-Python
+
+- **Backend:** Python, FastAPI, SQLite
+- **Data:** ESPN public APIs (BPI + scoreboard)
+- **Deployment:** GCP Cloud Run (API) + Cloud Scheduler (daily update at 6 AM CT)
+
+## Local development
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+python main.py          # API at http://localhost:8000
+python -m scripts.daily_update   # populate the database
+pytest tests/ -v
+```
