@@ -1,0 +1,19 @@
+# This file specifies files that should NOT be uploaded to Cloud Run
+__pycache__
+*.pyc
+.pytest_cache
+.git
+.gitignore
+.env
+.env.local
+venv
+ENV
+env
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+logs
+data/games_to_watch.db
