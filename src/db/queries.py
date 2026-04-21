@@ -26,6 +26,12 @@ def get_team_by_id(session: Session, team_id: int) -> Team | None:
     return session.query(Team).filter(Team.id == team_id).first()
 
 
+def get_teams_by_ids(session: Session, team_ids: set[int]) -> dict[int, Team]:
+    """Fetch all teams for the given IDs in one query."""
+    teams = session.query(Team).filter(Team.id.in_(team_ids)).all()
+    return {team.id: team for team in teams}
+
+
 def get_all_teams(session: Session) -> list[Team]:
     """Get all teams."""
     return session.query(Team).all()

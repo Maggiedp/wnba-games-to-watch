@@ -2,11 +2,13 @@
 
 from sqlalchemy import (
     Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
     Integer,
     String,
-    Float,
-    DateTime,
-    ForeignKey,
+    UniqueConstraint,
     create_engine,
     func,
 )

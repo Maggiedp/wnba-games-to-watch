@@ -3,7 +3,7 @@
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from src.db.schema import DailyRanking
-from src.db.queries import get_team_by_id
+from src.db.queries import get_teams_by_ids
 import logging
 
 logger = logging.getLogger(__name__)
@@ -29,11 +29,16 @@ def format_games_response(
     rankings: list[DailyRanking], session: Session
 ) -> list[GameResponse]:
     """Format DailyRanking objects into GameResponse objects."""
-    results = []
+    if not rankings:
+        return []
 
+    team_ids = {r.team_a_id for r in rankings} | {r.team_b_id for r in rankings}
+    teams = get_teams_by_ids(session, team_ids)
+
+    results = []
     for ranking in rankings:
-        team_a = get_team_by_id(session, ranking.team_a_id)
-        team_b = get_team_by_id(session, ranking.team_b_id)
+        team_a = teams.get(ranking.team_a_id)
+        team_b = teams.get(ranking.team_b_id)
 
         if not team_a or not team_b:
             logger.warning(
@@ -57,9 +62,7 @@ def format_games_response(
     return results
 
 
-def render_homepage() -> str:
-    """Render the homepage HTML."""
-    html = """
+_HOMEPAGE_HTML = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -316,4 +319,7 @@ def render_homepage() -> str:
     </body>
     </html>
     """
-    return html
+
+
+def render_homepage() -> str:
+    return _HOMEPAGE_HTML
