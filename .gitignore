@@ -39,3 +39,4 @@ env/
 *.db
 .DS_Store
 logs/
+CLAUDE.md
