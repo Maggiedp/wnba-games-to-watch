@@ -1,5 +1,6 @@
 """Fetch data from ESPN APIs for WNBA teams and games."""
 
+import functools
 import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
@@ -39,11 +40,36 @@ def _team_id_from_ref(ref: str) -> Optional[int]:
         return None
 
 
+@functools.lru_cache(maxsize=1)
+def _fetch_teams_raw() -> list:
+    """Fetch /teams once per process; cached so callers don't duplicate the request."""
+    data = _get(f"{SITE_API}/teams")
+    return data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+
+
 def fetch_team_id_map() -> dict[int, str]:
     """Return {espn_team_id: display_name} for all WNBA teams."""
-    data = _get(f"{SITE_API}/teams")
-    teams = data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
-    return {int(t["team"]["id"]): t["team"]["displayName"] for t in teams}
+    return {int(t["team"]["id"]): t["team"]["displayName"] for t in _fetch_teams_raw()}
+
+
+def fetch_team_details() -> dict[str, dict]:
+    """Return {display_name: {"abbreviation", "logo_url"}} for all WNBA teams."""
+    out: dict[str, dict] = {}
+    for t in _fetch_teams_raw():
+        team = t["team"]
+        # Prefer the default full-color logo; first "default" rel tag is consistent across teams.
+        logo_url = ""
+        for logo in team.get("logos", []):
+            if "default" in logo.get("rel", []):
+                logo_url = logo.get("href", "")
+                break
+        if not logo_url and team.get("logos"):
+            logo_url = team["logos"][0].get("href", "")
+        out[team["displayName"]] = {
+            "abbreviation": team.get("abbreviation", ""),
+            "logo_url": logo_url,
+        }
+    return out
 
 
 def fetch_bpi_ratings() -> dict[str, float]:

@@ -9,7 +9,7 @@ from src.constants import GameStatus
 from src.data.espn_api import (
     fetch_bpi_ratings,
     fetch_schedule_and_results,
-    fetch_team_id_map,
+    fetch_team_details,
 )
 from src.data.wnba_schedule import (
     enhance_games_with_broadcasters,
@@ -47,20 +47,35 @@ _IMPORTANCE_WINDOW_DAYS = 30
 def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
     logger.info("Fetching BPI ratings from ESPN...")
     ratings = fetch_bpi_ratings()
+    team_details = fetch_team_details()
     if not ratings:
         logger.error("Failed to fetch BPI ratings")
         return {}
     for name, bpi in ratings.items():
-        upsert_team(session, name, bpi)
+        details = team_details.get(name, {})
+        upsert_team(
+            session,
+            name,
+            bpi,
+            abbreviation=details.get("abbreviation", ""),
+            logo_url=details.get("logo_url", ""),
+        )
 
     # Expansion teams won't appear in historical BPI — seed them at 0.0 so
-    # their games still get stored and ranked by quality.
-    all_wnba_teams = set(fetch_team_id_map().values())
-    for name in all_wnba_teams - set(ratings):
-        upsert_team(session, name, 0.0)
+    # their games still get stored and ranked by quality. Shifted harmonic mean
+    # treats 0 as league-average (BPI is zero-centered), so this is a reasonable default.
+    for name in set(team_details) - set(ratings):
+        details = team_details[name]
+        upsert_team(
+            session,
+            name,
+            0.0,
+            abbreviation=details.get("abbreviation", ""),
+            logo_url=details.get("logo_url", ""),
+        )
         logger.info(f"Seeded expansion team with BPI=0: {name}")
 
-    logger.info(f"Stored {len(all_wnba_teams)} teams")
+    logger.info(f"Stored {len(team_details)} teams")
     return ratings
 
 
@@ -168,6 +183,7 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
         quality = compute_quality_score(bpi_a, bpi_b)
 
         game_date = game.get("date", today)
+        importance: float | None
         if game_date <= importance_cutoff:
             try:
                 game_index = remaining_games.index((team_a, team_b))
@@ -175,14 +191,22 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
                     standings, remaining_games, game_index, playoff_probs
                 )
             except ValueError:
-                importance = 0.0
+                importance = None
         else:
-            importance = 0.0
+            # Beyond the window we don't simulate — leave importance unknown
+            # rather than zero, so the UI can show "—" instead of implying
+            # the game doesn't matter.
+            importance = None
 
-        overall = quality * 0.6 + importance * 0.4
+        # When importance is unknown, treat its contribution as zero for the
+        # overall score so we still have *a* number to rank on. The UI hides
+        # the missing importance value itself.
+        importance_for_overall = importance if importance is not None else 0.0
+        overall = quality * 0.6 + importance_for_overall * 0.4
+        imp_log = f"{importance:.1f}" if importance is not None else "—"
         logger.info(
             f"{game_date} {team_a} vs {team_b}: "
-            f"quality={quality:.1f} importance={importance:.1f} overall={overall:.1f}"
+            f"quality={quality:.1f} importance={imp_log} overall={overall:.1f}"
         )
         scored.append(
             {
@@ -191,7 +215,7 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
                 "date": game_date,
                 "time": game.get("time", ""),
                 "quality": quality,
-                "importance": importance,
+                "importance": importance,  # may be None if not simulated
                 "overall": overall,
                 "broadcaster": game.get("broadcaster", ""),
             }

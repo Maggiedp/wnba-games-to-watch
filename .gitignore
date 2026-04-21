@@ -38,3 +38,5 @@ env/
 *.sqlite
 *.db
 .DS_Store
+logs/
+CLAUDE.md
