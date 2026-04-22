@@ -145,25 +145,49 @@ _HOMEPAGE_HTML = f"""
                 padding: 14px 32px;
                 border-bottom: 1px solid #e0e0e0;
                 display: flex;
-                gap: 20px;
-                align-items: center;
+                flex-direction: column;
+                gap: 10px;
             }}
-            .filter-group {{
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                font-size: 0.9em;
-            }}
+            .filter-row {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
+            .filter-label {{ font-size: 0.9em; font-weight: 600; color: #444; white-space: nowrap; }}
+            .filter-group {{ display: flex; align-items: center; gap: 6px; font-size: 0.9em; }}
             .filter-group label {{ font-weight: 600; color: #444; }}
-            .filter-group select {{
-                padding: 6px 10px;
+            .filter-group select, .filter-group input[type="date"] {{
+                padding: 5px 8px;
                 border: 1px solid #ccc;
                 border-radius: 4px;
-                font-size: 0.95em;
+                font-size: 0.9em;
                 cursor: pointer;
                 background: white;
+                font-family: inherit;
             }}
-            .filter-group select:focus {{ outline: none; border-color: #ff6b00; }}
+            .filter-group select:focus, .filter-group input[type="date"]:focus {{ outline: none; border-color: #ff6b00; }}
+            .pill-group {{ display: flex; gap: 6px; flex-wrap: wrap; }}
+            .pill {{
+                padding: 4px 10px;
+                border: 1px solid #ccc;
+                border-radius: 20px;
+                font-size: 0.82em;
+                font-weight: 500;
+                cursor: pointer;
+                background: white;
+                color: #555;
+                font-family: inherit;
+            }}
+            .pill:hover {{ border-color: #ff6b00; color: #ff6b00; }}
+            .pill.active {{ background: #ff6b00; border-color: #ff6b00; color: white; }}
+            .sort-toggle {{ display: flex; border: 1px solid #ccc; border-radius: 4px; overflow: hidden; }}
+            .sort-btn {{
+                padding: 5px 12px;
+                border: none;
+                background: white;
+                font-size: 0.85em;
+                cursor: pointer;
+                color: #555;
+                font-family: inherit;
+            }}
+            .sort-btn + .sort-btn {{ border-left: 1px solid #ccc; }}
+            .sort-btn.active {{ background: #0d1b2a; color: white; }}
             .content {{
                 max-width: 1000px;
                 margin: 0 auto;
@@ -325,19 +349,30 @@ _HOMEPAGE_HTML = f"""
         </div>
 
         <div class="controls">
-            <div class="filter-group">
-                <label for="broadcaster-filter">Watch on:</label>
-                <select id="broadcaster-filter">
-                    <option value="">All Networks</option>
-                    <option value="ESPN">ESPN</option>
-                    <option value="NBC">NBC/Peacock</option>
-                    <option value="Prime Video">Prime Video</option>
-                    <option value="CBS">CBS/Paramount+</option>
-                    <option value="League Pass">League Pass</option>
-                    <option value="ION">ION</option>
-                    <option value="USA Network">USA Network</option>
-                    <option value="NBA TV">NBA TV</option>
-                </select>
+            <div class="filter-row">
+                <span class="filter-label">Networks</span>
+                <div class="pill-group" id="network-pills"></div>
+            </div>
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label for="from-date">From</label>
+                    <input type="date" id="from-date">
+                </div>
+                <div class="filter-group">
+                    <label for="to-date">To</label>
+                    <input type="date" id="to-date">
+                </div>
+                <div class="filter-group">
+                    <label for="team-filter">Team</label>
+                    <select id="team-filter"><option value="">All teams</option></select>
+                </div>
+                <div class="filter-group">
+                    <label>Sort</label>
+                    <div class="sort-toggle">
+                        <button class="sort-btn active" id="sort-date" type="button">Date</button>
+                        <button class="sort-btn" id="sort-score" type="button">Score</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -384,52 +419,106 @@ _HOMEPAGE_HTML = f"""
         </div>
 
         <script>
+            let allGames = [];
+            let selectedNetworks = new Set();
+            let sortBy = 'date';
+
+            const NETWORK_LABELS = {{
+                'ESPN': 'ESPN', 'ABC': 'ABC', 'NBC': 'NBC/Peacock',
+                'Prime Video': 'Prime Video', 'CBS': 'CBS/Paramount+',
+                'ION': 'ION', 'USA Network': 'USA Network',
+                'League Pass': 'League Pass', 'NBA TV': 'NBA TV',
+            }};
+
             async function loadGames() {{
-                const broadcaster = document.getElementById('broadcaster-filter').value;
                 const container = document.getElementById('games-container');
-
                 try {{
-                    let url = '/api/games/upcoming';
-                    if (broadcaster) {{
-                        url = `/api/games/filter?broadcaster=${{encodeURIComponent(broadcaster)}}`;
-                    }}
-
-                    const response = await fetch(url);
-                    const games = await response.json();
-
-                    if (games.length === 0) {{
-                        container.innerHTML = '<div class="empty-state">No upcoming games found.</div>';
-                        return;
-                    }}
-
-                    const html = `
-                        <table class="games-table">
-                            <thead>
-                                <tr>
-                                    <th>Date</th>
-                                    <th>Time</th>
-                                    <th>Score</th>
-                                    <th>Matchup</th>
-                                    <th class="hide-mobile">Quality</th>
-                                    <th class="hide-mobile">Importance</th>
-                                    <th>Watch on</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${{games.map(game => renderGameRow(game)).join('')}}
-                            </tbody>
-                        </table>
-                    `;
-                    container.innerHTML = html;
+                    const response = await fetch('/api/games/upcoming');
+                    allGames = await response.json();
+                    populateFilters();
+                    applyFilters();
                 }} catch (error) {{
                     container.innerHTML = `<div class="error">Error loading games: ${{error.message}}</div>`;
                 }}
             }}
 
+            function populateFilters() {{
+                const networks = [...new Set(allGames.map(g => g.broadcaster).filter(Boolean))].sort();
+                const pillGroup = document.getElementById('network-pills');
+                pillGroup.innerHTML = networks.map(n =>
+                    `<button class="pill" data-network="${{escapeHtml(n)}}" type="button">${{escapeHtml(NETWORK_LABELS[n] || n)}}</button>`
+                ).join('');
+                pillGroup.querySelectorAll('.pill').forEach(btn => {{
+                    btn.addEventListener('click', () => {{
+                        const net = btn.dataset.network;
+                        if (selectedNetworks.has(net)) {{
+                            selectedNetworks.delete(net);
+                            btn.classList.remove('active');
+                        }} else {{
+                            selectedNetworks.add(net);
+                            btn.classList.add('active');
+                        }}
+                        applyFilters();
+                    }});
+                }});
+
+                const teams = [...new Set(allGames.flatMap(g => [g.team_a, g.team_b]))].sort();
+                const teamSelect = document.getElementById('team-filter');
+                teams.forEach(t => {{
+                    const opt = document.createElement('option');
+                    opt.value = t;
+                    opt.textContent = t;
+                    teamSelect.appendChild(opt);
+                }});
+            }}
+
+            function applyFilters() {{
+                const fromDate = document.getElementById('from-date').value;
+                const toDate = document.getElementById('to-date').value;
+                const team = document.getElementById('team-filter').value;
+
+                let games = allGames.filter(game => {{
+                    if (selectedNetworks.size > 0 && !selectedNetworks.has(game.broadcaster)) return false;
+                    if (team && game.team_a !== team && game.team_b !== team) return false;
+                    if (fromDate && game.date < fromDate) return false;
+                    if (toDate && game.date > toDate) return false;
+                    return true;
+                }});
+
+                if (sortBy === 'score') {{
+                    games = [...games].sort((a, b) => b.overall_score - a.overall_score);
+                }}
+
+                renderGames(games);
+            }}
+
+            function renderGames(games) {{
+                const container = document.getElementById('games-container');
+                if (games.length === 0) {{
+                    container.innerHTML = '<div class="empty-state">No games match your filters.</div>';
+                    return;
+                }}
+                container.innerHTML = `
+                    <table class="games-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Time</th>
+                                <th>Score</th>
+                                <th>Matchup</th>
+                                <th class="hide-mobile">Quality</th>
+                                <th class="hide-mobile">Importance</th>
+                                <th>Watch on</th>
+                            </tr>
+                        </thead>
+                        <tbody>${{games.map(renderGameRow).join('')}}</tbody>
+                    </table>
+                `;
+            }}
+
             function formatDate(dateStr) {{
                 const [year, month, day] = dateStr.split('-');
-                const d = new Date(year, month - 1, day);
-                return d.toLocaleDateString('en-US', {{ weekday: 'short', month: 'short', day: 'numeric' }});
+                return new Date(year, month - 1, day).toLocaleDateString('en-US', {{ weekday: 'short', month: 'short', day: 'numeric' }});
             }}
 
             function escapeHtml(s) {{
@@ -448,16 +537,13 @@ _HOMEPAGE_HTML = f"""
 
             function renderGameRow(game) {{
                 const scoreColor = game.overall_score >= 80 ? 'score-high' : game.overall_score >= 50 ? 'score-medium' : 'score-low';
-
+                const impTitle = game.importance_score == null ? 'Not simulated — games more than 30 days out aren\\'t projected for playoff impact' : '';
+                const impVal = game.importance_score == null ? '&mdash;' : game.importance_score.toFixed(0);
                 return `
                     <tr>
                         <td style="white-space: nowrap; color: #555;">${{formatDate(game.date)}}</td>
                         <td style="white-space: nowrap; color: #666; font-size: 0.88em;">${{escapeHtml(game.time || 'TBD')}}</td>
-                        <td>
-                            <span class="score-badge ${{scoreColor}}">
-                                ${{game.overall_score.toFixed(0)}}/100
-                            </span>
-                        </td>
+                        <td><span class="score-badge ${{scoreColor}}">${{game.overall_score.toFixed(0)}}/100</span></td>
                         <td>
                             <div class="matchup">
                                 ${{renderTeam(game.team_a, game.team_a_logo)}}
@@ -466,24 +552,29 @@ _HOMEPAGE_HTML = f"""
                             </div>
                         </td>
                         <td class="hide-mobile">${{game.quality_score.toFixed(0)}}</td>
-                        <td class="hide-mobile" title="${{game.importance_score == null ? 'Not simulated — games more than 30 days out aren\\'t projected for playoff impact' : ''}}">${{game.importance_score == null ? '&mdash;' : game.importance_score.toFixed(0)}}</td>
-                        <td>
-                            <span class="broadcaster-badge">${{escapeHtml(game.broadcaster || 'TBD')}}</span>
-                        </td>
+                        <td class="hide-mobile" title="${{impTitle}}">${{impVal}}</td>
+                        <td><span class="broadcaster-badge">${{escapeHtml(game.broadcaster || 'TBD')}}</span></td>
                     </tr>
                 `;
             }}
 
-            function openModal() {{
-                document.getElementById('modal-backdrop').classList.add('open');
+            function setSortBy(mode) {{
+                sortBy = mode;
+                document.getElementById('sort-date').classList.toggle('active', mode === 'date');
+                document.getElementById('sort-score').classList.toggle('active', mode === 'score');
+                applyFilters();
             }}
-            function closeModal() {{
-                document.getElementById('modal-backdrop').classList.remove('open');
-            }}
+
+            function openModal() {{ document.getElementById('modal-backdrop').classList.add('open'); }}
+            function closeModal() {{ document.getElementById('modal-backdrop').classList.remove('open'); }}
 
             document.addEventListener('DOMContentLoaded', () => {{
                 loadGames();
-                document.getElementById('broadcaster-filter').addEventListener('change', loadGames);
+                document.getElementById('from-date').addEventListener('change', applyFilters);
+                document.getElementById('to-date').addEventListener('change', applyFilters);
+                document.getElementById('team-filter').addEventListener('change', applyFilters);
+                document.getElementById('sort-date').addEventListener('click', () => setSortBy('date'));
+                document.getElementById('sort-score').addEventListener('click', () => setSortBy('score'));
                 document.getElementById('how-it-works-btn').addEventListener('click', openModal);
                 document.getElementById('how-it-works-footer').addEventListener('click', (e) => {{
                     e.preventDefault();
