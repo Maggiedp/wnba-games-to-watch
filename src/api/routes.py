@@ -558,6 +558,13 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
+            function setSortBy(mode) {{
+                sortBy = mode;
+                document.getElementById('sort-date').classList.toggle('active', mode === 'date');
+                document.getElementById('sort-score').classList.toggle('active', mode === 'score');
+                applyFilters();
+            }}
+
             function openModal() {{ document.getElementById('modal-backdrop').classList.add('open'); }}
             function closeModal() {{ document.getElementById('modal-backdrop').classList.remove('open'); }}
 
@@ -566,18 +573,8 @@ _HOMEPAGE_HTML = f"""
                 document.getElementById('from-date').addEventListener('change', applyFilters);
                 document.getElementById('to-date').addEventListener('change', applyFilters);
                 document.getElementById('team-filter').addEventListener('change', applyFilters);
-                document.getElementById('sort-date').addEventListener('click', () => {{
-                    sortBy = 'date';
-                    document.getElementById('sort-date').classList.add('active');
-                    document.getElementById('sort-score').classList.remove('active');
-                    applyFilters();
-                }});
-                document.getElementById('sort-score').addEventListener('click', () => {{
-                    sortBy = 'score';
-                    document.getElementById('sort-score').classList.add('active');
-                    document.getElementById('sort-date').classList.remove('active');
-                    applyFilters();
-                }});
+                document.getElementById('sort-date').addEventListener('click', () => setSortBy('date'));
+                document.getElementById('sort-score').addEventListener('click', () => setSortBy('score'));
                 document.getElementById('how-it-works-btn').addEventListener('click', openModal);
                 document.getElementById('how-it-works-footer').addEventListener('click', (e) => {{
                     e.preventDefault();
