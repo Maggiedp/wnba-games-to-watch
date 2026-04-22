@@ -160,6 +160,9 @@ def _parse_event(event: dict) -> Optional[dict]:
         if not date_str:
             return None
 
+        # ESPN season type: 1=preseason, 2=regular, 3=postseason
+        season_type = event.get("season", {}).get("type", 2)
+
         dt_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         dt_et = dt_utc.astimezone(_ET)
         game_date = dt_et.strftime("%Y-%m-%d")
@@ -212,6 +215,7 @@ def _parse_event(event: dict) -> Optional[dict]:
             "final_score_b": final_score_b,
             "broadcaster": broadcaster,
             "status": status,
+            "season_type": season_type,
         }
     except (KeyError, ValueError, TypeError, IndexError) as e:
         logger.warning(f"Failed to parse event {event.get('id')}: {e}")

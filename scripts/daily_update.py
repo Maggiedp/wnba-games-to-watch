@@ -163,8 +163,19 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
         logger.info("No upcoming games to score")
         return []
 
+    # Seed with date of last completed game so scores are stable until new results arrive.
+    last_completed_date = max(
+        (g["date"] for g in games if g.get("status") == GameStatus.FINAL),
+        default=today,
+    )
+    random.seed(int(last_completed_date.replace("-", "")))
+    logger.info(f"Monte Carlo seed: last completed game on {last_completed_date}")
+
+    # Exclude preseason games from standings simulation — they don't affect playoff seeding.
     remaining_games = [
-        (g["team_a"], g["team_b"]) for g in games if g.get("status") != GameStatus.FINAL
+        (g["team_a"], g["team_b"])
+        for g in games
+        if g.get("status") != GameStatus.FINAL and g.get("season_type", 2) != 1
     ]
 
     logger.info(
@@ -184,7 +195,10 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
 
         game_date = game.get("date", today)
         importance: float | None
-        if game_date <= importance_cutoff:
+        if game.get("season_type", 2) == 1:
+            # Preseason games don't count for playoff seeding.
+            importance = 0.0
+        elif game_date <= importance_cutoff:
             try:
                 game_index = remaining_games.index((team_a, team_b))
                 importance = compute_importance_score(
