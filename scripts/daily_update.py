@@ -2,6 +2,7 @@
 """Daily update job for WNBA Games to Watch."""
 
 import logging
+import random
 import sys
 from datetime import datetime, timedelta
 
