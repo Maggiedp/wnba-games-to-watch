@@ -536,7 +536,7 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function renderGameRow(game) {{
-                const scoreColor = game.overall_score >= 80 ? 'score-high' : game.overall_score >= 50 ? 'score-medium' : 'score-low';
+                const scoreColor = game.overall_score >= 40 ? 'score-high' : game.overall_score >= 25 ? 'score-medium' : 'score-low';
                 const impTitle = game.importance_score == null ? 'Not simulated — games more than 30 days out aren\\'t projected for playoff impact' : '';
                 const impVal = game.importance_score == null ? '&mdash;' : game.importance_score.toFixed(0);
                 return `

@@ -224,7 +224,7 @@ def _parse_event(event: dict) -> Optional[dict]:
 
 def _parse_broadcaster(comp: dict) -> str:
     """Extract broadcaster name from competition data."""
-    from src.constants import BROADCASTER_NORMALIZE
+    from src.constants import BROADCASTER_NORMALIZE, Broadcasters
 
     for broadcast in comp.get("geoBroadcasts", []) + comp.get("broadcasts", []):
         names = broadcast.get("names", [])
@@ -234,4 +234,5 @@ def _parse_broadcaster(comp: dict) -> str:
             if normalized:
                 return normalized
 
-    return ""
+    # No national broadcaster found — game is on League Pass (possibly blacked out locally)
+    return Broadcasters.LEAGUE_PASS
