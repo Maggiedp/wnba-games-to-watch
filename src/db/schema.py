@@ -56,7 +56,7 @@ class DailyRanking(Base):
     team_a_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
     team_b_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
     quality_score = Column(Float, default=0.0)
-    importance_score = Column(Float, default=0.0)
+    importance_score = Column(Float, nullable=True)
     overall_score = Column(Float, default=0.0)
     broadcaster = Column(String(50), default="")
     created_at = Column(DateTime, default=func.now())
