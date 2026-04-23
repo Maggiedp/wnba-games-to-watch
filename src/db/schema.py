@@ -38,7 +38,7 @@ class Game(Base):
     team_a_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
     team_b_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
     date = Column(String(10), nullable=False)  # YYYY-MM-DD
-    time = Column(String(5), default="")  # HH:MM
+    time = Column(String(20), default="")
     winner_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
     final_score_a = Column(Integer, nullable=True)
     final_score_b = Column(Integer, nullable=True)
@@ -92,7 +92,29 @@ def init_db():
     """Initialize the database and create tables if they don't exist."""
     engine = get_engine()
     Base.metadata.create_all(engine)
+    _migrate_game_time_column(engine)
     return engine
+
+
+def _migrate_game_time_column(engine) -> None:
+    """Widen games.time from VARCHAR(5) to VARCHAR(20) if needed.
+
+    SQLite silently allowed time strings like '3:00 PM ET' (10 chars) to exceed
+    the declared VARCHAR(5) limit; Postgres enforces it strictly. Safe to remove
+    once all environments have been migrated.
+    """
+    from sqlalchemy import inspect, text
+
+    if engine.dialect.name == "sqlite":
+        return
+    inspector = inspect(engine)
+    if "games" not in inspector.get_table_names():
+        return
+    cols = {c["name"]: c for c in inspector.get_columns("games")}
+    time_col = cols.get("time")
+    if time_col and getattr(time_col["type"], "length", None) == 5:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE games ALTER COLUMN time TYPE VARCHAR(20)"))
 
 
 def get_session():
