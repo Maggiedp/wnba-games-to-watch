@@ -92,27 +92,7 @@ def init_db():
     """Initialize the database and create tables if they don't exist."""
     engine = get_engine()
     Base.metadata.create_all(engine)
-    _add_missing_team_columns(engine)
     return engine
-
-
-def _add_missing_team_columns(engine) -> None:
-    """Add columns added after initial schema. Idempotent."""
-    from sqlalchemy import inspect, text
-
-    inspector = inspect(engine)
-    if "teams" not in inspector.get_table_names():
-        return
-    existing = {c["name"] for c in inspector.get_columns("teams")}
-    with engine.begin() as conn:
-        if "abbreviation" not in existing:
-            conn.execute(
-                text("ALTER TABLE teams ADD COLUMN abbreviation VARCHAR(8) DEFAULT ''")
-            )
-        if "logo_url" not in existing:
-            conn.execute(
-                text("ALTER TABLE teams ADD COLUMN logo_url VARCHAR(500) DEFAULT ''")
-            )
 
 
 def get_session():
