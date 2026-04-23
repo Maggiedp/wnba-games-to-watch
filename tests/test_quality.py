@@ -9,10 +9,10 @@ from src.scoring.quality import (
 
 
 def test_shift_makes_positive():
-    """All BPI values should be positive after shifting."""
-    assert _shift(-10.0) > 0
+    """All BPI values within the expected range should be positive after shifting."""
+    assert _shift(-8.0) > 0
     assert _shift(0.0) > 0
-    assert _shift(10.0) > 0
+    assert _shift(8.0) > 0
 
 
 def test_harmonic_mean_equal_teams():
@@ -38,8 +38,8 @@ def test_harmonic_mean_mixed_signs():
 
 def test_normalize_bounds():
     """Extremes should map to 0 and 100."""
-    assert normalize_quality_score(_shift(-10.0)) == 0.0
-    assert normalize_quality_score(_shift(10.0)) == 100.0
+    assert normalize_quality_score(_shift(-8.0)) == 0.0
+    assert normalize_quality_score(_shift(8.0)) == 100.0
 
 
 def test_compute_quality_score_ordering():

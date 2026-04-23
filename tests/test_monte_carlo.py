@@ -9,17 +9,27 @@ from src.scoring.monte_carlo import (
 
 def test_compute_win_probability():
     """Test win probability calculation."""
-    # Equal strength: 50%
     prob = compute_win_probability(0.0, 0.0)
     assert 0.45 < prob < 0.55
 
-    # Team A stronger: > 50%
     prob = compute_win_probability(2.0, 0.0)
     assert prob > 0.5
 
-    # Team B stronger: < 50%
     prob = compute_win_probability(0.0, 2.0)
     assert prob < 0.5
+
+
+def test_win_probability_symmetry():
+    """P(a beats b) + P(b beats a) must equal 1.0."""
+    for bpi_a, bpi_b in [(5.0, -3.0), (0.0, 0.0), (-1.5, 2.3)]:
+        assert (
+            abs(
+                compute_win_probability(bpi_a, bpi_b)
+                + compute_win_probability(bpi_b, bpi_a)
+                - 1.0
+            )
+            < 1e-9
+        )
 
 
 def test_simulate_game():

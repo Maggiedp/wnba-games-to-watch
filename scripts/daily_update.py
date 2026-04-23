@@ -27,7 +27,6 @@ from src.db.queries import (
 )
 from src.db.schema import get_session, init_db
 from src.scoring.importance import compute_importance_score
-from src.scoring.monte_carlo import run_monte_carlo_simulation
 from src.scoring.quality import compute_quality_score
 
 logging.basicConfig(
@@ -75,6 +74,17 @@ def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
             logo_url=details.get("logo_url", ""),
         )
         logger.info(f"Seeded expansion team with BPI=0: {name}")
+
+    from src.scoring.quality import _BPI_MIN, _BPI_MAX
+
+    bpi_vals = list(ratings.values())
+    observed_min, observed_max = min(bpi_vals), max(bpi_vals)
+    if observed_min < _BPI_MIN or observed_max > _BPI_MAX:
+        logger.warning(
+            f"BPI out of normalization range: observed [{observed_min:.2f}, {observed_max:.2f}] "
+            f"vs scale [{_BPI_MIN}, {_BPI_MAX}] — quality scores will be clamped. "
+            f"Consider updating _BPI_MIN/_BPI_MAX in quality.py for next season."
+        )
 
     logger.info(f"Stored {len(team_details)} teams")
     return ratings
@@ -173,18 +183,19 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
     logger.info(f"Monte Carlo seed: last completed game on {last_completed_date}")
 
     # Exclude preseason games from standings simulation — they don't affect playoff seeding.
-    remaining_games = [
-        (g["team_a"], g["team_b"])
-        for g in games
-        if g.get("status") != GameStatus.FINAL and g.get("season_type", 2) != 1
-    ]
+    # Build parallel event_id index so duplicate matchups map to the right slot.
+    remaining_games = []
+    remaining_event_index: dict[str, int] = {}
+    for g in games:
+        if g.get("status") != GameStatus.FINAL and g.get("season_type", 2) != 1:
+            eid = g.get("event_id", "")
+            if eid:
+                remaining_event_index[eid] = len(remaining_games)
+            remaining_games.append((g["team_a"], g["team_b"]))
 
     logger.info(
-        f"Running Monte Carlo over {len(remaining_games)} remaining games "
+        f"Scoring {len(remaining_games)} remaining games "
         f"(importance only for games through {importance_cutoff})..."
-    )
-    playoff_probs = run_monte_carlo_simulation(
-        standings, remaining_games, num_simulations=10000
     )
 
     scored = []
@@ -200,12 +211,12 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
             # Preseason games don't count for playoff seeding.
             importance = 0.0
         elif game_date <= importance_cutoff:
-            try:
-                game_index = remaining_games.index((team_a, team_b))
+            game_index = remaining_event_index.get(game.get("event_id", ""))
+            if game_index is not None:
                 importance = compute_importance_score(
-                    standings, remaining_games, game_index, playoff_probs
+                    standings, remaining_games, game_index
                 )
-            except ValueError:
+            else:
                 importance = None
         else:
             # Beyond the window we don't simulate — leave importance unknown

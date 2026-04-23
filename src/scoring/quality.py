@@ -4,11 +4,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# BPI observed range from 2025 season data. Offset shifts all values positive
-# before harmonic mean, since HM is only meaningful for positive numbers.
-_BPI_MIN = -10.0
-_BPI_MAX = 10.0
-_BPI_OFFSET = abs(_BPI_MIN) + 1.0  # 11.0 → shifted range is 1..21
+# BPI observed range from 2025/2026 season data (~-6 to +6), with buffer for outlier seasons.
+# Offset shifts all values positive before harmonic mean, since HM is only meaningful for positive numbers.
+_BPI_MIN = -8.0
+_BPI_MAX = 8.0
+_BPI_OFFSET = abs(_BPI_MIN) + 1.0  # 9.0 → shifted range is 1..17
 
 
 def _shift(bpi: float) -> float:
