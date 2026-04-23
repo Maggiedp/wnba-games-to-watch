@@ -1,45 +1,31 @@
 """Compute game importance score based on playoff impact."""
 
 import logging
-from src.scoring.monte_carlo import run_monte_carlo_simulation, compute_importance_swing
+from src.scoring.monte_carlo import compute_importance_swing
 
 logger = logging.getLogger(__name__)
 
 
-def normalize_importance_score(swing: float, max_swing: float = 0.2) -> float:
+def normalize_importance_score(swing: float, max_swing: float = 0.75) -> float:
     """Normalize importance swing to 0-100 scale.
 
-    In a 10,000 simulation Monte Carlo, the maximum realistic swing
-    for a single game is roughly 0.15-0.25 (15-25% change in playoff odds).
-
-    Games that swing playoff odds by:
-    - 0.01 (1%) are not very important
-    - 0.10 (10%) are quite important
-    - 0.20+ (20%+) are extremely important
+    Swing = sum of each team's playoff-odds difference between the two forced-outcome scenarios.
+    Empirically: top-vs-top early season ~13%, early bubble ~46%, late-season bubble ~70-72%.
     """
-    # Clamp to expected range
     clamped = min(max_swing, swing)
-
-    # Linear normalization: 0 -> 0, max_swing -> 100
-    normalized = (clamped / max_swing) * 100
-    return max(0.0, min(100.0, normalized))
+    return max(0.0, min(100.0, (clamped / max_swing) * 100))
 
 
 def compute_importance_score(
     current_standings: dict[str, dict],
     remaining_games: list[tuple[str, str]],
     game_index: int,
-    current_playoff_probs: dict[str, float],
 ) -> float:
-    """Compute normalized importance score for a game (0-100).
-
-    High importance games are those that significantly impact playoff odds.
-    """
+    """Compute normalized importance score for a game (0-100)."""
     swing = compute_importance_swing(
         current_standings,
         remaining_games,
         game_index,
-        current_playoff_probs,
         num_simulations=2000,
     )
 
@@ -59,18 +45,9 @@ def compute_all_game_importance(
 
     First computes current playoff probabilities, then scores each game.
     """
-    logger.info("Computing current playoff probabilities...")
-    current_probs = run_monte_carlo_simulation(
-        current_standings, remaining_games, num_simulations=10000
-    )
-
-    logger.info("Computing importance for each game...")
     importance_scores = []
-
-    for i, (team_a, team_b) in enumerate(remaining_games):
-        score = compute_importance_score(
-            current_standings, remaining_games, i, current_probs
-        )
+    for i in range(len(remaining_games)):
+        score = compute_importance_score(current_standings, remaining_games, i)
         importance_scores.append(score)
 
     return importance_scores
