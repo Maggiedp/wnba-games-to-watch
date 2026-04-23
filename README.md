@@ -13,7 +13,7 @@ Every upcoming game gets a score out of 100:
 
 ## Tech stack
 
-- **Backend:** Python, FastAPI, SQLite
+- **Backend:** Python, FastAPI, PostgreSQL (Cloud SQL)
 - **Data:** ESPN public APIs (BPI + scoreboard)
 - **Deployment:** GCP Cloud Run (API) + Cloud Scheduler (daily update at 6 AM ET)
 
