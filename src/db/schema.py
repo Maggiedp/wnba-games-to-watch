@@ -18,6 +18,7 @@ import os
 
 Base = declarative_base()
 _engine = None
+_session_factory = None
 
 
 class Team(Base):
@@ -38,7 +39,7 @@ class Game(Base):
     team_a_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
     team_b_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
     date = Column(String(10), nullable=False)  # YYYY-MM-DD
-    time = Column(String(5), default="")  # HH:MM
+    time = Column(String(20), default="")
     winner_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
     final_score_a = Column(Integer, nullable=True)
     final_score_b = Column(Integer, nullable=True)
@@ -68,9 +69,7 @@ class DailyRanking(Base):
 
 
 def get_database_url() -> str:
-    """Get the database URL from environment or use default."""
     db_url = os.getenv("DATABASE_URL", "sqlite:///./data/games_to_watch.db")
-    # For SQLite, convert to absolute path if relative
     if db_url.startswith("sqlite:///./"):
         base_path = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -81,7 +80,6 @@ def get_database_url() -> str:
 
 
 def get_engine():
-    """Get or create the database engine (singleton pattern)."""
     global _engine
     if _engine is None:
         _engine = create_engine(get_database_url(), echo=False)
@@ -89,34 +87,15 @@ def get_engine():
 
 
 def init_db():
-    """Initialize the database and create tables if they don't exist."""
     engine = get_engine()
     Base.metadata.create_all(engine)
-    _add_missing_team_columns(engine)
     return engine
 
 
-def _add_missing_team_columns(engine) -> None:
-    """Add columns added after initial schema. Idempotent."""
-    from sqlalchemy import inspect, text
-
-    inspector = inspect(engine)
-    if "teams" not in inspector.get_table_names():
-        return
-    existing = {c["name"] for c in inspector.get_columns("teams")}
-    with engine.begin() as conn:
-        if "abbreviation" not in existing:
-            conn.execute(
-                text("ALTER TABLE teams ADD COLUMN abbreviation VARCHAR(8) DEFAULT ''")
-            )
-        if "logo_url" not in existing:
-            conn.execute(
-                text("ALTER TABLE teams ADD COLUMN logo_url VARCHAR(500) DEFAULT ''")
-            )
-
-
 def get_session():
-    """Create a new database session."""
-    engine = get_engine()
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    return SessionLocal()
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = sessionmaker(
+            autocommit=False, autoflush=False, bind=get_engine()
+        )
+    return _session_factory()
