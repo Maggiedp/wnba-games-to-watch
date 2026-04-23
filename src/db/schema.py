@@ -18,6 +18,7 @@ import os
 
 Base = declarative_base()
 _engine = None
+_session_factory = None
 
 
 class Team(Base):
@@ -68,9 +69,7 @@ class DailyRanking(Base):
 
 
 def get_database_url() -> str:
-    """Get the database URL from environment or use default."""
     db_url = os.getenv("DATABASE_URL", "sqlite:///./data/games_to_watch.db")
-    # For SQLite, convert to absolute path if relative
     if db_url.startswith("sqlite:///./"):
         base_path = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -81,7 +80,6 @@ def get_database_url() -> str:
 
 
 def get_engine():
-    """Get or create the database engine (singleton pattern)."""
     global _engine
     if _engine is None:
         _engine = create_engine(get_database_url(), echo=False)
@@ -89,36 +87,15 @@ def get_engine():
 
 
 def init_db():
-    """Initialize the database and create tables if they don't exist."""
     engine = get_engine()
     Base.metadata.create_all(engine)
-    _migrate_game_time_column(engine)
     return engine
 
 
-def _migrate_game_time_column(engine) -> None:
-    """Widen games.time from VARCHAR(5) to VARCHAR(20) if needed.
-
-    SQLite silently allowed time strings like '3:00 PM ET' (10 chars) to exceed
-    the declared VARCHAR(5) limit; Postgres enforces it strictly. Safe to remove
-    once all environments have been migrated.
-    """
-    from sqlalchemy import inspect, text
-
-    if engine.dialect.name == "sqlite":
-        return
-    inspector = inspect(engine)
-    if "games" not in inspector.get_table_names():
-        return
-    cols = {c["name"]: c for c in inspector.get_columns("games")}
-    time_col = cols.get("time")
-    if time_col and getattr(time_col["type"], "length", None) == 5:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE games ALTER COLUMN time TYPE VARCHAR(20)"))
-
-
 def get_session():
-    """Create a new database session."""
-    engine = get_engine()
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    return SessionLocal()
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = sessionmaker(
+            autocommit=False, autoflush=False, bind=get_engine()
+        )
+    return _session_factory()
