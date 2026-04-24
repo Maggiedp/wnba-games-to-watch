@@ -1,9 +1,16 @@
-"""Monte Carlo simulation for WNBA playoff probability."""
+"""Monte Carlo simulation for WNBA playoff probability.
+
+Uses Elo for game-level win probability (calibrated against 2024+2025 results
+via scripts/validate_elo.py). BPI is no longer consulted here — it survives
+in the standings dict as a sibling field used only by quality scoring.
+"""
 
 import logging
 import random
 from collections import defaultdict
 from dataclasses import dataclass
+
+from src.scoring.elo import DEFAULT_HOME_ADVANTAGE, INITIAL_RATING, expected_win_prob
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +25,7 @@ class TeamStanding:
     name: str
     wins: int = 0
     losses: int = 0
-    bpi: float = 0.0
+    elo: float = INITIAL_RATING
 
     @property
     def win_pct(self) -> float:
@@ -26,60 +33,62 @@ class TeamStanding:
         return self.wins / total if total > 0 else 0.0
 
 
-def compute_win_probability(bpi_a: float, bpi_b: float) -> float:
-    """Compute probability that team A beats team B using BPI ratings.
+def simulate_game(
+    elo_a: float,
+    elo_b: float,
+    home_advantage: float = DEFAULT_HOME_ADVANTAGE,
+) -> bool:
+    """Simulate a single game, return True if team A (home) wins.
 
-    Uses a logistic function based on BPI difference.
-    Calibrated against 2025 game results (311 games): best vs worst team (ΔBPI≈12) ≈ 89% win prob.
+    team_a is assumed to be the home team (matches ESPN `_parse_event`
+    convention). Pass home_advantage=0 for neutral-site games.
     """
-    bpi_diff = bpi_a - bpi_b
-    k = 0.08  # Calibrated against 2025 results: optimal k≈0.078, rounded to 0.08
-    prob_a = 1.0 / (1.0 + pow(10, -k * bpi_diff))
-    return prob_a
-
-
-def simulate_game(bpi_a: float, bpi_b: float) -> bool:
-    """Simulate a single game, return True if team A wins."""
-    prob_a = compute_win_probability(bpi_a, bpi_b)
-    return random.random() < prob_a
+    return random.random() < expected_win_prob(
+        elo_a, elo_b, home_advantage=home_advantage
+    )
 
 
 def run_monte_carlo_simulation(
     current_standings: dict[str, dict],
     remaining_games: list[tuple[str, str]],
     num_simulations: int = 10000,
+    home_advantage: float = DEFAULT_HOME_ADVANTAGE,
 ) -> dict[str, float]:
     """Run Monte Carlo simulations to compute playoff probabilities.
 
     Args:
-        current_standings: Dict of team_name -> {"wins": int, "losses": int, "bpi": float}
-        remaining_games: List of (team_a, team_b) tuples for remaining games
-        num_simulations: Number of simulations to run
+        current_standings: {team_name: {"wins", "losses", "elo", ...}}.
+            Extra keys (e.g. "bpi") are ignored here.
+        remaining_games: list of (home_team, away_team) tuples. home_advantage
+            is applied to the first element of each tuple.
+        num_simulations: Number of simulations to run.
+        home_advantage: Elo-point bonus applied to the home team per game.
 
     Returns:
-        Dict mapping team_name -> playoff_probability (0.0 to 1.0)
+        Dict mapping team_name -> playoff_probability (0.0 to 1.0).
     """
-    playoff_counts = defaultdict(int)
+    playoff_counts: dict[str, int] = defaultdict(int)
 
-    for sim_idx in range(num_simulations):
-        # Copy current standings
+    for _ in range(num_simulations):
         standings = {
             name: TeamStanding(
-                name=name, wins=data["wins"], losses=data["losses"], bpi=data["bpi"]
+                name=name,
+                wins=data["wins"],
+                losses=data["losses"],
+                elo=data.get("elo", INITIAL_RATING),
             )
             for name, data in current_standings.items()
         }
 
-        # Simulate remaining games
         for team_a, team_b in remaining_games:
             if team_a not in standings or team_b not in standings:
                 logger.warning(f"Team not in standings: {team_a} or {team_b}")
                 continue
 
-            bpi_a = standings[team_a].bpi
-            bpi_b = standings[team_b].bpi
+            elo_a = standings[team_a].elo
+            elo_b = standings[team_b].elo
 
-            if simulate_game(bpi_a, bpi_b):
+            if simulate_game(elo_a, elo_b, home_advantage=home_advantage):
                 standings[team_a].wins += 1
                 standings[team_b].losses += 1
             else:
@@ -87,15 +96,12 @@ def run_monte_carlo_simulation(
                 standings[team_a].losses += 1
 
         sorted_teams = sorted(standings.values(), key=lambda t: t.wins, reverse=True)
-        playoff_teams = sorted_teams[:PLAYOFF_TEAMS]
-
-        for team in playoff_teams:
+        for team in sorted_teams[:PLAYOFF_TEAMS]:
             playoff_counts[team.name] += 1
 
     playoff_probs = {
         name: count / num_simulations for name, count in playoff_counts.items()
     }
-
     for name in current_standings.keys():
         if name not in playoff_probs:
             playoff_probs[name] = 0.0
@@ -108,13 +114,14 @@ def compute_importance_swing(
     remaining_games: list[tuple[str, str]],
     game_index: int,
     num_simulations: int = 2000,
+    home_advantage: float = DEFAULT_HOME_ADVANTAGE,
 ) -> float:
     """Compute playoff odds swing for a specific game.
 
     For a game between team_a and team_b at game_index:
     1. Apply team_a win to standings, simulate remaining games → playoff probs
     2. Apply team_b win to standings, simulate remaining games → playoff probs
-    3. Return sum of absolute playoff-prob changes for each team across the two outcomes
+    3. Return sum of absolute playoff-prob changes for the two teams across outcomes
     """
     if game_index >= len(remaining_games):
         return 0.0
@@ -126,23 +133,26 @@ def compute_importance_swing(
 
     games_without = remaining_games[:game_index] + remaining_games[game_index + 1 :]
 
-    # Simulate with team A winning: apply win to standings, then simulate the rest
     standings_a_wins = {name: dict(data) for name, data in current_standings.items()}
     standings_a_wins[team_a]["wins"] += 1
     standings_a_wins[team_b]["losses"] += 1
     probs_a_win = run_monte_carlo_simulation(
-        standings_a_wins, games_without, num_simulations=num_simulations
+        standings_a_wins,
+        games_without,
+        num_simulations=num_simulations,
+        home_advantage=home_advantage,
     )
 
-    # Simulate with team B winning
     standings_b_wins = {name: dict(data) for name, data in current_standings.items()}
     standings_b_wins[team_b]["wins"] += 1
     standings_b_wins[team_a]["losses"] += 1
     probs_b_win = run_monte_carlo_simulation(
-        standings_b_wins, games_without, num_simulations=num_simulations
+        standings_b_wins,
+        games_without,
+        num_simulations=num_simulations,
+        home_advantage=home_advantage,
     )
 
-    # Each team's swing is the change in their playoff odds between the two outcomes
     swing_a = abs(probs_a_win.get(team_a, 0.0) - probs_b_win.get(team_a, 0.0))
     swing_b = abs(probs_b_win.get(team_b, 0.0) - probs_a_win.get(team_b, 0.0))
 
@@ -151,5 +161,4 @@ def compute_importance_swing(
         f"Game swing ({team_a} vs {team_b}): "
         f"{team_a} swing={swing_a:.3f}, {team_b} swing={swing_b:.3f}, total={total_swing:.3f}"
     )
-
     return total_swing

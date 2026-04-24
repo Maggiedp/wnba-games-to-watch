@@ -1,62 +1,26 @@
-"""Tests for Monte Carlo simulation."""
+"""Tests for Monte Carlo simulation.
 
-from src.scoring.monte_carlo import (
-    compute_win_probability,
-    simulate_game,
-    run_monte_carlo_simulation,
-)
+Win-probability math is tested in test_elo.py (the source of truth). These
+tests cover the simulation wrapper — that it produces bools, that stronger
+teams land in the playoffs more often, etc.
+"""
 
-
-def test_compute_win_probability():
-    """Test win probability calculation."""
-    prob = compute_win_probability(0.0, 0.0)
-    assert 0.45 < prob < 0.55
-
-    prob = compute_win_probability(2.0, 0.0)
-    assert prob > 0.5
-
-    prob = compute_win_probability(0.0, 2.0)
-    assert prob < 0.5
+from src.scoring.monte_carlo import run_monte_carlo_simulation, simulate_game
 
 
-def test_win_probability_calibrated_range():
-    """Best-vs-worst matchup (ΔBPI≈12) should predict 85–95% at k=0.08.
-
-    Pins calibration so a k change is caught by tests. Validated against
-    311 2025 WNBA games; optimal k≈0.078 gives ~89.6% at this spread.
-    """
-    prob = compute_win_probability(6.0, -6.0)  # ΔBPI = 12, realistic season extremes
-    assert 0.85 < prob < 0.95
-
-
-def test_win_probability_symmetry():
-    """P(a beats b) + P(b beats a) must equal 1.0."""
-    for bpi_a, bpi_b in [(5.0, -3.0), (0.0, 0.0), (-1.5, 2.3)]:
-        assert (
-            abs(
-                compute_win_probability(bpi_a, bpi_b)
-                + compute_win_probability(bpi_b, bpi_a)
-                - 1.0
-            )
-            < 1e-9
-        )
-
-
-def test_simulate_game():
-    """Test that simulation runs without error."""
-    result = simulate_game(5.0, 3.0)
+def test_simulate_game_returns_bool():
+    result = simulate_game(1600, 1400, home_advantage=0)
     assert isinstance(result, bool)
 
 
 def test_run_monte_carlo_simulation():
-    """Test Monte Carlo simulation."""
-    # Create 13 teams (realistic WNBA scenario)
+    """13-team synthetic season — stronger teams should make the playoffs more often."""
     standings = {}
     for i in range(13):
         standings[f"Team{i}"] = {
             "wins": 20 - i * 2,
             "losses": i,
-            "bpi": 5 - i * 0.8,
+            "elo": 1600 - i * 20,
         }
 
     remaining_games = [
@@ -67,10 +31,8 @@ def test_run_monte_carlo_simulation():
 
     probs = run_monte_carlo_simulation(standings, remaining_games, num_simulations=1000)
 
-    # All teams should have a probability
     assert len(probs) == 13
-    for team, prob in probs.items():
+    for _, prob in probs.items():
         assert 0.0 <= prob <= 1.0
 
-    # Strong teams should have higher or equal probability than weak teams
     assert probs["Team0"] >= probs["Team12"]

@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Validate Elo win-probability calibration against historical WNBA results.
+
+Unlike BPI validation (which had look-ahead bias — we only have end-of-season
+BPI), Elo is time-honest by construction: we replay games chronologically and
+score each prediction using the ratings as they were BEFORE that game.
+
+Grid-searches over K (responsiveness) and H (home-court Elo bonus) jointly,
+since 2025 calibration showed a ~10-pt home-team win-rate bias in toss-up
+games that pure ratings don't capture.
+
+Run from the repo root with the venv active:
+    python -m scripts.validate_elo
+"""
+
+from __future__ import annotations
+
+import math
+from datetime import date
+
+import numpy as np
+
+from scripts._calibration import brier_score, calibration_table, log_loss
+from src.data.espn_api import fetch_games_for_range
+from src.scoring.elo import (
+    DEFAULT_HOME_ADVANTAGE,
+    DEFAULT_K,
+    expected_win_prob,
+    replay_games,
+)
+
+# Season windows. WNBA regular season runs roughly mid-May through September;
+# playoffs extend into October. Use generous windows so we catch everything.
+_SEASONS = [
+    (date(2024, 5, 1), date(2024, 10, 31), "2024"),
+    (date(2025, 5, 1), date(2025, 10, 31), "2025"),
+]
+# Only evaluate predictions from this season onward — 2024 is warm-up.
+_EVAL_START = "2025-01-01"
+
+
+def _fetch_all_games() -> list[dict]:
+    """Pull games across all configured seasons, filter to completed regular/postseason."""
+    games: list[dict] = []
+    for start, end, label in _SEASONS:
+        season_games = fetch_games_for_range(start, end)
+        finished = [
+            g for g in season_games if g["winner_team"] and g.get("season_type", 2) != 1
+        ]
+        print(f"  {label}: {len(finished)} completed regular/postseason games")
+        games.extend(finished)
+    return games
+
+
+def _replay_and_score(
+    games: list[dict], k: float, home_advantage: float, eval_start: str
+) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
+    """Replay games, return (pre-game win probs, outcomes, final ratings)."""
+    replay = replay_games(games, k=k, home_advantage=home_advantage)
+    probs: list[float] = []
+    outcomes: list[float] = []
+    for h in replay.history:
+        if h["date"] < eval_start:
+            continue
+        p_a = expected_win_prob(h["pre_a"], h["pre_b"], home_advantage)
+        probs.append(p_a)
+        outcomes.append(1.0 if h["winner"] == h["team_a"] else 0.0)
+    return np.array(probs), np.array(outcomes), replay.final_ratings
+
+
+def _grid_search_k_h(
+    games: list[dict],
+    eval_start: str,
+    k_candidates: np.ndarray,
+    h_candidates: np.ndarray,
+) -> tuple[
+    tuple[float, float, float, float], dict[tuple[float, float], tuple[float, float]]
+]:
+    """Joint K×H grid search.
+
+    Returns ((best_k, best_h, best_ll, best_brier), {(k, h): (ll, brier)})
+    """
+    grid: dict[tuple[float, float], tuple[float, float]] = {}
+    best = None
+    for k in k_candidates:
+        for h in h_candidates:
+            probs, outcomes, _ = _replay_and_score(
+                games, float(k), float(h), eval_start
+            )
+            if len(probs) == 0:
+                continue
+            ll = log_loss(probs, outcomes)
+            br = brier_score(probs, outcomes)
+            grid[(float(k), float(h))] = (ll, br)
+            if best is None or ll < best[2]:
+                best = (float(k), float(h), ll, br)
+    assert best is not None, "Grid search returned no results"
+    return best, grid
+
+
+def _print_metrics(label: str, probs: np.ndarray, outcomes: np.ndarray) -> None:
+    n = len(outcomes)
+    brier = brier_score(probs, outcomes)
+    ll = log_loss(probs, outcomes)
+    acc = float(np.mean((probs > 0.5) == (outcomes == 1)))
+    print(f"  {label}: N={n}  Brier={brier:.4f}  LogLoss={ll:.4f}  PickAcc={acc:.1%}")
+
+
+def _print_calibration(label: str, probs: np.ndarray, outcomes: np.ndarray) -> None:
+    print(f"\nCalibration ({label}):")
+    print(f"  {'Bucket':<12} {'N':>5} {'Predicted':>10} {'Actual':>10} {'Error':>8}")
+    for row in calibration_table(probs, outcomes):
+        err = row["actual"] - row["avg_pred"]
+        print(
+            f"  {row['bucket']:<12} {row['n']:>5} {row['avg_pred']:>10.1%} "
+            f"{row['actual']:>10.1%} {err:>+8.1%}"
+        )
+
+
+def main() -> None:
+    print("=== Elo Win-Probability Calibration Validation ===\n")
+
+    print("Fetching historical WNBA games...")
+    games = _fetch_all_games()
+    if not games:
+        print("No games found — aborting.")
+        return
+    print(f"Total: {len(games)} games across {len(_SEASONS)} seasons\n")
+
+    baseline_brier = 0.25
+    baseline_ll = math.log(2)
+    print(f"Baselines: random Brier={baseline_brier:.4f}, LogLoss={baseline_ll:.4f}\n")
+
+    print("Headline comparison:")
+    probs_neutral, outcomes, _ = _replay_and_score(games, DEFAULT_K, 0.0, _EVAL_START)
+    _print_metrics(f"Neutral Elo (K={DEFAULT_K}, H=0)", probs_neutral, outcomes)
+
+    print("\nRunning joint K×H grid search...")
+    k_candidates = np.arange(10.0, 51.0, 2.0)
+    h_candidates = np.arange(0.0, 151.0, 5.0)
+    (best_k, best_h, best_ll, best_br), grid = _grid_search_k_h(
+        games, _EVAL_START, k_candidates, h_candidates
+    )
+    print(
+        f"  Best: K={best_k:.0f}, H={best_h:.0f} → LogLoss={best_ll:.4f}, Brier={best_br:.4f}"
+    )
+
+    print("\nAt best (K, H):")
+    probs_best, _, ratings_best = _replay_and_score(games, best_k, best_h, _EVAL_START)
+    _print_metrics(f"Elo (K={best_k:.0f}, H={best_h:.0f})", probs_best, outcomes)
+    _print_calibration(f"K={best_k:.0f}, H={best_h:.0f}", probs_best, outcomes)
+
+    _print_calibration(f"K={DEFAULT_K}, H=0 (neutral)", probs_neutral, outcomes)
+
+    print(f"\nH sensitivity at K={DEFAULT_K}:")
+    best_entry_at_default_k = min(
+        (v for (k, _), v in grid.items() if k == DEFAULT_K),
+        key=lambda v: v[0],
+        default=None,
+    )
+    for h in (0, 20, 40, 60, 70, 80, 100, 120, 150):
+        entry = grid.get((DEFAULT_K, float(h)))
+        if entry:
+            marker = " ← best-for-this-K" if entry == best_entry_at_default_k else ""
+            print(f"  H={h:>3}: LogLoss={entry[0]:.4f}, Brier={entry[1]:.4f}{marker}")
+
+    print(f"\nK sensitivity at H={best_h:.0f}:")
+    for k in (10, 14, 18, 20, 22, 26, 30, 40, 50):
+        entry = grid.get((float(k), best_h))
+        if entry:
+            marker = " ← best" if float(k) == best_k else ""
+            print(f"  K={k:>2}: LogLoss={entry[0]:.4f}, Brier={entry[1]:.4f}{marker}")
+
+    print(
+        f"\nFinal ratings at end of replay (top 6 / bottom 6) at K={best_k:.0f}, H={best_h:.0f}:"
+    )
+    ranked = sorted(ratings_best.items(), key=lambda x: -x[1])
+    for name, r in ranked[:6]:
+        print(f"  {name:<30} {r:>7.1f}")
+    print("  ...")
+    for name, r in ranked[-6:]:
+        print(f"  {name:<30} {r:>7.1f}")
+
+    if ranked:
+        best_r = ranked[0][1]
+        worst_r = ranked[-1][1]
+        spread_wp = expected_win_prob(best_r, worst_r)
+        print(
+            f"\n  Elo spread (best vs worst, Δ={best_r - worst_r:.0f}): "
+            f"{spread_wp:.1%} win probability at neutral site"
+        )
+
+    print("\nConclusion:")
+    if abs(best_k - DEFAULT_K) <= 2.0 and abs(best_h - DEFAULT_HOME_ADVANTAGE) <= 5.0:
+        print(
+            f"  Current defaults (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}) are well-calibrated."
+        )
+    else:
+        print(
+            f"  Optimal (K={best_k:.0f}, H={best_h:.0f}) differs from defaults "
+            f"(K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}). "
+            "Consider updating DEFAULT_K / DEFAULT_HOME_ADVANTAGE in elo.py."
+        )
+
+
+if __name__ == "__main__":
+    main()
