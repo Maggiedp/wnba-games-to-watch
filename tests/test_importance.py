@@ -7,21 +7,25 @@ from src.scoring.monte_carlo import compute_importance_swing, run_monte_carlo_si
 
 
 def _bubble_standings() -> dict[str, dict]:
-    """13-team standings with a tight bubble race — teams 6-9 tied on the cutoff."""
+    """13-team standings with a tight bubble race — teams 6-9 tied on the cutoff.
+
+    Elo ratings are paired with BPI so either signal can drive win probability
+    (Monte Carlo uses Elo; quality scoring still reads BPI).
+    """
     return {
-        "Team0": {"wins": 28, "losses": 7, "bpi": 5.0},
-        "Team1": {"wins": 26, "losses": 9, "bpi": 4.0},
-        "Team2": {"wins": 24, "losses": 11, "bpi": 3.0},
-        "Team3": {"wins": 22, "losses": 13, "bpi": 2.0},
-        "Team4": {"wins": 20, "losses": 15, "bpi": 1.0},
-        "Team5": {"wins": 19, "losses": 16, "bpi": 0.5},
-        "Team6": {"wins": 18, "losses": 17, "bpi": 0.0},
-        "Team7": {"wins": 18, "losses": 17, "bpi": -0.5},
-        "Team8": {"wins": 18, "losses": 17, "bpi": -1.0},
-        "Team9": {"wins": 18, "losses": 17, "bpi": -1.5},
-        "Team10": {"wins": 14, "losses": 21, "bpi": -3.0},
-        "Team11": {"wins": 10, "losses": 25, "bpi": -5.0},
-        "Team12": {"wins": 7, "losses": 28, "bpi": -6.0},
+        "Team0": {"wins": 28, "losses": 7, "bpi": 5.0, "elo": 1650},
+        "Team1": {"wins": 26, "losses": 9, "bpi": 4.0, "elo": 1620},
+        "Team2": {"wins": 24, "losses": 11, "bpi": 3.0, "elo": 1590},
+        "Team3": {"wins": 22, "losses": 13, "bpi": 2.0, "elo": 1560},
+        "Team4": {"wins": 20, "losses": 15, "bpi": 1.0, "elo": 1530},
+        "Team5": {"wins": 19, "losses": 16, "bpi": 0.5, "elo": 1515},
+        "Team6": {"wins": 18, "losses": 17, "bpi": 0.0, "elo": 1500},
+        "Team7": {"wins": 18, "losses": 17, "bpi": -0.5, "elo": 1485},
+        "Team8": {"wins": 18, "losses": 17, "bpi": -1.0, "elo": 1470},
+        "Team9": {"wins": 18, "losses": 17, "bpi": -1.5, "elo": 1455},
+        "Team10": {"wins": 14, "losses": 21, "bpi": -3.0, "elo": 1410},
+        "Team11": {"wins": 10, "losses": 25, "bpi": -5.0, "elo": 1350},
+        "Team12": {"wins": 7, "losses": 28, "bpi": -6.0, "elo": 1320},
     }
 
 
@@ -98,7 +102,7 @@ def test_importance_swing_out_of_bounds_returns_zero():
 
 
 def test_importance_swing_unknown_team_returns_zero():
-    standings = {"TeamX": {"wins": 5, "losses": 5, "bpi": 0.0}}
+    standings = {"TeamX": {"wins": 5, "losses": 5, "bpi": 0.0, "elo": 1500}}
     games = [("TeamX", "TeamUnknown")]
     assert compute_importance_swing(standings, games, 0) == 0.0
 

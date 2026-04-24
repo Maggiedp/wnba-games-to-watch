@@ -4,11 +4,12 @@
 import logging
 import random
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from src.constants import GameStatus
 from src.data.espn_api import (
     fetch_bpi_ratings,
+    fetch_games_for_range,
     fetch_schedule_and_results,
     fetch_team_details,
 )
@@ -26,6 +27,7 @@ from src.db.queries import (
     upsert_team,
 )
 from src.db.schema import get_session, init_db
+from src.scoring.elo import INITIAL_RATING, replay_games
 from src.scoring.importance import compute_importance_score
 from src.scoring.quality import compute_quality_score
 
@@ -42,6 +44,10 @@ logger = logging.getLogger(__name__)
 # Only compute playoff importance for games within this window.
 # Beyond it the standings will shift enough that the score is noise.
 _IMPORTANCE_WINDOW_DAYS = 30
+
+# How far back to pull games for Elo warm-up. Two prior seasons gives enough
+# updates that ratings have separated from the 1500 seed by opening day.
+_ELO_HISTORY_START = date(2024, 5, 1)
 
 
 def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
@@ -138,10 +144,35 @@ def fetch_and_store_games(session) -> list[dict]:
     return games
 
 
-def compute_standings(session) -> dict[str, dict]:
+def compute_elo_ratings() -> dict[str, float]:
+    """Replay all historical games through the Elo engine to produce current ratings.
+
+    Re-fetches history fresh each run — Elo state isn't persisted, so there's
+    nothing that can drift out of sync with the rest of the pipeline. Teams
+    without any prior games (expansion teams, or any team pre-opening-day)
+    will appear at INITIAL_RATING when looked up later.
+    """
+    yesterday = date.today() - timedelta(days=1)
+    logger.info(f"Fetching Elo history: {_ELO_HISTORY_START} through {yesterday}...")
+    all_games = fetch_games_for_range(_ELO_HISTORY_START, yesterday)
+    completed = [
+        g for g in all_games if g.get("winner_team") and g.get("season_type", 2) != 1
+    ]
+    logger.info(f"Replaying {len(completed)} completed games through Elo")
+    replay = replay_games(completed)
+    return replay.final_ratings
+
+
+def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]:
     all_teams = get_all_teams(session)
     standings = {
-        t.name: {"wins": 0, "losses": 0, "bpi": t.bpi_rating} for t in all_teams
+        t.name: {
+            "wins": 0,
+            "losses": 0,
+            "bpi": t.bpi_rating,
+            "elo": elo_ratings.get(t.name, INITIAL_RATING),
+        }
+        for t in all_teams
     }
     completed = get_completed_games(session, season_year=2026)
     for game in completed:
@@ -291,7 +322,8 @@ def main() -> int:
         try:
             fetch_and_store_bpi_ratings(session)
             games = fetch_and_store_games(session)
-            standings = compute_standings(session)
+            elo_ratings = compute_elo_ratings()
+            standings = compute_standings(session, elo_ratings)
             scored = compute_daily_scores(session, games, standings)
             store_daily_rankings(session, scored)
             logger.info("=== Daily update job completed successfully ===")

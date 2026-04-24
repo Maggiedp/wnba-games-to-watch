@@ -14,40 +14,8 @@ from datetime import date
 
 import numpy as np
 
+from scripts._calibration import brier_score, calibration_table, log_loss
 from src.data.espn_api import fetch_bpi_ratings, fetch_games_for_range
-
-
-def _brier_score(probs: np.ndarray, outcomes: np.ndarray) -> float:
-    return float(np.mean((probs - outcomes) ** 2))
-
-
-def _log_loss(probs: np.ndarray, outcomes: np.ndarray) -> float:
-    eps = 1e-7
-    return float(
-        -np.mean(
-            outcomes * np.log(probs + eps) + (1 - outcomes) * np.log(1 - probs + eps)
-        )
-    )
-
-
-def _calibration_table(
-    probs: np.ndarray, outcomes: np.ndarray, n_buckets: int = 5
-) -> list[dict]:
-    rows = []
-    for i in range(n_buckets):
-        lo, hi = i / n_buckets, (i + 1) / n_buckets
-        mask = (probs >= lo) & (probs < hi) if i < n_buckets - 1 else (probs >= lo)
-        if not mask.any():
-            continue
-        rows.append(
-            {
-                "bucket": f"{lo:.0%}–{hi:.0%}",
-                "n": int(mask.sum()),
-                "avg_pred": float(probs[mask].mean()),
-                "actual": float(outcomes[mask].mean()),
-            }
-        )
-    return rows
 
 
 def _find_optimal_k(bpi_diffs: np.ndarray, outcomes: np.ndarray) -> float:
@@ -110,10 +78,10 @@ def main() -> None:
     probs_old = _probs(K_OLD)
     probs_current = _probs(K_CURRENT)
 
-    brier_old = _brier_score(probs_old, outcomes_arr)
-    ll_old = _log_loss(probs_old, outcomes_arr)
-    brier_current = _brier_score(probs_current, outcomes_arr)
-    ll_current = _log_loss(probs_current, outcomes_arr)
+    brier_old = brier_score(probs_old, outcomes_arr)
+    ll_old = log_loss(probs_old, outcomes_arr)
+    brier_current = brier_score(probs_current, outcomes_arr)
+    ll_current = log_loss(probs_current, outcomes_arr)
 
     n = len(outcomes_arr)
     baseline_brier = 0.25
@@ -133,7 +101,7 @@ def main() -> None:
         f"\nCalibration at k={K_CURRENT} (predicted win probability vs actual win rate):"
     )
     print(f"  {'Bucket':<12} {'N':>5} {'Predicted':>10} {'Actual':>10} {'Error':>8}")
-    for row in _calibration_table(probs_current, outcomes_arr):
+    for row in calibration_table(probs_current, outcomes_arr):
         err = row["actual"] - row["avg_pred"]
         print(
             f"  {row['bucket']:<12} {row['n']:>5} {row['avg_pred']:>10.1%} {row['actual']:>10.1%} {err:>+8.1%}"
@@ -142,8 +110,8 @@ def main() -> None:
     print("\nSearching for optimal k (minimizing log loss)...")
     k_opt = _find_optimal_k(bpi_diffs, outcomes_arr)
     probs_opt = _probs(k_opt)
-    brier_opt = _brier_score(probs_opt, outcomes_arr)
-    ll_opt = _log_loss(probs_opt, outcomes_arr)
+    brier_opt = brier_score(probs_opt, outcomes_arr)
+    ll_opt = log_loss(probs_opt, outcomes_arr)
 
     print(f"  k={K_OLD:.3f} (old)     → log loss {ll_old:.4f}, Brier {brier_old:.4f}")
     print(
