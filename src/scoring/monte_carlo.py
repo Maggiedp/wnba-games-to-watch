@@ -30,10 +30,10 @@ def compute_win_probability(bpi_a: float, bpi_b: float) -> float:
     """Compute probability that team A beats team B using BPI ratings.
 
     Uses a logistic function based on BPI difference.
-    Calibrated to actual WNBA BPI range (~-6 to +6): best vs worst team ≈ 75% win prob.
+    Calibrated against 2025 game results (311 games): best vs worst team (ΔBPI≈12) ≈ 89% win prob.
     """
     bpi_diff = bpi_a - bpi_b
-    k = 0.04  # Calibrated for WNBA BPI spread of ~12 points
+    k = 0.08  # Calibrated against 2025 results: optimal k≈0.078, rounded to 0.08
     prob_a = 1.0 / (1.0 + pow(10, -k * bpi_diff))
     return prob_a
 

@@ -105,31 +105,26 @@ def fetch_bpi_ratings() -> dict[str, float]:
     return {}
 
 
-def fetch_schedule_and_results() -> list[dict]:
-    """Return all games from today through end of season, WNBA teams only.
+def fetch_games_for_range(start: date, end: date) -> list[dict]:
+    """Return all parsed WNBA games between start and end dates (inclusive).
 
-    Uses monthly batch requests instead of day-by-day to minimize API calls.
-    Filters out exhibition games against non-WNBA opponents.
+    Uses monthly batch requests. Filters out non-WNBA opponents.
     """
     wnba_teams = set(fetch_team_id_map().values())
-
-    today = date.today()
     all_games: list[dict] = []
     seen_ids: set[str] = set()
 
-    # Walk month by month from today through season end
-    cursor = today.replace(day=1)
-    while cursor <= _SEASON_END:
-        # Include yesterday to catch any games that just finished
-        range_start = max(today - timedelta(days=1), cursor)
-        # Last day of this month (or season end, whichever is sooner)
-        if cursor.month == 12:
-            next_month = cursor.replace(year=cursor.year + 1, month=1)
-        else:
-            next_month = cursor.replace(month=cursor.month + 1)
-        range_end = min(next_month - timedelta(days=1), _SEASON_END)
-
+    cursor = start.replace(day=1)
+    while cursor <= end:
+        next_month = (
+            cursor.replace(year=cursor.year + 1, month=1)
+            if cursor.month == 12
+            else cursor.replace(month=cursor.month + 1)
+        )
+        range_start = max(start, cursor)
+        range_end = min(next_month - timedelta(days=1), end)
         date_param = f"{range_start.strftime('%Y%m%d')}-{range_end.strftime('%Y%m%d')}"
+
         try:
             data = _get(f"{SITE_API}/scoreboard", dates=date_param)
         except ESPNAPIError as e:
@@ -148,8 +143,16 @@ def fetch_schedule_and_results() -> list[dict]:
 
         cursor = next_month
 
-    logger.info(f"Fetched {len(all_games)} WNBA games through end of season")
     return all_games
+
+
+def fetch_schedule_and_results() -> list[dict]:
+    """Return all games from yesterday through end of season, WNBA teams only."""
+    today = date.today()
+    # Include yesterday to catch games that just finished
+    games = fetch_games_for_range(today - timedelta(days=1), _SEASON_END)
+    logger.info(f"Fetched {len(games)} WNBA games through end of season")
+    return games
 
 
 def _parse_event(event: dict) -> Optional[dict]:

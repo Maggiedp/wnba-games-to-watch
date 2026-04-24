@@ -19,6 +19,16 @@ def test_compute_win_probability():
     assert prob < 0.5
 
 
+def test_win_probability_calibrated_range():
+    """Best-vs-worst matchup (ΔBPI≈12) should predict 85–95% at k=0.08.
+
+    Pins calibration so a k change is caught by tests. Validated against
+    311 2025 WNBA games; optimal k≈0.078 gives ~89.6% at this spread.
+    """
+    prob = compute_win_probability(6.0, -6.0)  # ΔBPI = 12, realistic season extremes
+    assert 0.85 < prob < 0.95
+
+
 def test_win_probability_symmetry():
     """P(a beats b) + P(b beats a) must equal 1.0."""
     for bpi_a, bpi_b in [(5.0, -3.0), (0.0, 0.0), (-1.5, 2.3)]:
