@@ -13,6 +13,7 @@ current Monte Carlo assumption).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 
 INITIAL_RATING = 1500.0
 # Calibrated against 2024 (warm-up) + 2025 (eval, 311 games) WNBA results.
@@ -21,7 +22,31 @@ INITIAL_RATING = 1500.0
 # after the 2026 season via scripts/validate_elo.py.
 DEFAULT_K = 28.0
 DEFAULT_HOME_ADVANTAGE = 50.0
+# Pull each team's rating this fraction of the way toward INITIAL_RATING at
+# the start of every new season. 1/3 follows FiveThirtyEight's NBA practice
+# and accounts for roster turnover so opening-week ratings aren't carried
+# entirely from the prior season.
+DEFAULT_SEASON_REGRESSION = 1.0 / 3.0
 _ELO_SCALE = 400.0
+
+
+def _season_for_date(date_str: str) -> int | None:
+    """Season key for an ISO YYYY-MM-DD date, or None if empty.
+
+    WNBA seasons fit inside a calendar year (May–October), so year is a
+    sufficient season key.
+    """
+    if not date_str:
+        return None
+    return date.fromisoformat(date_str).year
+
+
+def _regress_toward_mean(ratings: dict[str, float], factor: float) -> None:
+    if factor <= 0:
+        return
+    keep = 1.0 - factor
+    for team, rating in ratings.items():
+        ratings[team] = INITIAL_RATING + (rating - INITIAL_RATING) * keep
 
 
 def expected_win_prob(
@@ -71,6 +96,7 @@ def replay_games(
     initial_ratings: dict[str, float] | None = None,
     k: float = DEFAULT_K,
     home_advantage: float = 0.0,
+    season_regression: float = DEFAULT_SEASON_REGRESSION,
 ) -> EloReplay:
     """Replay games chronologically and return final ratings + per-game history.
 
@@ -79,9 +105,16 @@ def replay_games(
     is applied to team A. Games with a falsy winner_team are skipped (unplayed
     / tied / malformed). Games are sorted by (date, event_id) for deterministic
     ordering; ties fall back to input order via a stable sort.
+
+    `season_regression` pulls every existing rating that fraction of the way
+    toward INITIAL_RATING at each detected season boundary (year change in the
+    ISO date string). Pass 0 to disable. Teams that first appear mid-season
+    aren't affected by prior boundaries — they enter at INITIAL_RATING when
+    their first game is processed.
     """
     ratings: dict[str, float] = dict(initial_ratings or {})
     history: list[dict] = []
+    prev_season: int | None = None
 
     ordered = sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
 
@@ -92,6 +125,12 @@ def replay_games(
         ta, tb = g["team_a"], g["team_b"]
         if winner not in (ta, tb):
             continue
+
+        season = _season_for_date(g.get("date", ""))
+        if season is not None:
+            if prev_season is not None and season != prev_season:
+                _regress_toward_mean(ratings, season_regression)
+            prev_season = season
 
         ra = ratings.setdefault(ta, INITIAL_RATING)
         rb = ratings.setdefault(tb, INITIAL_RATING)
