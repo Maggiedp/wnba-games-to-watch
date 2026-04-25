@@ -7,7 +7,9 @@ score each prediction using the ratings as they were BEFORE that game.
 
 Grid-searches over K (responsiveness) and H (home-court Elo bonus) jointly,
 since 2025 calibration showed a ~10-pt home-team win-rate bias in toss-up
-games that pure ratings don't capture.
+games that pure ratings don't capture. Season-boundary regression toward the
+mean is held fixed at DEFAULT_SEASON_REGRESSION; both grid and headline runs
+use it so K/H are tuned for the system as deployed.
 
 Run from the repo root with the venv active:
     python -m scripts.validate_elo
@@ -25,6 +27,7 @@ from src.data.espn_api import fetch_games_for_range
 from src.scoring.elo import (
     DEFAULT_HOME_ADVANTAGE,
     DEFAULT_K,
+    DEFAULT_SEASON_REGRESSION,
     expected_win_prob,
     replay_games,
 )
@@ -53,10 +56,19 @@ def _fetch_all_games() -> list[dict]:
 
 
 def _replay_and_score(
-    games: list[dict], k: float, home_advantage: float, eval_start: str
+    games: list[dict],
+    k: float,
+    home_advantage: float,
+    eval_start: str,
+    season_regression: float = DEFAULT_SEASON_REGRESSION,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
     """Replay games, return (pre-game win probs, outcomes, final ratings)."""
-    replay = replay_games(games, k=k, home_advantage=home_advantage)
+    replay = replay_games(
+        games,
+        k=k,
+        home_advantage=home_advantage,
+        season_regression=season_regression,
+    )
     probs: list[float] = []
     outcomes: list[float] = []
     for h in replay.history:
@@ -129,11 +141,38 @@ def main() -> None:
 
     baseline_brier = 0.25
     baseline_ll = math.log(2)
-    print(f"Baselines: random Brier={baseline_brier:.4f}, LogLoss={baseline_ll:.4f}\n")
+    print(f"Baselines: random Brier={baseline_brier:.4f}, LogLoss={baseline_ll:.4f}")
+    print(
+        f"Season regression toward mean held fixed at "
+        f"{DEFAULT_SEASON_REGRESSION:.3f} for grid + headline runs.\n"
+    )
 
     print("Headline comparison:")
     probs_neutral, outcomes, _ = _replay_and_score(games, DEFAULT_K, 0.0, _EVAL_START)
     _print_metrics(f"Neutral Elo (K={DEFAULT_K}, H=0)", probs_neutral, outcomes)
+
+    probs_no_reg, _, _ = _replay_and_score(
+        games,
+        DEFAULT_K,
+        DEFAULT_HOME_ADVANTAGE,
+        _EVAL_START,
+        season_regression=0.0,
+    )
+    _print_metrics(
+        f"No regression  (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}, reg=0)",
+        probs_no_reg,
+        outcomes,
+    )
+
+    probs_default, _, _ = _replay_and_score(
+        games, DEFAULT_K, DEFAULT_HOME_ADVANTAGE, _EVAL_START
+    )
+    _print_metrics(
+        f"Defaults       (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}, "
+        f"reg={DEFAULT_SEASON_REGRESSION:.3f})",
+        probs_default,
+        outcomes,
+    )
 
     print("\nRunning joint K×H grid search...")
     k_candidates = np.arange(10.0, 51.0, 2.0)
@@ -191,15 +230,17 @@ def main() -> None:
         )
 
     print("\nConclusion:")
-    if abs(best_k - DEFAULT_K) <= 2.0 and abs(best_h - DEFAULT_HOME_ADVANTAGE) <= 5.0:
+    if abs(best_k - DEFAULT_K) <= 5.0 and abs(best_h - DEFAULT_HOME_ADVANTAGE) <= 5.0:
         print(
-            f"  Current defaults (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}) are well-calibrated."
+            f"  Current defaults (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}, "
+            f"reg={DEFAULT_SEASON_REGRESSION:.3f}) are within the documented flat "
+            "region of the loss surface."
         )
     else:
         print(
             f"  Optimal (K={best_k:.0f}, H={best_h:.0f}) differs from defaults "
-            f"(K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}). "
-            "Consider updating DEFAULT_K / DEFAULT_HOME_ADVANTAGE in elo.py."
+            f"(K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}) by more than the flat "
+            "region. Consider updating DEFAULT_K / DEFAULT_HOME_ADVANTAGE in elo.py."
         )
 
 

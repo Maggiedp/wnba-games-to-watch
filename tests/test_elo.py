@@ -5,6 +5,7 @@ import math
 from src.scoring.elo import (
     DEFAULT_HOME_ADVANTAGE,
     DEFAULT_K,
+    DEFAULT_SEASON_REGRESSION,
     INITIAL_RATING,
     expected_win_prob,
     replay_games,
@@ -143,6 +144,11 @@ def test_calibrated_defaults_pinned():
     assert DEFAULT_HOME_ADVANTAGE == 50.0
 
 
+def test_default_season_regression_is_one_third():
+    """Pin the FiveThirtyEight-standard regression so a change is caught deliberately."""
+    assert math.isclose(DEFAULT_SEASON_REGRESSION, 1.0 / 3.0)
+
+
 def test_home_toss_up_predicts_calibrated_win_rate():
     """Home team with equal ratings should predict 57–62% win probability.
 
@@ -184,3 +190,88 @@ def test_home_update_gives_home_favorite_less_credit():
 def test_home_update_still_zero_sum():
     new_a, new_b = update_ratings(1500, 1500, team_a_won=True, home_advantage=70)
     assert math.isclose(new_a + new_b, 3000.0)
+
+
+def _two_season_games():
+    """Two 2024 wins for A, then one 2025 game where A and B's pre-game ratings are inspected."""
+    return [
+        {
+            "date": "2024-06-01",
+            "team_a": "A",
+            "team_b": "B",
+            "winner_team": "A",
+            "event_id": "1",
+        },
+        {
+            "date": "2024-07-01",
+            "team_a": "A",
+            "team_b": "B",
+            "winner_team": "A",
+            "event_id": "2",
+        },
+        {
+            "date": "2025-05-15",
+            "team_a": "A",
+            "team_b": "B",
+            "winner_team": "A",
+            "event_id": "3",
+        },
+    ]
+
+
+def test_single_season_replay_unaffected_by_regression():
+    """Within one season, regression must not fire — every game has the same year."""
+    games = [
+        {
+            "date": "2025-05-01",
+            "team_a": "A",
+            "team_b": "B",
+            "winner_team": "A",
+            "event_id": "1",
+        },
+        {
+            "date": "2025-06-01",
+            "team_a": "A",
+            "team_b": "B",
+            "winner_team": "A",
+            "event_id": "2",
+        },
+    ]
+    no_reg = replay_games(games, season_regression=0.0, home_advantage=0.0)
+    with_reg = replay_games(games, season_regression=0.5, home_advantage=0.0)
+    assert no_reg.final_ratings == with_reg.final_ratings
+
+
+def test_season_boundary_regresses_ratings_toward_mean():
+    """Crossing into a new year pulls accumulated ratings toward INITIAL_RATING."""
+    games = _two_season_games()
+
+    no_reg = replay_games(games, season_regression=0.0, home_advantage=0.0)
+    with_reg = replay_games(games, season_regression=1.0 / 3.0, home_advantage=0.0)
+
+    # A built a lead in 2024 with both implementations.
+    assert no_reg.history[1]["pre_a"] > INITIAL_RATING
+
+    # With regression, A entered the 2025 game closer to 1500 than without.
+    assert with_reg.history[2]["pre_a"] < no_reg.history[2]["pre_a"]
+    assert abs(with_reg.history[2]["pre_a"] - INITIAL_RATING) < abs(
+        no_reg.history[2]["pre_a"] - INITIAL_RATING
+    )
+
+
+def test_season_regression_factor_one_resets_to_initial():
+    """Factor=1.0 wipes accumulated history at the season boundary."""
+    games = _two_season_games()
+    result = replay_games(games, season_regression=1.0, home_advantage=0.0)
+    # The first 2025 game inspects pre-game ratings — those should be the post-reset values.
+    assert math.isclose(result.history[2]["pre_a"], INITIAL_RATING)
+    assert math.isclose(result.history[2]["pre_b"], INITIAL_RATING)
+
+
+def test_season_regression_zero_carries_full_history():
+    """Factor=0 reproduces pre-regression behavior — escape hatch for grid search."""
+    games = _two_season_games()
+    no_reg = replay_games(games, season_regression=0.0, home_advantage=0.0)
+    # Without regression, A's 2024 lead carries fully into 2025.
+    assert no_reg.history[2]["pre_a"] > INITIAL_RATING
+    assert no_reg.history[2]["pre_b"] < INITIAL_RATING
