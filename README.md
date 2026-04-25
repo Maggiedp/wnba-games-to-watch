@@ -9,7 +9,7 @@ A nightly ranking of the best WNBA matchups, weighing team quality and playoff s
 Every upcoming game gets a score out of 100:
 
 - **Quality (60%)** — harmonic mean of both teams' [ESPN BPI](https://www.espn.com/wnba/bpi) ratings. Penalizes lopsided matchups: a +5 vs +5 game scores much higher than +5 vs -5.
-- **Importance (40%)** — Monte Carlo simulation (10,000 runs) of the remaining schedule, measuring how much each team's playoff odds swing on tonight's result.
+- **Importance (40%)** — Monte Carlo simulation (2,000 runs per forced outcome) over the next 30 days, measuring how much each team's playoff odds swing on tonight's result. Per-game win probabilities use Elo ratings with home-court advantage, replayed chronologically from 2024 with a 1/3 regression toward the mean at each season boundary.
 
 ## Tech stack
 
