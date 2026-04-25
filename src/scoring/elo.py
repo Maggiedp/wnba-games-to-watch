@@ -13,6 +13,7 @@ current Monte Carlo assumption).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 
 INITIAL_RATING = 1500.0
 # Calibrated against 2024 (warm-up) + 2025 (eval, 311 games) WNBA results.
@@ -30,21 +31,17 @@ _ELO_SCALE = 400.0
 
 
 def _season_for_date(date_str: str) -> int | None:
-    """Return the season year for an ISO YYYY-MM-DD date, or None if unparseable.
+    """Season key for an ISO YYYY-MM-DD date, or None if empty.
 
     WNBA seasons fit inside a calendar year (May–October), so year is a
     sufficient season key.
     """
-    if not date_str or len(date_str) < 4:
+    if not date_str:
         return None
-    try:
-        return int(date_str[:4])
-    except ValueError:
-        return None
+    return date.fromisoformat(date_str).year
 
 
 def _regress_toward_mean(ratings: dict[str, float], factor: float) -> None:
-    """In-place regress every rating `factor` of the way toward INITIAL_RATING."""
     if factor <= 0:
         return
     keep = 1.0 - factor

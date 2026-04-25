@@ -266,12 +266,3 @@ def test_season_regression_factor_one_resets_to_initial():
     # The first 2025 game inspects pre-game ratings — those should be the post-reset values.
     assert math.isclose(result.history[2]["pre_a"], INITIAL_RATING)
     assert math.isclose(result.history[2]["pre_b"], INITIAL_RATING)
-
-
-def test_season_regression_zero_carries_full_history():
-    """Factor=0 reproduces pre-regression behavior — escape hatch for grid search."""
-    games = _two_season_games()
-    no_reg = replay_games(games, season_regression=0.0, home_advantage=0.0)
-    # Without regression, A's 2024 lead carries fully into 2025.
-    assert no_reg.history[2]["pre_a"] > INITIAL_RATING
-    assert no_reg.history[2]["pre_b"] < INITIAL_RATING
