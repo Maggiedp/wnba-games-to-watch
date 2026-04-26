@@ -405,8 +405,10 @@ _HOMEPAGE_HTML = f"""
                 <h3>Importance (40%)</h3>
                 <p>
                     How much does this game matter for playoff seeding? A Monte Carlo simulation
-                    runs the rest of the season 10,000 times, measuring how each team&rsquo;s playoff
-                    odds swing depending on who wins tonight. Bigger swing &rarr; higher score.
+                    runs the rest of the season 2,000 times per outcome, using Elo ratings with
+                    home-court advantage to decide each simulated game. We measure how much each
+                    team&rsquo;s playoff odds swing depending on who wins tonight. Bigger swing
+                    &rarr; higher score.
                 </p>
 
                 <h3>Notes</h3>
