@@ -7,10 +7,90 @@ from src.scoring.elo import (
     DEFAULT_K,
     DEFAULT_SEASON_REGRESSION,
     INITIAL_RATING,
+    _mov_multiplier,
     expected_win_prob,
     replay_games,
     update_ratings,
 )
+
+
+def test_mov_multiplier_zero_or_negative_returns_one():
+    assert _mov_multiplier(0, 100) == 1.0
+    assert _mov_multiplier(-5, 100) == 1.0
+
+
+def test_mov_multiplier_monotonic_in_margin():
+    """At a fixed Elo gap, larger margins should yield larger multipliers."""
+    assert _mov_multiplier(20, 0) > _mov_multiplier(5, 0)
+    assert _mov_multiplier(40, 0) > _mov_multiplier(20, 0)
+
+
+def test_mov_multiplier_damps_for_heavy_favorites():
+    """Autocorrelation correction: same blowout buys less when the favorite was heavier."""
+    blowout = 30
+    big_favorite = _mov_multiplier(blowout, winner_elo_advantage=400)
+    toss_up = _mov_multiplier(blowout, winner_elo_advantage=0)
+    upset = _mov_multiplier(blowout, winner_elo_advantage=-200)
+    assert big_favorite < toss_up < upset
+
+
+def test_update_ratings_mov_amplifies_blowouts():
+    """A 30-point win should move ratings more than a 1-point win, all else equal."""
+    narrow_a, _ = update_ratings(1500, 1500, team_a_won=True, mov=1)
+    blowout_a, _ = update_ratings(1500, 1500, team_a_won=True, mov=30)
+    no_mov_a, _ = update_ratings(1500, 1500, team_a_won=True)
+    # No-MOV behavior is unchanged when mov is omitted.
+    assert math.isclose(no_mov_a - 1500, DEFAULT_K * 0.5)
+    assert (blowout_a - 1500) > (narrow_a - 1500)
+
+
+def test_update_ratings_mov_still_zero_sum():
+    new_a, new_b = update_ratings(1500, 1500, team_a_won=True, mov=15)
+    assert math.isclose(new_a + new_b, 3000.0)
+
+
+def test_replay_use_mov_changes_ratings_vs_baseline():
+    """Smoke test: enabling MOV produces different finals than the no-MOV path."""
+    games = [
+        {
+            "date": "2025-05-01",
+            "team_a": "A",
+            "team_b": "B",
+            "winner_team": "A",
+            "event_id": "1",
+            "final_score_a": 100,
+            "final_score_b": 70,
+        },
+        {
+            "date": "2025-05-02",
+            "team_a": "B",
+            "team_b": "A",
+            "winner_team": "B",
+            "event_id": "2",
+            "final_score_a": 95,
+            "final_score_b": 90,
+        },
+    ]
+    no_mov = replay_games(games, home_advantage=0.0, use_mov=False)
+    with_mov = replay_games(games, home_advantage=0.0, use_mov=True)
+    assert no_mov.final_ratings != with_mov.final_ratings
+
+
+def test_replay_use_mov_handles_missing_scores():
+    """Games without final scores fall back to multiplier=1.0 instead of crashing."""
+    games = [
+        {
+            "date": "2025-05-01",
+            "team_a": "A",
+            "team_b": "B",
+            "winner_team": "A",
+            "event_id": "1",
+        },
+    ]
+    result = replay_games(games, home_advantage=0.0, use_mov=True)
+    # Same as the no-MOV path since the multiplier defaults to 1.0.
+    baseline = replay_games(games, home_advantage=0.0, use_mov=False)
+    assert result.final_ratings == baseline.final_ratings
 
 
 def test_equal_ratings_give_50_50():
@@ -138,9 +218,11 @@ def test_calibrated_defaults_pinned():
     """Pin the calibrated constants so a change is caught deliberately.
 
     Calibrated against 2024 (warm-up) + 2025 (311-game eval) WNBA results
-    via scripts/validate_elo.py. Grid-search optimum was (K=28, H=50).
+    via scripts/validate_elo.py with MOV enabled. Grid-search optimum was
+    (K=16, H=50). Without MOV the optimum was K~34 — MOV roughly halves
+    the K needed because the multiplier carries part of the responsiveness.
     """
-    assert DEFAULT_K == 28.0
+    assert DEFAULT_K == 16.0
     assert DEFAULT_HOME_ADVANTAGE == 50.0
 
 
