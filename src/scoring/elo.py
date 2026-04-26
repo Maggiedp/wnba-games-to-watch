@@ -12,15 +12,17 @@ current Monte Carlo assumption).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date
 
 INITIAL_RATING = 1500.0
 # Calibrated against 2024 (warm-up) + 2025 (eval, 311 games) WNBA results.
-# Optimal (K, H) = (28, 50) by log-loss grid search. The loss surface is flat
-# within ±5 of each, so the exact values aren't load-bearing — re-validate
-# after the 2026 season via scripts/validate_elo.py.
-DEFAULT_K = 28.0
+# Optimal (K, H) = (16, 50) by log-loss grid search with MOV enabled.
+# K is roughly half the no-MOV optimum (~K=34) because the MOV multiplier
+# now carries part of the per-game responsiveness K used to provide alone.
+# Re-validate after the 2026 season via scripts/validate_elo.py.
+DEFAULT_K = 16.0
 DEFAULT_HOME_ADVANTAGE = 50.0
 # Pull each team's rating this fraction of the way toward INITIAL_RATING at
 # the start of every new season. 1/3 follows FiveThirtyEight's NBA practice
@@ -49,6 +51,24 @@ def _regress_toward_mean(ratings: dict[str, float], factor: float) -> None:
         ratings[team] = INITIAL_RATING + (rating - INITIAL_RATING) * keep
 
 
+def _mov_multiplier(mov: int, winner_elo_advantage: float) -> float:
+    """FiveThirtyEight-style margin-of-victory multiplier.
+
+    `mov` is the absolute final-score margin (winner − loser, > 0).
+    `winner_elo_advantage` is the winner's pre-game rating minus the loser's
+    rating, *including* the home-court adjustment for the actual home team.
+    Negative on upsets, which inflates the multiplier slightly.
+
+    The autocorrelation correction (the 2.2 / (… + 2.2) factor) damps the
+    multiplier when a heavy favorite wins big, so dominant teams don't run
+    away with the rating system. Returns 1.0 for non-positive MOV (treat as
+    "no information").
+    """
+    if mov <= 0:
+        return 1.0
+    return math.log(mov + 1) * (2.2 / (winner_elo_advantage * 0.001 + 2.2))
+
+
 def expected_win_prob(
     rating_a: float,
     rating_b: float,
@@ -68,16 +88,29 @@ def update_ratings(
     team_a_won: bool,
     k: float = DEFAULT_K,
     home_advantage: float = 0.0,
+    mov: int | None = None,
 ) -> tuple[float, float]:
     """Return new (rating_a, rating_b) after one game.
 
     Zero-sum: whatever A gains, B loses. The update uses the home-adjusted
     expected value, so a home favorite gets less credit for winning than a
     road favorite would.
+
+    When `mov` (absolute final-score margin) is provided, the K-factor is
+    scaled by `_mov_multiplier` so blowouts move ratings more than narrow
+    wins, with autocorrelation damping for heavy favorites.
     """
     expected_a = expected_win_prob(rating_a, rating_b, home_advantage)
     actual_a = 1.0 if team_a_won else 0.0
-    delta = k * (actual_a - expected_a)
+    multiplier = 1.0
+    if mov is not None:
+        winner_adv = (
+            (rating_a + home_advantage) - rating_b
+            if team_a_won
+            else rating_b - (rating_a + home_advantage)
+        )
+        multiplier = _mov_multiplier(mov, winner_adv)
+    delta = k * multiplier * (actual_a - expected_a)
     return rating_a + delta, rating_b - delta
 
 
@@ -97,6 +130,7 @@ def replay_games(
     k: float = DEFAULT_K,
     home_advantage: float = 0.0,
     season_regression: float = DEFAULT_SEASON_REGRESSION,
+    use_mov: bool = True,
 ) -> EloReplay:
     """Replay games chronologically and return final ratings + per-game history.
 
@@ -111,6 +145,10 @@ def replay_games(
     ISO date string). Pass 0 to disable. Teams that first appear mid-season
     aren't affected by prior boundaries — they enter at INITIAL_RATING when
     their first game is processed.
+
+    When `use_mov=True`, each game's `final_score_a`/`final_score_b` are read
+    and passed to `update_ratings` so blowouts move ratings more than narrow
+    wins. Games missing scores still update at multiplier=1.0.
     """
     ratings: dict[str, float] = dict(initial_ratings or {})
     history: list[dict] = []
@@ -136,8 +174,14 @@ def replay_games(
         rb = ratings.setdefault(tb, INITIAL_RATING)
         team_a_won = winner == ta
 
+        mov: int | None = None
+        if use_mov:
+            sa, sb = g.get("final_score_a"), g.get("final_score_b")
+            if sa is not None and sb is not None:
+                mov = abs(int(sa) - int(sb))
+
         new_ra, new_rb = update_ratings(
-            ra, rb, team_a_won, k=k, home_advantage=home_advantage
+            ra, rb, team_a_won, k=k, home_advantage=home_advantage, mov=mov
         )
         ratings[ta] = new_ra
         ratings[tb] = new_rb

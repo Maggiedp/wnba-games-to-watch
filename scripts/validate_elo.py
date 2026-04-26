@@ -61,6 +61,7 @@ def _replay_and_score(
     home_advantage: float,
     eval_start: str,
     season_regression: float = DEFAULT_SEASON_REGRESSION,
+    use_mov: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
     """Replay games, return (pre-game win probs, outcomes, final ratings)."""
     replay = replay_games(
@@ -68,6 +69,7 @@ def _replay_and_score(
         k=k,
         home_advantage=home_advantage,
         season_regression=season_regression,
+        use_mov=use_mov,
     )
     probs: list[float] = []
     outcomes: list[float] = []
@@ -85,6 +87,7 @@ def _grid_search_k_h(
     eval_start: str,
     k_candidates: np.ndarray,
     h_candidates: np.ndarray,
+    use_mov: bool = False,
 ) -> tuple[
     tuple[float, float, float, float], dict[tuple[float, float], tuple[float, float]]
 ]:
@@ -97,7 +100,7 @@ def _grid_search_k_h(
     for k in k_candidates:
         for h in h_candidates:
             probs, outcomes, _ = _replay_and_score(
-                games, float(k), float(h), eval_start
+                games, float(k), float(h), eval_start, use_mov=use_mov
             )
             if len(probs) == 0:
                 continue
@@ -174,7 +177,16 @@ def main() -> None:
         outcomes,
     )
 
-    print("\nRunning joint K×H grid search...")
+    probs_mov, _, _ = _replay_and_score(
+        games, DEFAULT_K, DEFAULT_HOME_ADVANTAGE, _EVAL_START, use_mov=True
+    )
+    _print_metrics(
+        f"Defaults + MOV (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}, mov=on)",
+        probs_mov,
+        outcomes,
+    )
+
+    print("\nRunning joint K×H grid search (no MOV)...")
     k_candidates = np.arange(10.0, 51.0, 2.0)
     h_candidates = np.arange(0.0, 151.0, 5.0)
     (best_k, best_h, best_ll, best_br), grid = _grid_search_k_h(
@@ -188,6 +200,25 @@ def main() -> None:
     probs_best, _, ratings_best = _replay_and_score(games, best_k, best_h, _EVAL_START)
     _print_metrics(f"Elo (K={best_k:.0f}, H={best_h:.0f})", probs_best, outcomes)
     _print_calibration(f"K={best_k:.0f}, H={best_h:.0f}", probs_best, outcomes)
+
+    print("\nRunning joint K×H grid search (MOV on)...")
+    (mov_k, mov_h, mov_ll, mov_br), _ = _grid_search_k_h(
+        games, _EVAL_START, k_candidates, h_candidates, use_mov=True
+    )
+    print(
+        f"  Best with MOV: K={mov_k:.0f}, H={mov_h:.0f} → "
+        f"LogLoss={mov_ll:.4f}, Brier={mov_br:.4f}"
+    )
+    probs_mov_best, _, _ = _replay_and_score(
+        games, mov_k, mov_h, _EVAL_START, use_mov=True
+    )
+    _print_metrics(f"MOV (K={mov_k:.0f}, H={mov_h:.0f})", probs_mov_best, outcomes)
+    _print_calibration(f"MOV K={mov_k:.0f}, H={mov_h:.0f}", probs_mov_best, outcomes)
+    print(
+        f"\n  MOV vs no-MOV at their respective optima: "
+        f"ΔLogLoss={mov_ll - best_ll:+.4f}, ΔBrier={mov_br - best_br:+.4f}  "
+        f"(negative = MOV better)"
+    )
 
     _print_calibration(f"K={DEFAULT_K}, H=0 (neutral)", probs_neutral, outcomes)
 
