@@ -121,7 +121,11 @@ def compute_importance_swing(
     For a game between team_a and team_b at game_index:
     1. Apply team_a win to standings, simulate remaining games → playoff probs
     2. Apply team_b win to standings, simulate remaining games → playoff probs
-    3. Return sum of absolute playoff-prob changes for the two teams across outcomes
+    3. Return sum of |P(playoffs | a wins) - P(playoffs | b wins)| across **all** teams.
+
+    Summing across every team (not just the two on the court) captures bubble
+    watchers — games whose outcome shifts the playoff fate of teams not playing
+    in them. Locked-in or locked-out teams contribute 0 naturally.
     """
     if game_index >= len(remaining_games):
         return 0.0
@@ -153,12 +157,15 @@ def compute_importance_swing(
         home_advantage=home_advantage,
     )
 
+    total_swing = sum(
+        abs(probs_a_win.get(name, 0.0) - probs_b_win.get(name, 0.0))
+        for name in current_standings
+    )
     swing_a = abs(probs_a_win.get(team_a, 0.0) - probs_b_win.get(team_a, 0.0))
     swing_b = abs(probs_b_win.get(team_b, 0.0) - probs_a_win.get(team_b, 0.0))
-
-    total_swing = swing_a + swing_b
     logger.debug(
         f"Game swing ({team_a} vs {team_b}): "
-        f"{team_a} swing={swing_a:.3f}, {team_b} swing={swing_b:.3f}, total={total_swing:.3f}"
+        f"{team_a}={swing_a:.3f}, {team_b}={swing_b:.3f}, "
+        f"all-team total={total_swing:.3f}"
     )
     return total_swing
