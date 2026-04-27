@@ -69,7 +69,37 @@ def test_importance_swing_is_meaningful():
     swing = compute_importance_swing(
         _bubble_standings(), _REMAINING, 0, num_simulations=2000
     )
-    assert swing > 0.10, f"Expected meaningful swing for bubble game, got {swing:.3f}"
+    # All-team summation in a 4-way-tied bubble approaches the theoretical max ~2.0.
+    assert swing > 1.0, f"Expected meaningful swing for bubble game, got {swing:.3f}"
+
+
+def test_importance_swing_captures_bubble_watchers():
+    """A game between a bubble team and a safely-locked-out team should still
+    score well above zero — even though only one of the playing teams has a
+    meaningful own-swing, the other bubble teams 'watching' shift in the
+    standings and contribute to the all-team total."""
+    standings = _bubble_standings()
+    # Team6 is on the 4-way bubble (18-17); Team12 is safely locked out (7-28).
+    # Team12's own swing is ~0; the only way this game scores high is if the
+    # all-team sum picks up Team7/8/9's playoff-odds shifts. Give the watchers
+    # several remaining games so their fate has variance in simulation.
+    games = [
+        ("Team6", "Team12"),  # target
+        ("Team7", "Team0"),
+        ("Team7", "Team5"),
+        ("Team8", "Team1"),
+        ("Team8", "Team4"),
+        ("Team9", "Team2"),
+        ("Team9", "Team3"),
+        ("Team6", "Team1"),
+        ("Team0", "Team1"),
+    ]
+
+    random.seed(42)
+    swing = compute_importance_swing(standings, games, 0, num_simulations=2000)
+    assert swing > 0.5, (
+        f"Bubble-vs-locked-out should pick up watcher swing, got {swing:.3f}"
+    )
 
 
 def test_importance_swing_direction():
