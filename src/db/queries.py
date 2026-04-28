@@ -76,6 +76,8 @@ def upsert_game(
             game.final_score_b = final_score_b
         if broadcaster:
             game.broadcaster = broadcaster
+        if time:
+            game.time = time
         session.commit()
         return game
 
