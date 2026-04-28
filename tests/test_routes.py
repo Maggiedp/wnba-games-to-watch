@@ -33,13 +33,7 @@ def team_ids(session):
 
 
 def test_format_games_response_includes_time_from_game_row(session, team_ids):
-    """Response should carry the `time` stored on the matching Game row.
-
-    DailyRanking rows have no `time` column — the field lives on Game. The
-    formatter has to look up the matching Game (by date + team pair) and
-    surface its time. Otherwise the API serves empty times even when ESPN
-    has them and `upsert_game` stored them correctly.
-    """
+    """Response time comes from the Game row (DailyRanking has no time column)."""
     a_id, b_id = team_ids
 
     upsert_game(
@@ -67,11 +61,7 @@ def test_format_games_response_includes_time_from_game_row(session, team_ids):
 
 
 def test_format_games_response_empty_time_when_no_game_row(session, team_ids):
-    """If somehow no Game row matches a ranking, time falls back to empty string.
-
-    This shouldn't happen in practice — daily_update upserts both — but the
-    formatter must not crash if the join misses.
-    """
+    """Falls back to empty string if no Game row matches the ranking."""
     a_id, b_id = team_ids
 
     ranking = upsert_daily_ranking(
