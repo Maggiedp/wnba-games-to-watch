@@ -1168,6 +1168,70 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
+            function renderGameCard(game, isTopPick) {{
+                const cls = game.overall_score >= 40 ? 'high' : game.overall_score >= 25 ? 'medium' : 'low';
+
+                const eyebrow = isTopPick
+                    ? '<div class="games-card-eyebrow">Top pick</div>'
+                    : '';
+
+                // Meta line: Date · Time · Broadcaster (broadcaster segment dropped if missing/TBD on mobile)
+                const dateStr = formatDate(game.date);
+                const timeStr = escapeHtml(game.time || 'TBD');
+                const hasBroadcaster = game.broadcaster && game.broadcaster !== 'TBD';
+                const broadcastSeg = hasBroadcaster ? ` &middot; ${{escapeHtml(game.broadcaster)}}` : '';
+                const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;
+
+                // Quality bar (always populated)
+                const qPct = Math.max(0, Math.min(100, game.quality_score));
+                const qBar = `
+                    <div class="mini-bar-row" role="img" aria-label="Quality ${{game.quality_score.toFixed(0)}} of 100">
+                        <span class="mini-bar-label">Quality</span>
+                        <span class="mini-bar-track" aria-hidden="true"><span class="mini-bar-fill quality" style="width: ${{qPct}}%"></span></span>
+                        <span class="mini-bar-num">${{game.quality_score.toFixed(0)}}</span>
+                    </div>
+                `;
+
+                // Importance bar (null = empty track + em dash, with accessible label and tooltip)
+                let iBar;
+                if (game.importance_score == null) {{
+                    iBar = `
+                        <div class="mini-bar-row" role="img" aria-label="Importance not simulated"
+                             title="Not simulated &mdash; games more than 30 days out aren't projected for playoff impact">
+                            <span class="mini-bar-label">Importance</span>
+                            <span class="mini-bar-track" aria-hidden="true"></span>
+                            <span class="mini-bar-num empty">&mdash;</span>
+                        </div>
+                    `;
+                }} else {{
+                    const iPct = Math.max(0, Math.min(100, game.importance_score));
+                    iBar = `
+                        <div class="mini-bar-row" role="img" aria-label="Importance ${{game.importance_score.toFixed(0)}} of 100">
+                            <span class="mini-bar-label">Importance</span>
+                            <span class="mini-bar-track" aria-hidden="true"><span class="mini-bar-fill importance" style="width: ${{iPct}}%"></span></span>
+                            <span class="mini-bar-num">${{game.importance_score.toFixed(0)}}</span>
+                        </div>
+                    `;
+                }}
+
+                return `
+                    <div class="games-card">
+                        <div class="games-card-score ${{cls}}">${{game.overall_score.toFixed(0)}}</div>
+                        <div class="games-card-stack">
+                            ${{eyebrow}}
+                            <div class="games-card-matchup">
+                                ${{renderTeam(game.team_a, game.team_a_logo)}}
+                                <span class="vs">vs</span>
+                                ${{renderTeam(game.team_b, game.team_b_logo)}}
+                            </div>
+                            <div class="games-card-meta">${{meta}}</div>
+                            ${{qBar}}
+                            ${{iBar}}
+                        </div>
+                    </div>
+                `;
+            }}
+
             function setSortBy(mode) {{
                 sortBy = mode;
                 document.getElementById('sort-date').setAttribute('aria-pressed', mode === 'date' ? 'true' : 'false');
