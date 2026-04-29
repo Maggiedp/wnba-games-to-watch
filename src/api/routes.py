@@ -293,6 +293,15 @@ _HOMEPAGE_HTML = f"""
                 height: 1.5px;
                 background: var(--orange);
             }}
+            .top-pick-badge {{
+                display: inline-block;
+                font-size: 0.62rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.18em;
+                color: var(--orange);
+                margin-bottom: 6px;
+            }}
             .featured, .skeleton-featured {{
                 background: var(--surface);
                 border-radius: 10px;
