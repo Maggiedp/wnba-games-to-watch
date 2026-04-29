@@ -714,7 +714,7 @@ _HOMEPAGE_HTML = f"""
                     <div class="pill-group" id="network-pills"></div>
                 </div>
                 <div class="filter-row">
-                    <span class="filter-label">Window</span>
+                    <span class="filter-label">Date</span>
                     <div class="pill-group" id="preset-pills">
                         <button class="pill preset-pill" data-preset="today" type="button" aria-pressed="false">Today</button>
                         <button class="pill preset-pill" data-preset="7" type="button" aria-pressed="false">Next 7 days</button>
