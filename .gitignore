@@ -40,3 +40,5 @@ env/
 .DS_Store
 logs/
 CLAUDE.md
+INTERVIEW_NOTES.md
+docs/
