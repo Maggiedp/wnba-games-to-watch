@@ -3,7 +3,7 @@
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from src.db.schema import DailyRanking
-from src.db.queries import get_teams_by_ids
+from src.db.queries import get_game_times, get_teams_by_ids
 import logging
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,9 @@ def format_games_response(
 
     team_ids = {r.team_a_id for r in rankings} | {r.team_b_id for r in rankings}
     teams = get_teams_by_ids(session, team_ids)
+    times = get_game_times(
+        session, [(r.date, r.team_a_id, r.team_b_id) for r in rankings]
+    )
 
     results = []
     for ranking in rankings:
@@ -55,7 +58,9 @@ def format_games_response(
         results.append(
             GameResponse(
                 date=ranking.date,
-                time="",
+                time=times.get(
+                    (ranking.date, ranking.team_a_id, ranking.team_b_id), ""
+                ),
                 team_a=team_a.name,
                 team_b=team_b.name,
                 team_a_abbr=team_a.abbreviation or "",
