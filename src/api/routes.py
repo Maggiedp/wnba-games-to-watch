@@ -497,6 +497,43 @@ _HOMEPAGE_HTML = f"""
                 letter-spacing: 0.01em;
             }}
 
+            /* ---------- Mini bars (mobile cards) ---------- */
+            .mini-bar-row {{
+                display: grid;
+                grid-template-columns: 80px 1fr 28px;
+                align-items: center;
+                gap: 8px;
+                font-size: 0.74rem;
+                margin-top: 6px;
+            }}
+            .mini-bar-label {{
+                color: var(--text-muted);
+                font-weight: 500;
+                letter-spacing: 0.02em;
+            }}
+            .mini-bar-track {{
+                height: 5px;
+                background: var(--line-soft);
+                border-radius: 999px;
+                overflow: hidden;
+            }}
+            .mini-bar-fill {{
+                display: block;
+                height: 100%;
+                border-radius: 999px;
+            }}
+            .mini-bar-fill.quality {{ background: linear-gradient(90deg, #ff6b00, #ff9540); }}
+            .mini-bar-fill.importance {{ background: linear-gradient(90deg, #2b3a52, #5a6573); }}
+            .mini-bar-num {{
+                font-family: var(--display);
+                font-weight: 600;
+                font-size: 0.85rem;
+                text-align: right;
+                font-feature-settings: 'tnum' on;
+                color: var(--text);
+            }}
+            .mini-bar-num.empty {{ color: var(--text-subtle); }}
+
             /* ---------- Loading skeleton ---------- */
             .skeleton-bar {{
                 background: linear-gradient(90deg, #ece8de 0%, #f5f1e6 50%, #ece8de 100%);
