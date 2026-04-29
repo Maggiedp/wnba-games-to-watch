@@ -702,6 +702,81 @@ _HOMEPAGE_HTML = f"""
             }}
             .header-link:focus-visible {{ outline-color: var(--orange); }}
 
+            /* ---------- Mobile cards ---------- */
+            .games-cards {{ display: none; }}  /* Hidden on desktop; flipped on inside the mobile media query */
+            .games-card {{
+                background: var(--surface);
+                border: 1px solid var(--line);
+                border-radius: 6px;
+                padding: 12px 12px;
+                margin-bottom: 10px;
+                display: grid;
+                grid-template-columns: 50px 1fr;
+                gap: 12px;
+                align-items: stretch;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            }}
+            .games-card-score {{
+                font-family: var(--display);
+                font-variation-settings: 'opsz' 96;
+                font-weight: 700;
+                font-size: 1.7rem;
+                line-height: 1;
+                letter-spacing: -0.025em;
+                font-feature-settings: 'tnum' on;
+                text-align: center;
+                align-self: center;
+            }}
+            .games-card-score.high {{ color: var(--orange); }}
+            .games-card-score.medium {{ color: var(--orange-deep); }}
+            .games-card-score.low {{ color: var(--text-subtle); }}
+            .games-card-stack {{
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                min-width: 0;  /* allow long team names to wrap inside the grid cell */
+            }}
+            .games-card-eyebrow {{
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 0.6rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.18em;
+                color: var(--orange);
+                margin-bottom: 4px;
+            }}
+            .games-card-eyebrow::before {{
+                content: '';
+                width: 14px;
+                height: 1.5px;
+                background: var(--orange);
+            }}
+            .games-card-matchup {{
+                font-family: var(--display);
+                font-weight: 600;
+                font-size: 0.95rem;
+                line-height: 1.2;
+                color: var(--navy);
+            }}
+            .games-card-matchup .team {{ display: inline-flex; align-items: center; gap: 5px; }}
+            .games-card-matchup .team-logo {{ width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; }}
+            .games-card-matchup .vs {{
+                color: var(--text-subtle);
+                font-style: italic;
+                font-weight: 500;
+                font-size: 0.85rem;
+                letter-spacing: 0;
+                text-transform: none;
+                padding: 0 4px;
+            }}
+            .games-card-meta {{
+                font-size: 0.72rem;
+                color: var(--text-muted);
+                margin-top: 2px;
+            }}
+
             /* ---------- Mobile ---------- */
             @media (max-width: 768px) {{
                 .header {{ padding: 22px 18px 24px; }}
@@ -726,6 +801,8 @@ _HOMEPAGE_HTML = f"""
                 .modal {{ padding: 28px 22px; }}
                 .modal h2 {{ font-size: 1.45rem; }}
                 .sort-wrap {{ margin-left: 0; }}
+                .games-table {{ display: none; }}
+                .games-cards {{ display: block; }}
             }}
 
             @media (prefers-reduced-motion: reduce) {{
