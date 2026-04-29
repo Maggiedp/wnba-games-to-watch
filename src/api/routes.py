@@ -929,7 +929,7 @@ _HOMEPAGE_HTML = f"""
                     return;
                 }}
 
-                let rest = featured ? games.filter(g => g !== featured) : games;
+                let rest = games;
                 if (sortBy === 'score') {{
                     rest.sort((a, b) => b.overall_score - a.overall_score);
                 }} else {{
