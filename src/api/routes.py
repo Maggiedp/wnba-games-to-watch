@@ -935,7 +935,7 @@ _HOMEPAGE_HTML = f"""
                 }} else {{
                     rest.sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''));
                 }}
-                renderGames(rest);
+                renderGames(rest, featured);
             }}
 
             function renderFeatured(game) {{
@@ -987,7 +987,7 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
-            function renderGames(games) {{
+            function renderGames(games, featured) {{
                 const container = document.getElementById('games-container');
                 if (games.length === 0) {{ container.innerHTML = ''; return; }}
                 container.innerHTML = `
@@ -1003,7 +1003,7 @@ _HOMEPAGE_HTML = f"""
                                 <th>Watch on</th>
                             </tr>
                         </thead>
-                        <tbody>${{games.map(renderGameRow).join('')}}</tbody>
+                        <tbody>${{games.map(g => renderGameRow(g, g === featured)).join('')}}</tbody>
                     </table>
                 `;
             }}
@@ -1029,16 +1029,18 @@ _HOMEPAGE_HTML = f"""
                 return `<span class="team">${{safeName}}</span>`;
             }}
 
-            function renderGameRow(game) {{
+            function renderGameRow(game, isTopPick) {{
                 const cls = game.overall_score >= 40 ? 'high' : game.overall_score >= 25 ? 'medium' : 'low';
                 const impTitle = game.importance_score == null ? 'Not simulated — games more than 30 days out aren\\'t projected for playoff impact' : '';
                 const impVal = game.importance_score == null ? '&mdash;' : game.importance_score.toFixed(0);
+                const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
                     <tr>
                         <td class="col-date">${{formatDate(game.date)}}</td>
                         <td class="col-time">${{escapeHtml(game.time || 'TBD')}}</td>
                         <td class="score-cell"><span class="score-num ${{cls}}">${{game.overall_score.toFixed(0)}}</span></td>
                         <td>
+                            ${{badge}}
                             <div class="matchup">
                                 ${{renderTeam(game.team_a, game.team_a_logo)}}
                                 <span class="vs">vs</span>
