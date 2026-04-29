@@ -1119,6 +1119,7 @@ _HOMEPAGE_HTML = f"""
                         </thead>
                         <tbody>${{games.map(g => renderGameRow(g, g === featured)).join('')}}</tbody>
                     </table>
+                    <div class="games-cards">${{games.map(g => renderGameCard(g, g === featured)).join('')}}</div>
                 `;
             }}
 
