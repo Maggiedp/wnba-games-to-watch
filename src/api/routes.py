@@ -464,9 +464,9 @@ _HOMEPAGE_HTML = f"""
                 letter-spacing: -0.025em;
                 font-feature-settings: 'tnum' on;
             }}
-            .score-num.high {{ color: var(--orange); }}
-            .score-num.medium {{ color: var(--orange-deep); }}
-            .score-num.low {{ color: var(--text-subtle); }}
+            .score-num.high, .games-card-score.high {{ color: var(--orange); }}
+            .score-num.medium, .games-card-score.medium {{ color: var(--orange-deep); }}
+            .score-num.low, .games-card-score.low {{ color: var(--text-subtle); }}
             .matchup {{
                 font-weight: 600;
                 color: var(--navy);
@@ -727,9 +727,6 @@ _HOMEPAGE_HTML = f"""
                 text-align: center;
                 align-self: center;
             }}
-            .games-card-score.high {{ color: var(--orange); }}
-            .games-card-score.medium {{ color: var(--orange-deep); }}
-            .games-card-score.low {{ color: var(--text-subtle); }}
             .games-card-stack {{
                 display: flex;
                 flex-direction: column;
