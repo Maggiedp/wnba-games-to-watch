@@ -464,9 +464,9 @@ _HOMEPAGE_HTML = f"""
                 letter-spacing: -0.025em;
                 font-feature-settings: 'tnum' on;
             }}
-            .score-num.high {{ color: var(--orange); }}
-            .score-num.medium {{ color: var(--orange-deep); }}
-            .score-num.low {{ color: var(--text-subtle); }}
+            .score-num.high, .games-card-score.high {{ color: var(--orange); }}
+            .score-num.medium, .games-card-score.medium {{ color: var(--orange-deep); }}
+            .score-num.low, .games-card-score.low {{ color: var(--text-subtle); }}
             .matchup {{
                 font-weight: 600;
                 color: var(--navy);
@@ -496,6 +496,43 @@ _HOMEPAGE_HTML = f"""
                 font-weight: 500;
                 letter-spacing: 0.01em;
             }}
+
+            /* ---------- Mini bars (mobile cards) ---------- */
+            .mini-bar-row {{
+                display: grid;
+                grid-template-columns: 80px 1fr 28px;
+                align-items: center;
+                gap: 8px;
+                font-size: 0.74rem;
+                margin-top: 6px;
+            }}
+            .mini-bar-label {{
+                color: var(--text-muted);
+                font-weight: 500;
+                letter-spacing: 0.02em;
+            }}
+            .mini-bar-track {{
+                height: 5px;
+                background: var(--line-soft);
+                border-radius: 999px;
+                overflow: hidden;
+            }}
+            .mini-bar-fill {{
+                display: block;
+                height: 100%;
+                border-radius: 999px;
+            }}
+            .mini-bar-fill.quality {{ background: linear-gradient(90deg, #ff6b00, #ff9540); }}
+            .mini-bar-fill.importance {{ background: linear-gradient(90deg, #2b3a52, #5a6573); }}
+            .mini-bar-num {{
+                font-family: var(--display);
+                font-weight: 600;
+                font-size: 0.85rem;
+                text-align: right;
+                font-feature-settings: 'tnum' on;
+                color: var(--text);
+            }}
+            .mini-bar-num.empty {{ color: var(--text-subtle); }}
 
             /* ---------- Loading skeleton ---------- */
             .skeleton-bar {{
@@ -665,6 +702,78 @@ _HOMEPAGE_HTML = f"""
             }}
             .header-link:focus-visible {{ outline-color: var(--orange); }}
 
+            /* ---------- Mobile cards ---------- */
+            .games-cards {{ display: none; }}  /* Hidden on desktop; flipped on inside the mobile media query */
+            .games-card {{
+                background: var(--surface);
+                border: 1px solid var(--line);
+                border-radius: 6px;
+                padding: 12px 12px;
+                margin-bottom: 10px;
+                display: grid;
+                grid-template-columns: 50px 1fr;
+                gap: 12px;
+                align-items: stretch;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            }}
+            .games-card-score {{
+                font-family: var(--display);
+                font-variation-settings: 'opsz' 96;
+                font-weight: 700;
+                font-size: 1.7rem;
+                line-height: 1;
+                letter-spacing: -0.025em;
+                font-feature-settings: 'tnum' on;
+                text-align: center;
+                align-self: center;
+            }}
+            .games-card-stack {{
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                min-width: 0;  /* allow long team names to wrap inside the grid cell */
+            }}
+            .games-card-eyebrow {{
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 0.6rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.18em;
+                color: var(--orange);
+                margin-bottom: 4px;
+            }}
+            .games-card-eyebrow::before {{
+                content: '';
+                width: 14px;
+                height: 1.5px;
+                background: var(--orange);
+            }}
+            .games-card-matchup {{
+                font-family: var(--display);
+                font-weight: 600;
+                font-size: 0.95rem;
+                line-height: 1.2;
+                color: var(--navy);
+            }}
+            .games-card-matchup .team {{ display: inline-flex; align-items: center; gap: 5px; }}
+            .games-card-matchup .team-logo {{ width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; }}
+            .games-card-matchup .vs {{
+                color: var(--text-subtle);
+                font-style: italic;
+                font-weight: 500;
+                font-size: 0.85rem;
+                letter-spacing: 0;
+                text-transform: none;
+                padding: 0 4px;
+            }}
+            .games-card-meta {{
+                font-size: 0.72rem;
+                color: var(--text-muted);
+                margin-top: 2px;
+            }}
+
             /* ---------- Mobile ---------- */
             @media (max-width: 768px) {{
                 .header {{ padding: 22px 18px 24px; }}
@@ -689,6 +798,8 @@ _HOMEPAGE_HTML = f"""
                 .modal {{ padding: 28px 22px; }}
                 .modal h2 {{ font-size: 1.45rem; }}
                 .sort-wrap {{ margin-left: 0; }}
+                .games-table {{ display: none; }}
+                .games-cards {{ display: block; }}
             }}
 
             @media (prefers-reduced-motion: reduce) {{
@@ -1005,6 +1116,7 @@ _HOMEPAGE_HTML = f"""
                         </thead>
                         <tbody>${{games.map(g => renderGameRow(g, g === featured)).join('')}}</tbody>
                     </table>
+                    <div class="games-cards">${{games.map(g => renderGameCard(g, g === featured)).join('')}}</div>
                 `;
             }}
 
@@ -1029,8 +1141,34 @@ _HOMEPAGE_HTML = f"""
                 return `<span class="team">${{safeName}}</span>`;
             }}
 
+            function getScoreClass(score) {{
+                return score >= 40 ? 'high' : score >= 25 ? 'medium' : 'low';
+            }}
+
+            function renderMiniBar(label, score, kind) {{
+                if (score == null) {{
+                    return `
+                        <div class="mini-bar-row" role="img" aria-label="${{label}} not simulated"
+                             title="Not simulated &mdash; games more than 30 days out aren't projected for playoff impact">
+                            <span class="mini-bar-label">${{label}}</span>
+                            <span class="mini-bar-track" aria-hidden="true"></span>
+                            <span class="mini-bar-num empty">&mdash;</span>
+                        </div>
+                    `;
+                }}
+                const pct = Math.max(0, Math.min(100, score));
+                const num = score.toFixed(0);
+                return `
+                    <div class="mini-bar-row" role="img" aria-label="${{label}} ${{num}} of 100">
+                        <span class="mini-bar-label">${{label}}</span>
+                        <span class="mini-bar-track" aria-hidden="true"><span class="mini-bar-fill ${{kind}}" style="width: ${{pct}}%"></span></span>
+                        <span class="mini-bar-num">${{num}}</span>
+                    </div>
+                `;
+            }}
+
             function renderGameRow(game, isTopPick) {{
-                const cls = game.overall_score >= 40 ? 'high' : game.overall_score >= 25 ? 'medium' : 'low';
+                const cls = getScoreClass(game.overall_score);
                 const impTitle = game.importance_score == null ? 'Not simulated — games more than 30 days out aren\\'t projected for playoff impact' : '';
                 const impVal = game.importance_score == null ? '&mdash;' : game.importance_score.toFixed(0);
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
@@ -1051,6 +1189,32 @@ _HOMEPAGE_HTML = f"""
                         <td class="hide-mobile col-num" title="${{impTitle}}">${{impVal}}</td>
                         <td><span class="broadcaster-badge">${{escapeHtml(game.broadcaster || 'TBD')}}</span></td>
                     </tr>
+                `;
+            }}
+
+            function renderGameCard(game, isTopPick) {{
+                const cls = getScoreClass(game.overall_score);
+                const eyebrow = isTopPick ? '<div class="games-card-eyebrow">Top pick</div>' : '';
+                const dateStr = formatDate(game.date);
+                const timeStr = escapeHtml(game.time || 'TBD');
+                const hasBroadcaster = game.broadcaster && game.broadcaster !== 'TBD';
+                const broadcastSeg = hasBroadcaster ? ` &middot; ${{escapeHtml(game.broadcaster)}}` : '';
+                const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;
+                return `
+                    <div class="games-card">
+                        <div class="games-card-score ${{cls}}">${{game.overall_score.toFixed(0)}}</div>
+                        <div class="games-card-stack">
+                            ${{eyebrow}}
+                            <div class="games-card-matchup">
+                                ${{renderTeam(game.team_a, game.team_a_logo)}}
+                                <span class="vs">vs</span>
+                                ${{renderTeam(game.team_b, game.team_b_logo)}}
+                            </div>
+                            <div class="games-card-meta">${{meta}}</div>
+                            ${{renderMiniBar('Quality', game.quality_score, 'quality')}}
+                            ${{renderMiniBar('Importance', game.importance_score, 'importance')}}
+                        </div>
+                    </div>
                 `;
             }}
 
