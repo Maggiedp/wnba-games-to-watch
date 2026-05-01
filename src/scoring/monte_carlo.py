@@ -11,6 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from src.scoring.elo import DEFAULT_HOME_ADVANTAGE, INITIAL_RATING, expected_win_prob
+from src.scoring.tiebreakers import resolve_seeding
 
 logger = logging.getLogger(__name__)
 
@@ -109,9 +110,9 @@ def run_monte_carlo_simulation(
                 _record_h2h(standings[team_b], team_a, won=True)
                 _record_h2h(standings[team_a], team_b, won=False)
 
-        sorted_teams = sorted(standings.values(), key=lambda t: t.wins, reverse=True)
-        for team in sorted_teams[:PLAYOFF_TEAMS]:
-            playoff_counts[team.name] += 1
+        seeded = resolve_seeding(standings)
+        for team_name in seeded[:PLAYOFF_TEAMS]:
+            playoff_counts[team_name] += 1
 
     playoff_probs = {
         name: count / num_simulations for name, count in playoff_counts.items()
