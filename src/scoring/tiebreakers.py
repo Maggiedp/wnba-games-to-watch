@@ -87,3 +87,99 @@ def conference_playoff_winpct(
         total = wins + losses
         result[name] = wins / total if total > 0 else 0.5
     return result
+
+
+from collections import defaultdict  # noqa: E402
+
+from src.constants import assert_all_teams_have_conferences  # noqa: E402
+
+PLAYOFF_TEAMS = 8
+_MAX_FIXED_POINT_ITERATIONS = 3
+
+
+def resolve_seeding(
+    standings: dict[str, "TeamStanding"],
+) -> list[str]:
+    """Return team names in seeded order (1st place first), applying the full
+    WNBA tiebreaker chain.
+
+    Algorithm:
+        1. Provisional sort: wins desc, then H2H within each tied group.
+        2. Provisional top 8 = first 8 teams from provisional sort.
+        3. Final sort: full chain (wins → H2H → own-conf → other-conf → elo)
+           using the provisional set for conference-record tiebreakers.
+        4. If new top 8 != provisional top 8, repeat from step 2 with new set.
+           Cap at 3 iterations.
+    """
+    assert_all_teams_have_conferences(standings)
+
+    provisional = _sort_with_keys(
+        list(standings.keys()),
+        standings,
+        provisional_playoffs=set(),  # not used for provisional sort
+        include_conference_keys=False,
+    )
+    provisional_playoffs = set(provisional[:PLAYOFF_TEAMS])
+
+    seeded = provisional
+    for _ in range(_MAX_FIXED_POINT_ITERATIONS):
+        seeded = _sort_with_keys(
+            list(standings.keys()),
+            standings,
+            provisional_playoffs=provisional_playoffs,
+            include_conference_keys=True,
+        )
+        new_playoffs = set(seeded[:PLAYOFF_TEAMS])
+        if new_playoffs == provisional_playoffs:
+            return seeded
+        provisional_playoffs = new_playoffs
+
+    logger.warning(
+        "Tiebreaker resolution did not converge in %d iterations",
+        _MAX_FIXED_POINT_ITERATIONS,
+    )
+    return seeded
+
+
+def _sort_with_keys(
+    teams: list[str],
+    standings: dict[str, "TeamStanding"],
+    provisional_playoffs: set[str],
+    include_conference_keys: bool,
+) -> list[str]:
+    """Sort teams by the chain. Group by wins, sort within tied groups by
+    successive tiebreakers, concatenate."""
+    by_wins: dict[int, list[str]] = defaultdict(list)
+    for name in teams:
+        by_wins[standings[name].wins].append(name)
+
+    final_order: list[str] = []
+    for wins in sorted(by_wins.keys(), reverse=True):
+        group = by_wins[wins]
+        if len(group) == 1:
+            final_order.extend(group)
+            continue
+        h2h = head_to_head_winpct(group, standings)
+        if include_conference_keys:
+            own_conf = conference_playoff_winpct(
+                group, standings, provisional_playoffs, same_conference=True
+            )
+            other_conf = conference_playoff_winpct(
+                group, standings, provisional_playoffs, same_conference=False
+            )
+        else:
+            own_conf = {n: 0.5 for n in group}
+            other_conf = {n: 0.5 for n in group}
+
+        sorted_group = sorted(
+            group,
+            key=lambda n: (
+                -h2h[n],
+                -own_conf[n],
+                -other_conf[n],
+                -standings[n].elo,
+            ),
+        )
+        final_order.extend(sorted_group)
+
+    return final_order
