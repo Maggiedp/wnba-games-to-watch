@@ -14,14 +14,18 @@ Chain order (matches official WNBA rules):
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
-from src.constants import TEAM_CONFERENCES
+from src.constants import assert_all_teams_have_conferences, TEAM_CONFERENCES
 
 if TYPE_CHECKING:
     from src.scoring.monte_carlo import TeamStanding
 
 logger = logging.getLogger(__name__)
+
+PLAYOFF_TEAMS = 8
+_MAX_FIXED_POINT_ITERATIONS = 3
 
 
 def head_to_head_winpct(
@@ -89,14 +93,6 @@ def conference_playoff_winpct(
     return result
 
 
-from collections import defaultdict  # noqa: E402
-
-from src.constants import assert_all_teams_have_conferences  # noqa: E402
-
-PLAYOFF_TEAMS = 8
-_MAX_FIXED_POINT_ITERATIONS = 3
-
-
 def resolve_seeding(
     standings: dict[str, "TeamStanding"],
 ) -> list[str]:
@@ -113,7 +109,7 @@ def resolve_seeding(
     """
     assert_all_teams_have_conferences(standings)
 
-    provisional = _sort_with_keys(
+    provisional = _sort_with_tiebreaker_chain(
         list(standings.keys()),
         standings,
         provisional_playoffs=set(),  # not used for provisional sort
@@ -123,7 +119,7 @@ def resolve_seeding(
 
     seeded = provisional
     for _ in range(_MAX_FIXED_POINT_ITERATIONS):
-        seeded = _sort_with_keys(
+        seeded = _sort_with_tiebreaker_chain(
             list(standings.keys()),
             standings,
             provisional_playoffs=provisional_playoffs,
@@ -141,7 +137,7 @@ def resolve_seeding(
     return seeded
 
 
-def _sort_with_keys(
+def _sort_with_tiebreaker_chain(
     teams: list[str],
     standings: dict[str, "TeamStanding"],
     provisional_playoffs: set[str],
