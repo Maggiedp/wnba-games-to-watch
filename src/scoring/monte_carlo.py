@@ -8,7 +8,7 @@ in the standings dict as a sibling field used only by quality scoring.
 import logging
 import random
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.scoring.elo import DEFAULT_HOME_ADVANTAGE, INITIAL_RATING, expected_win_prob
 
@@ -26,6 +26,9 @@ class TeamStanding:
     wins: int = 0
     losses: int = 0
     elo: float = INITIAL_RATING
+    # Per-opponent record: opponent_name -> [wins_vs_them, losses_vs_them].
+    # Mutable list (not tuple) so we can update in place during simulation.
+    h2h: dict[str, list[int]] = field(default_factory=dict)
 
     @property
     def win_pct(self) -> float:
@@ -46,6 +49,12 @@ def simulate_game(
     return random.random() < expected_win_prob(
         elo_a, elo_b, home_advantage=home_advantage
     )
+
+
+def _record_h2h(team: "TeamStanding", opponent: str, won: bool) -> None:
+    """Increment team's H2H record vs opponent, creating the entry if missing."""
+    rec = team.h2h.setdefault(opponent, [0, 0])
+    rec[0 if won else 1] += 1
 
 
 def run_monte_carlo_simulation(
@@ -76,6 +85,7 @@ def run_monte_carlo_simulation(
                 wins=data["wins"],
                 losses=data["losses"],
                 elo=data.get("elo", INITIAL_RATING),
+                h2h={opp: list(rec) for opp, rec in data.get("h2h", {}).items()},
             )
             for name, data in current_standings.items()
         }
@@ -91,9 +101,13 @@ def run_monte_carlo_simulation(
             if simulate_game(elo_a, elo_b, home_advantage=home_advantage):
                 standings[team_a].wins += 1
                 standings[team_b].losses += 1
+                _record_h2h(standings[team_a], team_b, won=True)
+                _record_h2h(standings[team_b], team_a, won=False)
             else:
                 standings[team_b].wins += 1
                 standings[team_a].losses += 1
+                _record_h2h(standings[team_b], team_a, won=True)
+                _record_h2h(standings[team_a], team_b, won=False)
 
         sorted_teams = sorted(standings.values(), key=lambda t: t.wins, reverse=True)
         for team in sorted_teams[:PLAYOFF_TEAMS]:
