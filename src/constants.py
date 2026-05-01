@@ -58,3 +58,37 @@ BROADCASTER_NORMALIZE: dict[str, str] = {
     "NBA TV": Broadcasters.NBA_TV,
     "NBATV": Broadcasters.NBA_TV,
 }
+
+
+# WNBA conference assignments. Names match ESPN displayName (verified against
+# `team_a` / `team_b` strings stored on Game rows). Update if the league
+# realigns or expands.
+TEAM_CONFERENCES: dict[str, str] = {
+    "Atlanta Dream": "East",
+    "Chicago Sky": "East",
+    "Connecticut Sun": "East",
+    "Indiana Fever": "East",
+    "New York Liberty": "East",
+    "Washington Mystics": "East",
+    "Dallas Wings": "West",
+    "Golden State Valkyries": "West",
+    "Las Vegas Aces": "West",
+    "Los Angeles Sparks": "West",
+    "Minnesota Lynx": "West",
+    "Phoenix Mercury": "West",
+    "Seattle Storm": "West",
+}
+
+
+def assert_all_teams_have_conferences(standings: dict) -> None:
+    """Fail fast if a team in standings is missing from TEAM_CONFERENCES.
+
+    A silent KeyError deep in the tiebreaker chain would be hard to debug.
+    Call this once at the top of any function that runs tiebreakers.
+    """
+    missing = [name for name in standings if name not in TEAM_CONFERENCES]
+    if missing:
+        raise KeyError(
+            f"Teams missing from TEAM_CONFERENCES: {missing}. "
+            f"Add them to src/constants.py."
+        )
