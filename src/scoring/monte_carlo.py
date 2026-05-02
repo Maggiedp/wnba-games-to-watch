@@ -10,6 +10,7 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+from src.constants import assert_all_teams_have_conferences
 from src.scoring.elo import DEFAULT_HOME_ADVANTAGE, INITIAL_RATING, expected_win_prob
 from src.scoring.tiebreakers import resolve_seeding
 
@@ -77,6 +78,7 @@ def run_monte_carlo_simulation(
     Returns:
         Dict mapping team_name -> playoff_probability (0.0 to 1.0).
     """
+    assert_all_teams_have_conferences(current_standings)
     playoff_counts: dict[str, int] = defaultdict(int)
 
     for _ in range(num_simulations):
