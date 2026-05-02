@@ -122,3 +122,57 @@ def test_run_monte_carlo_tracks_h2h_during_simulation():
         f"Sun swept Liberty 3-0; Sun should win H2H tiebreaker, "
         f"got Sun={probs['Connecticut Sun']:.2f}, Liberty={probs['New York Liberty']:.2f}"
     )
+
+
+def test_compute_standings_populates_h2h(monkeypatch):
+    """Smoke test: standings dict produced by compute_standings has h2h field
+    that's compatible with run_monte_carlo_simulation."""
+    from unittest.mock import MagicMock
+    from scripts.daily_update import compute_standings
+
+    # Configure mocks to return string attributes instead of generating new mocks
+    team_a = MagicMock()
+    team_a.id = 1
+    team_a.name = "New York Liberty"
+    team_a.bpi_rating = 5.0
+
+    team_b = MagicMock()
+    team_b.id = 2
+    team_b.name = "Las Vegas Aces"
+    team_b.bpi_rating = 4.0
+
+    game_1 = MagicMock()
+    game_1.team_a_id = 1
+    game_1.team_b_id = 2
+    game_1.winner_id = 1
+
+    game_2 = MagicMock()
+    game_2.team_a_id = 2
+    game_2.team_b_id = 1
+    game_2.winner_id = 2
+
+    game_3 = MagicMock()
+    game_3.team_a_id = 1
+    game_3.team_b_id = 2
+    game_3.winner_id = 1
+
+    # Patch at the module level where functions are imported
+    monkeypatch.setattr(
+        "scripts.daily_update.get_all_teams", lambda s: [team_a, team_b]
+    )
+    monkeypatch.setattr(
+        "scripts.daily_update.get_completed_games",
+        lambda s, season_year=2026: [game_1, game_2, game_3],
+    )
+    monkeypatch.setattr(
+        "scripts.daily_update.get_team_by_id",
+        lambda s, tid: {1: team_a, 2: team_b}[tid],
+    )
+
+    standings = compute_standings(session=None, elo_ratings={})
+
+    # Liberty 2-1 vs Aces.
+    assert standings["New York Liberty"]["h2h"]["Las Vegas Aces"] == [2, 1]
+    assert standings["Las Vegas Aces"]["h2h"]["New York Liberty"] == [1, 2]
+    assert standings["New York Liberty"]["wins"] == 2
+    assert standings["Las Vegas Aces"]["wins"] == 1

@@ -171,6 +171,7 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
             "losses": 0,
             "bpi": t.bpi_rating,
             "elo": elo_ratings.get(t.name, INITIAL_RATING),
+            "h2h": {},
         }
         for t in all_teams
     }
@@ -180,12 +181,18 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
         team_b = get_team_by_id(session, game.team_b_id)
         if not team_a or not team_b:
             continue
+        a_h2h = standings[team_a.name]["h2h"].setdefault(team_b.name, [0, 0])
+        b_h2h = standings[team_b.name]["h2h"].setdefault(team_a.name, [0, 0])
         if game.winner_id == team_a.id:
             standings[team_a.name]["wins"] += 1
             standings[team_b.name]["losses"] += 1
+            a_h2h[0] += 1
+            b_h2h[1] += 1
         else:
             standings[team_b.name]["wins"] += 1
             standings[team_a.name]["losses"] += 1
+            b_h2h[0] += 1
+            a_h2h[1] += 1
     logger.info(f"Computed standings for {len(standings)} teams")
     return standings
 
