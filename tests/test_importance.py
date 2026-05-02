@@ -188,3 +188,34 @@ def test_importance_score_bubble_beats_safe():
     bubble_score = compute_importance_score(standings, _REMAINING, 0)  # _T[6] vs _T[7]
     safe_score = compute_importance_score(standings, _REMAINING, 2)  # _T[0] vs _T[1]
     assert bubble_score > safe_score
+
+
+def test_importance_swing_higher_for_tiebreaker_decisive_game():
+    """A late-season game between two teams who will end up tied — and where
+    the result determines the H2H tiebreaker — should score MORE importance
+    than when the same matchup has no tiebreaker stakes.
+
+    Setup: _T[6] (18-17) and _T[7] (18-17) are tied. They've split 1-1 already.
+    A final game between them (one other remaining game for variance) decides:
+        - Wins (one moves to 19-17, the other stays 18-17)
+        - H2H tiebreaker if anyone else ends up tied at 19 wins
+
+    Adds a remaining game for _T[5] (19-16) so its fate has variance — sometimes
+    _T[5] ends at 19-17, creating a three-way tie at 19 wins where H2H decides.
+    """
+    standings = _bubble_standings()
+    # Add prior H2H so the upcoming game is the tiebreaker decider.
+    standings[_T[6]] = dict(standings[_T[6]])
+    standings[_T[7]] = dict(standings[_T[7]])
+    standings[_T[6]]["h2h"] = {_T[7]: [1, 1]}
+    standings[_T[7]]["h2h"] = {_T[6]: [1, 1]}
+
+    games = [
+        (_T[6], _T[7]),  # target — decides H2H
+        (_T[5], _T[8]),  # so _T[5]'s fate has variance
+    ]
+    random.seed(42)
+    swing = compute_importance_swing(standings, games, 0, num_simulations=2000)
+
+    # With tiebreakers in play, this game should score meaningfully high.
+    assert swing > 0.5, f"Tiebreaker-decisive game should score high, got {swing:.3f}"
