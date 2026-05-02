@@ -80,6 +80,10 @@ TEAM_CONFERENCES: dict[str, str] = {
 }
 
 
+# Companion lookup so callers don't hardcode the conference XOR.
+OTHER_CONFERENCE: dict[str, str] = {"East": "West", "West": "East"}
+
+
 def assert_all_teams_have_conferences(standings: dict) -> None:
     """Fail fast if a team in standings is missing from TEAM_CONFERENCES.
 

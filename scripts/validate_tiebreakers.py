@@ -17,9 +17,10 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+from src.constants import assert_all_teams_have_conferences
 from src.data.espn_api import fetch_games_for_range
 from src.scoring.monte_carlo import TeamStanding
-from src.scoring.tiebreakers import resolve_seeding
+from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -70,18 +71,17 @@ def _build_standings(year: int) -> dict[str, TeamStanding]:
         loser = b if winner == a else a
         teams[winner].wins += 1
         teams[loser].losses += 1
-        wa = teams[winner].h2h.setdefault(loser, [0, 0])
-        wa[0] += 1
-        la = teams[loser].h2h.setdefault(winner, [0, 0])
-        la[1] += 1
+        increment_h2h(teams[winner].h2h, loser, won=True)
+        increment_h2h(teams[loser].h2h, winner, won=False)
 
     return teams
 
 
 def validate(year: int, official_top_8: list[str]) -> None:
     standings = _build_standings(year)
+    assert_all_teams_have_conferences(standings)
     seeded = resolve_seeding(standings)
-    our_top_8 = seeded[:8]
+    our_top_8 = seeded[:PLAYOFF_TEAMS]
 
     logger.info(f"[{year}] Our top 8: {our_top_8}")
 

@@ -17,7 +17,7 @@ import logging
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
-from src.constants import assert_all_teams_have_conferences, TEAM_CONFERENCES
+from src.constants import OTHER_CONFERENCE, TEAM_CONFERENCES
 
 if TYPE_CHECKING:
     from src.scoring.monte_carlo import TeamStanding
@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 
 PLAYOFF_TEAMS = 8
 _MAX_FIXED_POINT_ITERATIONS = 3
+
+
+def increment_h2h(h2h: dict[str, list[int]], opponent: str, won: bool) -> None:
+    """Mutate `h2h` to record a game vs `opponent`. Public so daily_update,
+    monte_carlo simulation, and the validation script can share the convention
+    that index 0 = wins, index 1 = losses."""
+    rec = h2h.setdefault(opponent, [0, 0])
+    rec[0 if won else 1] += 1
 
 
 def head_to_head_winpct(
@@ -72,9 +80,7 @@ def conference_playoff_winpct(
     for name in tied_teams:
         team = standings[name]
         own_conf = TEAM_CONFERENCES[name]
-        target_conf = (
-            own_conf if same_conference else ("West" if own_conf == "East" else "East")
-        )
+        target_conf = own_conf if same_conference else OTHER_CONFERENCE[own_conf]
 
         wins = 0
         losses = 0
@@ -106,25 +112,33 @@ def resolve_seeding(
            using the provisional set for conference-record tiebreakers.
         4. If new top 8 != provisional top 8, repeat from step 2 with new set.
            Cap at 3 iterations.
-    """
-    assert_all_teams_have_conferences(standings)
 
-    provisional = _sort_with_tiebreaker_chain(
-        list(standings.keys()),
-        standings,
-        provisional_playoffs=set(),  # not used for provisional sort
-        include_conference_keys=False,
+    Caller is responsible for validating that every team has a known
+    conference (see src.constants.assert_all_teams_have_conferences) — running
+    that check inside this function would burn cycles in the Monte Carlo loop.
+    """
+    teams = list(standings.keys())
+
+    # Group by wins. Win counts don't change inside this function, so the
+    # grouping (and per-group H2H) can be computed once and reused.
+    by_wins: dict[int, list[str]] = defaultdict(list)
+    for name in teams:
+        by_wins[standings[name].wins].append(name)
+    h2h_per_group: dict[int, dict[str, float]] = {
+        wins: head_to_head_winpct(group, standings)
+        for wins, group in by_wins.items()
+        if len(group) > 1
+    }
+
+    # Provisional sort: wins + H2H only, no recursive conference dependency.
+    provisional = _sort_groups(
+        by_wins, standings, h2h_per_group, provisional_playoffs=None
     )
     provisional_playoffs = set(provisional[:PLAYOFF_TEAMS])
 
     seeded = provisional
     for _ in range(_MAX_FIXED_POINT_ITERATIONS):
-        seeded = _sort_with_tiebreaker_chain(
-            list(standings.keys()),
-            standings,
-            provisional_playoffs=provisional_playoffs,
-            include_conference_keys=True,
-        )
+        seeded = _sort_groups(by_wins, standings, h2h_per_group, provisional_playoffs)
         new_playoffs = set(seeded[:PLAYOFF_TEAMS])
         if new_playoffs == provisional_playoffs:
             return seeded
@@ -137,35 +151,33 @@ def resolve_seeding(
     return seeded
 
 
-def _sort_with_tiebreaker_chain(
-    teams: list[str],
+def _sort_groups(
+    by_wins: dict[int, list[str]],
     standings: dict[str, "TeamStanding"],
-    provisional_playoffs: set[str],
-    include_conference_keys: bool,
+    h2h_per_group: dict[int, dict[str, float]],
+    provisional_playoffs: set[str] | None,
 ) -> list[str]:
-    """Sort teams by the chain. Group by wins, sort within tied groups by
-    successive tiebreakers, concatenate."""
-    by_wins: dict[int, list[str]] = defaultdict(list)
-    for name in teams:
-        by_wins[standings[name].wins].append(name)
-
+    """Sort each win-bucket by tiebreaker chain. `provisional_playoffs=None`
+    short-circuits conference tiebreakers — used for the initial provisional
+    sort, where conference record can't yet be computed."""
     final_order: list[str] = []
     for wins in sorted(by_wins.keys(), reverse=True):
         group = by_wins[wins]
         if len(group) == 1:
             final_order.extend(group)
             continue
-        h2h = head_to_head_winpct(group, standings)
-        if include_conference_keys:
+
+        h2h = h2h_per_group[wins]
+        if provisional_playoffs is None:
+            own_conf = {n: 0.5 for n in group}
+            other_conf = {n: 0.5 for n in group}
+        else:
             own_conf = conference_playoff_winpct(
                 group, standings, provisional_playoffs, same_conference=True
             )
             other_conf = conference_playoff_winpct(
                 group, standings, provisional_playoffs, same_conference=False
             )
-        else:
-            own_conf = {n: 0.5 for n in group}
-            other_conf = {n: 0.5 for n in group}
 
         sorted_group = sorted(
             group,

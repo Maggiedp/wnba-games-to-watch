@@ -12,12 +12,9 @@ from dataclasses import dataclass, field
 
 from src.constants import assert_all_teams_have_conferences
 from src.scoring.elo import DEFAULT_HOME_ADVANTAGE, INITIAL_RATING, expected_win_prob
-from src.scoring.tiebreakers import resolve_seeding
+from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
 
 logger = logging.getLogger(__name__)
-
-# WNBA playoff structure: 8 teams make playoffs
-PLAYOFF_TEAMS = 8
 
 
 @dataclass
@@ -51,12 +48,6 @@ def simulate_game(
     return random.random() < expected_win_prob(
         elo_a, elo_b, home_advantage=home_advantage
     )
-
-
-def _record_h2h(team: "TeamStanding", opponent: str, won: bool) -> None:
-    """Increment team's H2H record vs opponent, creating the entry if missing."""
-    rec = team.h2h.setdefault(opponent, [0, 0])
-    rec[0 if won else 1] += 1
 
 
 def run_monte_carlo_simulation(
@@ -101,16 +92,15 @@ def run_monte_carlo_simulation(
             elo_a = standings[team_a].elo
             elo_b = standings[team_b].elo
 
-            if simulate_game(elo_a, elo_b, home_advantage=home_advantage):
+            a_won = simulate_game(elo_a, elo_b, home_advantage=home_advantage)
+            if a_won:
                 standings[team_a].wins += 1
                 standings[team_b].losses += 1
-                _record_h2h(standings[team_a], team_b, won=True)
-                _record_h2h(standings[team_b], team_a, won=False)
             else:
                 standings[team_b].wins += 1
                 standings[team_a].losses += 1
-                _record_h2h(standings[team_b], team_a, won=True)
-                _record_h2h(standings[team_a], team_b, won=False)
+            increment_h2h(standings[team_a].h2h, team_b, won=a_won)
+            increment_h2h(standings[team_b].h2h, team_a, won=not a_won)
 
         seeded = resolve_seeding(standings)
         for team_name in seeded[:PLAYOFF_TEAMS]:
