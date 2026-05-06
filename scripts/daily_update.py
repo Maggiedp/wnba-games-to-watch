@@ -4,7 +4,7 @@
 import logging
 import random
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from src.constants import GameStatus
 from src.data.espn_api import (
@@ -24,11 +24,16 @@ from src.db.queries import (
     get_team_by_name,
     upsert_daily_ranking,
     upsert_game,
+    upsert_playoff_probability,
     upsert_team,
 )
 from src.db.schema import get_session, init_db
 from src.scoring.elo import INITIAL_RATING, replay_games
-from src.scoring.importance import compute_importance_score
+from src.scoring.importance import normalize_importance_score
+from src.scoring.monte_carlo import (
+    compute_importance_from_matrix,
+    run_monte_carlo_simulation,
+)
 from src.scoring.quality import compute_quality_score
 from src.scoring.tiebreakers import increment_h2h
 
@@ -41,10 +46,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
-
-# Only compute playoff importance for games within this window.
-# Beyond it the standings will shift enough that the score is noise.
-_IMPORTANCE_WINDOW_DAYS = 30
 
 # How far back to pull games for Elo warm-up. Two prior seasons gives enough
 # updates that ratings have separated from the 1500 seed by opening day.
@@ -153,7 +154,7 @@ def compute_elo_ratings() -> dict[str, float]:
     without any prior games (expansion teams, or any team pre-opening-day)
     will appear at INITIAL_RATING when looked up later.
     """
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = date.today() - date.resolution
     logger.info(f"Fetching Elo history: {_ELO_HISTORY_START} through {yesterday}...")
     all_games = fetch_games_for_range(_ELO_HISTORY_START, yesterday)
     completed = [
@@ -195,11 +196,16 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
     return standings
 
 
-def compute_daily_scores(session, games: list[dict], standings: dict) -> list[dict]:
+def compute_daily_scores(
+    session, games: list[dict], standings: dict
+) -> tuple[list[dict], dict[str, float]]:
+    """Score upcoming games and return (scored_games, playoff_probs).
+
+    Uses a single 10k-sim Monte Carlo run. Game importance is derived by
+    splitting that run's outcome matrix — no additional simulations needed.
+    Playoff probabilities (one per team) are the aggregate of the same run.
+    """
     today = datetime.now().strftime("%Y-%m-%d")
-    importance_cutoff = (
-        datetime.now() + timedelta(days=_IMPORTANCE_WINDOW_DAYS)
-    ).strftime("%Y-%m-%d")
 
     upcoming_games = [
         g
@@ -208,7 +214,7 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
     ]
     if not upcoming_games:
         logger.info("No upcoming games to score")
-        return []
+        return [], {}
 
     # Seed with date of last completed game so scores are stable until new results arrive.
     last_completed_date = max(
@@ -218,8 +224,7 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
     random.seed(int(last_completed_date.replace("-", "")))
     logger.info(f"Monte Carlo seed: last completed game on {last_completed_date}")
 
-    # Exclude preseason games from standings simulation — they don't affect playoff seeding.
-    # Build parallel event_id index so duplicate matchups map to the right slot.
+    # All non-final, non-preseason games form the simulation universe.
     remaining_games = []
     remaining_event_index: dict[str, int] = {}
     for g in games:
@@ -230,9 +235,20 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
             remaining_games.append((g["team_a"], g["team_b"]))
 
     logger.info(
-        f"Scoring {len(remaining_games)} remaining games "
-        f"(importance only for games through {importance_cutoff})..."
+        f"Running 10k Monte Carlo over {len(remaining_games)} remaining games..."
     )
+    playoff_probs, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+        standings,
+        remaining_games,
+        num_simulations=10000,
+        return_matrix=True,
+    )
+
+    team_names = list(standings.keys())
+    raw_swings = compute_importance_from_matrix(
+        outcome_matrix, playoff_sets, remaining_games, team_names
+    )
+    logger.info(f"Computed importance swings for {len(raw_swings)} remaining games")
 
     scored = []
     for game in upcoming_games:
@@ -244,25 +260,14 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
         game_date = game.get("date", today)
         importance: float | None
         if game.get("season_type", 2) == 1:
-            # Preseason games don't count for playoff seeding.
             importance = 0.0
-        elif game_date <= importance_cutoff:
+        else:
             game_index = remaining_event_index.get(game.get("event_id", ""))
             if game_index is not None:
-                importance = compute_importance_score(
-                    standings, remaining_games, game_index
-                )
+                importance = normalize_importance_score(raw_swings[game_index])
             else:
                 importance = None
-        else:
-            # Beyond the window we don't simulate — leave importance unknown
-            # rather than zero, so the UI can show "—" instead of implying
-            # the game doesn't matter.
-            importance = None
 
-        # When importance is unknown, treat its contribution as zero for the
-        # overall score so we still have *a* number to rank on. The UI hides
-        # the missing importance value itself.
         importance_for_overall = importance if importance is not None else 0.0
         overall = quality * 0.6 + importance_for_overall * 0.4
         imp_log = f"{importance:.1f}" if importance is not None else "—"
@@ -277,13 +282,13 @@ def compute_daily_scores(session, games: list[dict], standings: dict) -> list[di
                 "date": game_date,
                 "time": game.get("time", ""),
                 "quality": quality,
-                "importance": importance,  # may be None if not simulated
+                "importance": importance,
                 "overall": overall,
                 "broadcaster": game.get("broadcaster", ""),
             }
         )
 
-    return scored
+    return scored, playoff_probs
 
 
 def store_daily_rankings(session, scored_games: list[dict]) -> None:
@@ -319,6 +324,31 @@ def store_daily_rankings(session, scored_games: list[dict]) -> None:
     logger.info(f"Stored {stored} daily rankings")
 
 
+def store_playoff_probabilities(
+    session, playoff_probs: dict[str, float], snapshot_date: str
+) -> None:
+    """Persist per-team playoff probabilities for a given date."""
+    team_cache: dict[str, int | None] = {}
+
+    def get_cached_team_id(name: str) -> int | None:
+        if name not in team_cache:
+            team = get_team_by_name(session, name)
+            team_cache[name] = team.id if team else None
+        return team_cache[name]
+
+    stored = 0
+    for team_name, prob in playoff_probs.items():
+        team_id = get_cached_team_id(team_name)
+        if not team_id:
+            logger.warning(f"Skipping playoff prob for unknown team: {team_name}")
+            continue
+        upsert_playoff_probability(
+            session, date=snapshot_date, team_id=team_id, probability=prob
+        )
+        stored += 1
+    logger.info(f"Stored {stored} playoff probabilities for {snapshot_date}")
+
+
 def main() -> int:
     logger.info("=== Starting daily update job ===")
     try:
@@ -329,8 +359,10 @@ def main() -> int:
             games = fetch_and_store_games(session)
             elo_ratings = compute_elo_ratings()
             standings = compute_standings(session, elo_ratings)
-            scored = compute_daily_scores(session, games, standings)
+            scored, playoff_probs = compute_daily_scores(session, games, standings)
             store_daily_rankings(session, scored)
+            today = datetime.now().strftime("%Y-%m-%d")
+            store_playoff_probabilities(session, playoff_probs, today)
             logger.info("=== Daily update job completed successfully ===")
             return 0
         finally:
