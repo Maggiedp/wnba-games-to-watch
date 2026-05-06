@@ -176,3 +176,60 @@ def test_compute_standings_populates_h2h(monkeypatch):
     assert standings["Las Vegas Aces"]["h2h"]["New York Liberty"] == [1, 2]
     assert standings["New York Liberty"]["wins"] == 2
     assert standings["Las Vegas Aces"]["wins"] == 1
+
+
+# ---------------------------------------------------------------------------
+# return_matrix tests (Task 1)
+# ---------------------------------------------------------------------------
+
+_S3 = {
+    "Las Vegas Aces":   {"wins": 20, "losses": 5,  "elo": 1650, "h2h": {}},
+    "New York Liberty": {"wins": 15, "losses": 10, "elo": 1500, "h2h": {}},
+    "Indiana Fever":    {"wins": 5,  "losses": 20, "elo": 1350, "h2h": {}},
+}
+_G2 = [
+    ("Las Vegas Aces", "New York Liberty"),
+    ("New York Liberty", "Indiana Fever"),
+]
+
+
+def test_return_matrix_shape():
+    """return_matrix=True yields a 3-tuple; matrix has shape (num_sims, num_games)."""
+    import random; random.seed(0)
+    result = run_monte_carlo_simulation(_S3, _G2, num_simulations=50, return_matrix=True)
+    assert isinstance(result, tuple) and len(result) == 3
+    probs, outcome_matrix, playoff_sets = result
+    assert len(outcome_matrix) == 50
+    assert all(len(row) == 2 for row in outcome_matrix)
+    assert len(playoff_sets) == 50
+
+
+def test_return_matrix_false_returns_dict():
+    """Default (return_matrix=False) still returns a plain dict."""
+    import random; random.seed(0)
+    result = run_monte_carlo_simulation(_S3, _G2, num_simulations=50)
+    assert isinstance(result, dict)
+
+
+def test_return_matrix_probs_match_non_matrix():
+    """Playoff probs from matrix mode match non-matrix mode within noise."""
+    import random
+    random.seed(42)
+    probs_plain = run_monte_carlo_simulation(_S3, _G2, num_simulations=5000)
+    random.seed(42)
+    probs_matrix, _, _ = run_monte_carlo_simulation(_S3, _G2, num_simulations=5000, return_matrix=True)
+    for name in _S3:
+        assert abs(probs_plain[name] - probs_matrix[name]) < 0.03, (
+            f"{name}: plain={probs_plain[name]:.3f} matrix={probs_matrix[name]:.3f}"
+        )
+
+
+def test_playoff_sets_are_sets_of_team_names():
+    """Each playoff_set entry is a set of team name strings."""
+    import random; random.seed(0)
+    _, _, playoff_sets = run_monte_carlo_simulation(_S3, _G2, num_simulations=20, return_matrix=True)
+    for s in playoff_sets:
+        assert isinstance(s, set)
+        for name in s:
+            assert isinstance(name, str)
+            assert name in _S3

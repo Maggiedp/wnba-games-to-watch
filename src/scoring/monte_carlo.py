@@ -55,22 +55,30 @@ def run_monte_carlo_simulation(
     remaining_games: list[tuple[str, str]],
     num_simulations: int = 10000,
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
-) -> dict[str, float]:
+    return_matrix: bool = False,
+) -> dict[str, float] | tuple[dict[str, float], list[list[bool]], list[set[str]]]:
     """Run Monte Carlo simulations to compute playoff probabilities.
 
     Args:
         current_standings: {team_name: {"wins", "losses", "elo", ...}}.
-            Extra keys (e.g. "bpi") are ignored here.
-        remaining_games: list of (home_team, away_team) tuples. home_advantage
-            is applied to the first element of each tuple.
+        remaining_games: list of (home_team, away_team) tuples.
         num_simulations: Number of simulations to run.
-        home_advantage: Elo-point bonus applied to the home team per game.
+        home_advantage: Elo-point bonus for the home team.
+        return_matrix: When True, also return the per-sim outcome matrix and
+            playoff sets (needed for compute_importance_from_matrix).
 
     Returns:
-        Dict mapping team_name -> playoff_probability (0.0 to 1.0).
+        If return_matrix=False: dict mapping team_name -> playoff_probability.
+        If return_matrix=True: (playoff_probs, outcome_matrix, playoff_sets)
+            outcome_matrix: list[list[bool]] shape (num_sims, num_remaining_games),
+                True = team_a won that game in that sim.
+            playoff_sets: list[set[str]] shape (num_sims,),
+                set of team names that made the playoffs in that sim.
     """
     assert_all_teams_have_conferences(current_standings)
     playoff_counts: dict[str, int] = defaultdict(int)
+    outcome_matrix: list[list[bool]] = []
+    playoff_sets: list[set[str]] = []
 
     for _ in range(num_simulations):
         standings = {
@@ -84,15 +92,18 @@ def run_monte_carlo_simulation(
             for name, data in current_standings.items()
         }
 
+        game_outcomes: list[bool] = []
         for team_a, team_b in remaining_games:
             if team_a not in standings or team_b not in standings:
                 logger.warning(f"Team not in standings: {team_a} or {team_b}")
+                game_outcomes.append(False)
                 continue
 
             elo_a = standings[team_a].elo
             elo_b = standings[team_b].elo
 
             a_won = simulate_game(elo_a, elo_b, home_advantage=home_advantage)
+            game_outcomes.append(a_won)
             if a_won:
                 standings[team_a].wins += 1
                 standings[team_b].losses += 1
@@ -103,8 +114,13 @@ def run_monte_carlo_simulation(
             increment_h2h(standings[team_b].h2h, team_a, won=not a_won)
 
         seeded = resolve_seeding(standings)
-        for team_name in seeded[:PLAYOFF_TEAMS]:
+        playoff_team_set = set(seeded[:PLAYOFF_TEAMS])
+        for team_name in playoff_team_set:
             playoff_counts[team_name] += 1
+
+        if return_matrix:
+            outcome_matrix.append(game_outcomes)
+            playoff_sets.append(playoff_team_set)
 
     playoff_probs = {
         name: count / num_simulations for name, count in playoff_counts.items()
@@ -113,6 +129,8 @@ def run_monte_carlo_simulation(
         if name not in playoff_probs:
             playoff_probs[name] = 0.0
 
+    if return_matrix:
+        return playoff_probs, outcome_matrix, playoff_sets
     return playoff_probs
 
 
