@@ -8,11 +8,13 @@ from datetime import datetime
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
-from src.api.routes import GameResponse, format_games_response
+from src.api.routes import GameResponse, PlayoffOddsResponse, format_games_response
 from src.constants import Broadcasters  # noqa: F401 — used in get_broadcasters endpoint
 from src.db.queries import (
     get_daily_rankings,
+    get_playoff_probabilities,
     get_rankings_by_broadcaster,
+    get_teams_by_ids,
     get_upcoming_rankings,
 )
 from src.db.schema import get_session, init_db
@@ -71,6 +73,34 @@ async def get_games_by_broadcaster(broadcaster: str):
 @app.get("/api/broadcasters")
 async def get_broadcasters():
     return {"broadcasters": Broadcasters.ALL}
+
+
+@app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])
+async def get_playoff_odds(date: str = Query(default=None)):
+    """Return per-team playoff probabilities, sorted highest-first."""
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+    session = get_session()
+    try:
+        prob_by_id = get_playoff_probabilities(session, date)
+        if not prob_by_id:
+            return []
+        teams = get_teams_by_ids(session, set(prob_by_id.keys()))
+        return sorted(
+            [
+                PlayoffOddsResponse(
+                    team=teams[tid].name,
+                    abbreviation=teams[tid].abbreviation or "",
+                    logo_url=teams[tid].logo_url or "",
+                    probability=prob_by_id[tid],
+                )
+                for tid in prob_by_id
+                if tid in teams
+            ],
+            key=lambda x: -x.probability,
+        )
+    finally:
+        session.close()
 
 
 @app.post("/internal/daily-update")

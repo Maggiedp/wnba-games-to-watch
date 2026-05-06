@@ -1,10 +1,13 @@
 """API routes and response models for WNBA Games to Watch."""
 
+import logging
+from datetime import datetime
+
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
+from src.db.queries import get_game_times, get_playoff_probabilities, get_teams_by_ids
 from src.db.schema import DailyRanking
-from src.db.queries import get_game_times, get_teams_by_ids
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +24,24 @@ class GameResponse(BaseModel):
     team_a_logo: str = ""
     team_b_logo: str = ""
     quality_score: float
-    # None when the game is outside the Monte Carlo window (currently 30 days out)
-    # so we haven't simulated its playoff impact.
+    # None for preseason games (season_type == 1) only.
     importance_score: float | None = None
     overall_score: float
     broadcaster: str
+    team_a_playoff_prob: float | None = None
+    team_b_playoff_prob: float | None = None
 
     class Config:
         from_attributes = True
+
+
+class PlayoffOddsResponse(BaseModel):
+    """Per-team playoff probability for the standings section."""
+
+    team: str
+    abbreviation: str
+    logo_url: str
+    probability: float  # 0.0–1.0
 
 
 def format_games_response(
@@ -43,6 +56,8 @@ def format_games_response(
     times = get_game_times(
         session, [(r.date, r.team_a_id, r.team_b_id) for r in rankings]
     )
+    today = datetime.now().strftime("%Y-%m-%d")
+    prob_by_team_id = get_playoff_probabilities(session, today)
 
     results = []
     for ranking in rankings:
@@ -71,6 +86,8 @@ def format_games_response(
                 importance_score=ranking.importance_score,
                 overall_score=ranking.overall_score,
                 broadcaster=ranking.broadcaster,
+                team_a_playoff_prob=prob_by_team_id.get(ranking.team_a_id),
+                team_b_playoff_prob=prob_by_team_id.get(ranking.team_b_id),
             )
         )
 
