@@ -47,6 +47,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def _make_team_id_resolver(session):
+    """Return a cached team-name → team-id lookup for a single session."""
+    cache: dict[str, int | None] = {}
+
+    def resolve(name: str) -> int | None:
+        if name not in cache:
+            team = get_team_by_name(session, name)
+            cache[name] = team.id if team else None
+        return cache[name]
+
+    return resolve
+
+
 # How far back to pull games for Elo warm-up. Two prior seasons gives enough
 # updates that ratings have separated from the 1500 seed by opening day.
 _ELO_HISTORY_START = date(2024, 5, 1)
@@ -110,14 +124,7 @@ def fetch_and_store_games(session) -> list[dict]:
     broadcasters = fetch_wnba_schedule_broadcasters(today)
     games = enhance_games_with_broadcasters(games, broadcasters)
 
-    team_cache: dict[str, int | None] = {}
-
-    def get_cached_team_id(name: str) -> int | None:
-        if name not in team_cache:
-            team = get_team_by_name(session, name)
-            team_cache[name] = team.id if team else None
-        return team_cache[name]
-
+    get_cached_team_id = _make_team_id_resolver(session)
     stored = 0
     for game in games:
         team_a, team_b = game.get("team_a", ""), game.get("team_b", "")
@@ -292,14 +299,7 @@ def compute_daily_scores(
 
 
 def store_daily_rankings(session, scored_games: list[dict]) -> None:
-    team_cache: dict[str, int | None] = {}
-
-    def get_cached_team_id(name: str) -> int | None:
-        if name not in team_cache:
-            team = get_team_by_name(session, name)
-            team_cache[name] = team.id if team else None
-        return team_cache[name]
-
+    get_cached_team_id = _make_team_id_resolver(session)
     stored = 0
     for game in scored_games:
         team_a_id = get_cached_team_id(game["team_a"])
@@ -328,14 +328,7 @@ def store_playoff_probabilities(
     session, playoff_probs: dict[str, float], snapshot_date: str
 ) -> None:
     """Persist per-team playoff probabilities for a given date."""
-    team_cache: dict[str, int | None] = {}
-
-    def get_cached_team_id(name: str) -> int | None:
-        if name not in team_cache:
-            team = get_team_by_name(session, name)
-            team_cache[name] = team.id if team else None
-        return team_cache[name]
-
+    get_cached_team_id = _make_team_id_resolver(session)
     stored = 0
     for team_name, prob in playoff_probs.items():
         team_id = get_cached_team_id(team_name)
