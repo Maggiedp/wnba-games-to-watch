@@ -206,6 +206,91 @@ _HOMEPAGE_HTML = f"""
             }}
             .header-link:hover {{ color: var(--orange); border-color: var(--orange); }}
 
+            /* ---------- Playoff Picture ---------- */
+            .playoff-picture {{
+                background: var(--surface);
+                border-bottom: 1px solid var(--line);
+                padding: 20px 32px;
+            }}
+            .playoff-picture-inner {{
+                max-width: 1100px;
+                margin: 0 auto;
+            }}
+            .playoff-picture-header {{
+                font-family: var(--body);
+                font-size: 0.75rem;
+                font-weight: 600;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                color: var(--text-subtle);
+                margin-bottom: 14px;
+            }}
+            .playoff-grid {{
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 6px 32px;
+            }}
+            .playoff-row {{
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 0.82rem;
+            }}
+            .playoff-logo {{
+                width: 20px;
+                height: 20px;
+                object-fit: contain;
+                flex-shrink: 0;
+            }}
+            .playoff-team-name {{
+                flex: 1;
+                min-width: 0;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                color: var(--text);
+                font-weight: 500;
+            }}
+            .playoff-bar-track {{
+                width: 80px;
+                height: 4px;
+                background: var(--line);
+                border-radius: 2px;
+                flex-shrink: 0;
+            }}
+            .playoff-bar-fill {{
+                height: 100%;
+                border-radius: 2px;
+                background: var(--orange);
+                transition: width 0.3s ease;
+            }}
+            .playoff-pct {{
+                font-size: 0.78rem;
+                font-variant-numeric: tabular-nums;
+                color: var(--text-muted);
+                width: 30px;
+                text-align: right;
+                flex-shrink: 0;
+            }}
+            @media (max-width: 768px) {{
+                .playoff-grid {{
+                    grid-template-columns: 1fr;
+                }}
+                .playoff-picture {{
+                    padding: 16px 20px;
+                }}
+            }}
+
+            /* ---------- Inline team playoff probability ---------- */
+            .team-prob {{
+                font-size: 0.72rem;
+                color: var(--text-subtle);
+                font-variant-numeric: tabular-nums;
+                margin-top: 1px;
+                line-height: 1;
+                font-family: var(--body);
+            }}
+
             /* ---------- Controls ---------- */
             .controls {{
                 background: var(--surface);
@@ -773,6 +858,9 @@ _HOMEPAGE_HTML = f"""
                 font-size: 0.95rem;
                 line-height: 1.2;
                 color: var(--navy);
+                display: flex;
+                align-items: center;
+                gap: 8px;
             }}
             .games-card-matchup .team {{ display: inline-flex; align-items: center; gap: 5px; }}
             .games-card-matchup .team-logo {{ width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; }}
@@ -834,6 +922,13 @@ _HOMEPAGE_HTML = f"""
                 <button class="header-link" id="how-it-works-btn" type="button">How it works</button>
             </div>
         </header>
+
+        <div class="playoff-picture" id="playoff-picture" style="display:none">
+            <div class="playoff-picture-inner">
+                <div class="playoff-picture-header">Playoff Picture &middot; Updated daily</div>
+                <div class="playoff-grid" id="playoff-grid"></div>
+            </div>
+        </div>
 
         <div class="controls">
             <div class="controls-inner">
@@ -902,13 +997,14 @@ _HOMEPAGE_HTML = f"""
                     simulated game. We sum how much every team&rsquo;s playoff odds swing
                     depending on who wins tonight &mdash; including bubble teams watching from
                     the outside, not just the two playing. Bigger swing &rarr; higher score.
+                    Playoff odds and game importance come from the same simulation run, so the
+                    two numbers are consistent with each other.
                 </p>
 
                 <h3>Notes</h3>
                 <p>
-                    Importance is only computed for games within the next 30 days &mdash; further out,
-                    standings move too much for the signal to be meaningful. Expansion teams start
-                    at league-average strength until they have a real BPI.
+                    Preseason games are not simulated and show no importance score. Expansion teams
+                    start at league-average strength until they have a real BPI.
                 </p>
             </div>
         </div>
@@ -993,6 +1089,39 @@ _HOMEPAGE_HTML = f"""
                 }}
             }}
 
+            async function fetchPlayoffOdds() {{
+                try {{
+                    const resp = await fetch('/api/playoff-odds');
+                    if (!resp.ok) return;
+                    const odds = await resp.json();
+                    if (!odds || odds.length === 0) return;
+                    renderPlayoffPicture(odds);
+                }} catch (e) {{
+                    // Non-fatal — page works without the section
+                }}
+            }}
+
+            function renderPlayoffPicture(odds) {{
+                const grid = document.getElementById('playoff-grid');
+                const section = document.getElementById('playoff-picture');
+                grid.innerHTML = odds.map(t => {{
+                    const pct = Math.round(t.probability * 100);
+                    const logoHtml = t.logo_url
+                        ? `<img class="playoff-logo" src="${{escapeHtml(t.logo_url)}}" alt="" aria-hidden="true">`
+                        : `<span class="playoff-logo"></span>`;
+                    return `
+                        <div class="playoff-row">
+                            ${{logoHtml}}
+                            <span class="playoff-team-name">${{escapeHtml(t.team)}}</span>
+                            <div class="playoff-bar-track" aria-hidden="true">
+                                <div class="playoff-bar-fill" style="width:${{pct}}%"></div>
+                            </div>
+                            <span class="playoff-pct" aria-label="${{pct}}% playoff probability">${{pct}}%</span>
+                        </div>`;
+                }}).join('');
+                section.style.display = '';
+            }}
+
             function populateFilters() {{
                 const networks = [...new Set(allGames.map(g => g.broadcaster).filter(Boolean))].sort();
                 const pillGroup = document.getElementById('network-pills');
@@ -1072,7 +1201,7 @@ _HOMEPAGE_HTML = f"""
 
                 const importance = game.importance_score == null ? '—' : game.importance_score.toFixed(0);
                 const importanceTitle = game.importance_score == null
-                    ? 'Outside the 30-day Monte Carlo window'
+                    ? 'Preseason game — not simulated'
                     : 'Playoff stakes from Monte Carlo';
 
                 container.innerHTML = `
@@ -1166,7 +1295,7 @@ _HOMEPAGE_HTML = f"""
                 if (score == null) {{
                     return `
                         <div class="mini-bar-row" role="img" aria-label="${{label}} not simulated"
-                             title="Not simulated &mdash; games more than 30 days out aren't projected for playoff impact">
+                             title="Preseason game &mdash; not simulated">
                             <span class="mini-bar-label">${{label}}</span>
                             <span class="mini-bar-track" aria-hidden="true"></span>
                             <span class="mini-bar-num empty">&mdash;</span>
@@ -1186,7 +1315,7 @@ _HOMEPAGE_HTML = f"""
 
             function renderGameRow(game, isTopPick) {{
                 const cls = getScoreClass(game.overall_score);
-                const impTitle = game.importance_score == null ? 'Not simulated — games more than 30 days out aren\\'t projected for playoff impact' : '';
+                const impTitle = game.importance_score == null ? 'Preseason game — not simulated' : '';
                 const impVal = game.importance_score == null ? '&mdash;' : game.importance_score.toFixed(0);
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
@@ -1197,9 +1326,15 @@ _HOMEPAGE_HTML = f"""
                         <td>
                             ${{badge}}
                             <div class="matchup">
-                                ${{renderTeam(game.team_a, game.team_a_logo)}}
+                                <div>
+                                    ${{renderTeam(game.team_a, game.team_a_logo)}}
+                                    ${{game.team_a_playoff_prob != null ? `<div class="team-prob">${{Math.round(game.team_a_playoff_prob * 100)}}% playoff odds</div>` : ''}}
+                                </div>
                                 <span class="vs">vs</span>
-                                ${{renderTeam(game.team_b, game.team_b_logo)}}
+                                <div>
+                                    ${{renderTeam(game.team_b, game.team_b_logo)}}
+                                    ${{game.team_b_playoff_prob != null ? `<div class="team-prob">${{Math.round(game.team_b_playoff_prob * 100)}}% playoff odds</div>` : ''}}
+                                </div>
                             </div>
                         </td>
                         <td class="hide-mobile col-num">${{game.quality_score.toFixed(0)}}</td>
@@ -1223,9 +1358,15 @@ _HOMEPAGE_HTML = f"""
                         <div class="games-card-stack">
                             ${{eyebrow}}
                             <div class="games-card-matchup">
-                                ${{renderTeam(game.team_a, game.team_a_logo)}}
+                                <div>
+                                    ${{renderTeam(game.team_a, game.team_a_logo)}}
+                                    ${{game.team_a_playoff_prob != null ? `<div class="team-prob">${{Math.round(game.team_a_playoff_prob * 100)}}% playoff odds</div>` : ''}}
+                                </div>
                                 <span class="vs">vs</span>
-                                ${{renderTeam(game.team_b, game.team_b_logo)}}
+                                <div>
+                                    ${{renderTeam(game.team_b, game.team_b_logo)}}
+                                    ${{game.team_b_playoff_prob != null ? `<div class="team-prob">${{Math.round(game.team_b_playoff_prob * 100)}}% playoff odds</div>` : ''}}
+                                </div>
                             </div>
                             <div class="games-card-meta">${{meta}}</div>
                             ${{renderMiniBar('Quality', game.quality_score, 'quality')}}
@@ -1284,6 +1425,7 @@ _HOMEPAGE_HTML = f"""
 
             document.addEventListener('DOMContentLoaded', () => {{
                 loadGames();
+                fetchPlayoffOdds();
                 document.getElementById('from-date').addEventListener('change', () => {{ clearActivePreset(); applyFilters(); }});
                 document.getElementById('to-date').addEventListener('change', () => {{ clearActivePreset(); applyFilters(); }});
                 document.getElementById('team-filter').addEventListener('change', applyFilters);
