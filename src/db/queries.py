@@ -1,7 +1,8 @@
 """Database query helpers for WNBA Games to Watch."""
 
 from sqlalchemy.orm import Session
-from src.db.schema import Team, Game, DailyRanking
+
+from src.db.schema import DailyRanking, Game, PlayoffProbability, Team
 
 
 def upsert_team(
@@ -284,3 +285,32 @@ def upsert_daily_ranking(
         session.add(ranking)
     session.commit()
     return ranking
+
+
+def upsert_playoff_probability(
+    session: Session,
+    date: str,
+    team_id: int,
+    probability: float,
+) -> PlayoffProbability:
+    """Upsert a team's playoff probability for a given date."""
+    record = (
+        session.query(PlayoffProbability)
+        .filter(PlayoffProbability.date == date, PlayoffProbability.team_id == team_id)
+        .first()
+    )
+    if record:
+        record.probability = probability
+    else:
+        record = PlayoffProbability(date=date, team_id=team_id, probability=probability)
+        session.add(record)
+    session.commit()
+    return record
+
+
+def get_playoff_probabilities(session: Session, date: str) -> dict[int, float]:
+    """Return {team_id: probability} for all teams on the given date."""
+    records = (
+        session.query(PlayoffProbability).filter(PlayoffProbability.date == date).all()
+    )
+    return {r.team_id: r.probability for r in records}
