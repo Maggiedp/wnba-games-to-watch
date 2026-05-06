@@ -67,8 +67,10 @@ TEAM_CONFERENCES: dict[str, str] = {
     "Atlanta Dream": "East",
     "Chicago Sky": "East",
     "Connecticut Sun": "East",
+    "Connecticut SUN": "East",  # ESPN uses all-caps SUN in some endpoints
     "Indiana Fever": "East",
     "New York Liberty": "East",
+    "Toronto Tempo": "East",
     "Washington Mystics": "East",
     "Dallas Wings": "West",
     "Golden State Valkyries": "West",
@@ -76,6 +78,7 @@ TEAM_CONFERENCES: dict[str, str] = {
     "Los Angeles Sparks": "West",
     "Minnesota Lynx": "West",
     "Phoenix Mercury": "West",
+    "Portland Fire": "West",
     "Seattle Storm": "West",
 }
 
