@@ -56,7 +56,9 @@ def run_monte_carlo_simulation(
     num_simulations: int = 10000,
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     return_matrix: bool = False,
-) -> dict[str, float] | tuple[dict[str, float], list[list[bool]], list[set[str]]]:
+) -> (
+    dict[str, float] | tuple[dict[str, float], list[list[bool | None]], list[set[str]]]
+):
     """Run Monte Carlo simulations to compute playoff probabilities.
 
     Args:
@@ -92,11 +94,11 @@ def run_monte_carlo_simulation(
             for name, data in current_standings.items()
         }
 
-        game_outcomes: list[bool] = []
+        game_outcomes: list[bool | None] = []
         for team_a, team_b in remaining_games:
             if team_a not in standings or team_b not in standings:
                 logger.warning(f"Team not in standings: {team_a} or {team_b}")
-                game_outcomes.append(False)
+                game_outcomes.append(None)
                 continue
 
             elo_a = standings[team_a].elo
@@ -194,3 +196,54 @@ def compute_importance_swing(
         f"all-team total={total_swing:.3f}"
     )
     return total_swing
+
+
+def compute_importance_from_matrix(
+    outcome_matrix: list[list[bool | None]],
+    playoff_sets: list[set[str]],
+    remaining_games: list[tuple[str, str]],
+    team_names: list[str],
+) -> list[float]:
+    """Compute importance swing for every remaining game from one simulation run.
+
+    Splits the simulation set by who won each game, then computes the all-team
+    sum of |playoff_rate(a_won_sims) - playoff_rate(b_won_sims)|.
+
+    Works because Elo ratings are fixed during simulation — game outcomes don't
+    affect downstream win probabilities, so observed splits and forced splits
+    are drawn from identical distributions.
+
+    Args:
+        outcome_matrix: shape (num_sims, num_remaining_games); True = team_a won,
+            False = team_b won, None = unknown team (skip this sim for this game).
+        playoff_sets: shape (num_sims,); set of team names that made playoffs.
+        remaining_games: list of (home_team, away_team) used to produce the matrix.
+        team_names: all team names to sum swing across.
+
+    Returns:
+        list of raw swing values (one per remaining game, same order).
+        Normalize with normalize_importance_score before displaying.
+    """
+    num_sims = len(outcome_matrix)
+    swings: list[float] = []
+
+    for game_idx in range(len(remaining_games)):
+        a_indices = [s for s in range(num_sims) if outcome_matrix[s][game_idx] is True]
+        b_indices = [s for s in range(num_sims) if outcome_matrix[s][game_idx] is False]
+
+        if not a_indices or not b_indices:
+            swings.append(0.0)
+            continue
+
+        swing = 0.0
+        for team in team_names:
+            rate_a = sum(1 for s in a_indices if team in playoff_sets[s]) / len(
+                a_indices
+            )
+            rate_b = sum(1 for s in b_indices if team in playoff_sets[s]) / len(
+                b_indices
+            )
+            swing += abs(rate_a - rate_b)
+        swings.append(swing)
+
+    return swings

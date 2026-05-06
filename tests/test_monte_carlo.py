@@ -9,6 +9,7 @@ import random
 
 from src.scoring.monte_carlo import (
     TeamStanding,
+    compute_importance_from_matrix,
     run_monte_carlo_simulation,
     simulate_game,
 )
@@ -233,3 +234,72 @@ def test_playoff_sets_are_sets_of_team_names():
         for name in s:
             assert isinstance(name, str)
             assert name in _S3
+
+
+# ---------------------------------------------------------------------------
+# compute_importance_from_matrix tests (Task 2)
+# ---------------------------------------------------------------------------
+
+# Minimal bubble fixture for matrix importance tests
+_BUBBLE = {
+    "Las Vegas Aces":         {"wins": 28, "losses": 7,  "elo": 1650, "h2h": {}},
+    "New York Liberty":       {"wins": 26, "losses": 9,  "elo": 1620, "h2h": {}},
+    "Minnesota Lynx":         {"wins": 24, "losses": 11, "elo": 1590, "h2h": {}},
+    "Indiana Fever":          {"wins": 22, "losses": 13, "elo": 1560, "h2h": {}},
+    "Connecticut Sun":        {"wins": 20, "losses": 15, "elo": 1530, "h2h": {}},
+    "Seattle Storm":          {"wins": 19, "losses": 16, "elo": 1515, "h2h": {}},
+    "Atlanta Dream":          {"wins": 18, "losses": 17, "elo": 1500, "h2h": {}},
+    "Chicago Sky":            {"wins": 18, "losses": 17, "elo": 1485, "h2h": {}},
+    "Washington Mystics":     {"wins": 18, "losses": 17, "elo": 1470, "h2h": {}},
+    "Dallas Wings":           {"wins": 18, "losses": 17, "elo": 1455, "h2h": {}},
+    "Golden State Valkyries": {"wins": 14, "losses": 21, "elo": 1410, "h2h": {}},
+    "Los Angeles Sparks":     {"wins": 10, "losses": 25, "elo": 1350, "h2h": {}},
+    "Phoenix Mercury":        {"wins": 7,  "losses": 28, "elo": 1320, "h2h": {}},
+}
+_BUBBLE_GAMES = [
+    ("Atlanta Dream",      "Chicago Sky"),        # index 0 — bubble vs bubble
+    ("Washington Mystics", "Dallas Wings"),        # index 1 — bubble vs bubble
+    ("Las Vegas Aces",     "New York Liberty"),    # index 2 — safely in vs safely in
+    ("Minnesota Lynx",     "Indiana Fever"),       # index 3
+    ("Connecticut Sun",    "Seattle Storm"),       # index 4
+]
+
+
+def test_compute_importance_from_matrix_length():
+    """Returns one swing value per remaining game."""
+    import random; random.seed(0)
+    _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+        _BUBBLE, _BUBBLE_GAMES, num_simulations=200, return_matrix=True
+    )
+    swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys()))
+    assert len(swings) == len(_BUBBLE_GAMES)
+
+
+def test_compute_importance_from_matrix_non_negative():
+    """All swing values are >= 0."""
+    import random; random.seed(0)
+    _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+        _BUBBLE, _BUBBLE_GAMES, num_simulations=500, return_matrix=True
+    )
+    swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys()))
+    assert all(s >= 0.0 for s in swings)
+
+
+def test_compute_importance_from_matrix_bubble_beats_safe():
+    """Bubble game (index 0) has higher swing than safely-in game (index 2)."""
+    import random; random.seed(42)
+    _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+        _BUBBLE, _BUBBLE_GAMES, num_simulations=5000, return_matrix=True
+    )
+    swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys()))
+    assert swings[0] > swings[2], f"bubble={swings[0]:.3f} safe={swings[2]:.3f}"
+
+
+def test_compute_importance_from_matrix_empty_subset_returns_zero():
+    """When all sims agree on the outcome (degenerate case), swing is 0."""
+    # Construct a matrix where team_a always wins game 0
+    outcome_matrix = [[True, False]] * 100
+    playoff_sets = [{"Las Vegas Aces", "New York Liberty"} for _ in range(100)]
+    games = [("Las Vegas Aces", "Indiana Fever"), ("New York Liberty", "Indiana Fever")]
+    swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, games, ["Las Vegas Aces", "New York Liberty", "Indiana Fever"])
+    assert swings[0] == 0.0  # b_won is empty — no split possible
