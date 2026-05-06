@@ -30,6 +30,7 @@ from src.db.schema import get_session, init_db
 from src.scoring.elo import INITIAL_RATING, replay_games
 from src.scoring.importance import compute_importance_score
 from src.scoring.quality import compute_quality_score
+from src.scoring.tiebreakers import increment_h2h
 
 logging.basicConfig(
     level=logging.INFO,
@@ -171,6 +172,7 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
             "losses": 0,
             "bpi": t.bpi_rating,
             "elo": elo_ratings.get(t.name, INITIAL_RATING),
+            "h2h": {},
         }
         for t in all_teams
     }
@@ -180,12 +182,15 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
         team_b = get_team_by_id(session, game.team_b_id)
         if not team_a or not team_b:
             continue
-        if game.winner_id == team_a.id:
+        a_won = game.winner_id == team_a.id
+        if a_won:
             standings[team_a.name]["wins"] += 1
             standings[team_b.name]["losses"] += 1
         else:
             standings[team_b.name]["wins"] += 1
             standings[team_a.name]["losses"] += 1
+        increment_h2h(standings[team_a.name]["h2h"], team_b.name, won=a_won)
+        increment_h2h(standings[team_b.name]["h2h"], team_a.name, won=not a_won)
     logger.info(f"Computed standings for {len(standings)} teams")
     return standings
 

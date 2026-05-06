@@ -8,14 +8,13 @@ in the standings dict as a sibling field used only by quality scoring.
 import logging
 import random
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from src.constants import assert_all_teams_have_conferences
 from src.scoring.elo import DEFAULT_HOME_ADVANTAGE, INITIAL_RATING, expected_win_prob
+from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
 
 logger = logging.getLogger(__name__)
-
-# WNBA playoff structure: 8 teams make playoffs
-PLAYOFF_TEAMS = 8
 
 
 @dataclass
@@ -26,6 +25,9 @@ class TeamStanding:
     wins: int = 0
     losses: int = 0
     elo: float = INITIAL_RATING
+    # Per-opponent record: opponent_name -> [wins_vs_them, losses_vs_them].
+    # Mutable list (not tuple) so we can update in place during simulation.
+    h2h: dict[str, list[int]] = field(default_factory=dict)
 
     @property
     def win_pct(self) -> float:
@@ -67,6 +69,7 @@ def run_monte_carlo_simulation(
     Returns:
         Dict mapping team_name -> playoff_probability (0.0 to 1.0).
     """
+    assert_all_teams_have_conferences(current_standings)
     playoff_counts: dict[str, int] = defaultdict(int)
 
     for _ in range(num_simulations):
@@ -76,6 +79,7 @@ def run_monte_carlo_simulation(
                 wins=data["wins"],
                 losses=data["losses"],
                 elo=data.get("elo", INITIAL_RATING),
+                h2h={opp: list(rec) for opp, rec in data.get("h2h", {}).items()},
             )
             for name, data in current_standings.items()
         }
@@ -88,16 +92,19 @@ def run_monte_carlo_simulation(
             elo_a = standings[team_a].elo
             elo_b = standings[team_b].elo
 
-            if simulate_game(elo_a, elo_b, home_advantage=home_advantage):
+            a_won = simulate_game(elo_a, elo_b, home_advantage=home_advantage)
+            if a_won:
                 standings[team_a].wins += 1
                 standings[team_b].losses += 1
             else:
                 standings[team_b].wins += 1
                 standings[team_a].losses += 1
+            increment_h2h(standings[team_a].h2h, team_b, won=a_won)
+            increment_h2h(standings[team_b].h2h, team_a, won=not a_won)
 
-        sorted_teams = sorted(standings.values(), key=lambda t: t.wins, reverse=True)
-        for team in sorted_teams[:PLAYOFF_TEAMS]:
-            playoff_counts[team.name] += 1
+        seeded = resolve_seeding(standings)
+        for team_name in seeded[:PLAYOFF_TEAMS]:
+            playoff_counts[team_name] += 1
 
     playoff_probs = {
         name: count / num_simulations for name, count in playoff_counts.items()
