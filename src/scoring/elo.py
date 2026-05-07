@@ -133,6 +133,7 @@ def replay_games(
     home_advantage: float = 0.0,
     season_regression: float = DEFAULT_SEASON_REGRESSION,
     use_mov: bool = True,
+    presorted: bool = False,
 ) -> EloReplay:
     """Replay games chronologically and return final ratings + per-game history.
 
@@ -151,12 +152,20 @@ def replay_games(
     When `use_mov=True`, each game's `final_score_a`/`final_score_b` are read
     and passed to `update_ratings` so blowouts move ratings more than narrow
     wins. Games missing scores still update at multiplier=1.0.
+
+    Pass `presorted=True` when the caller has already sorted by (date, event_id)
+    to skip the redundant sort — useful in grid-search loops over thousands of
+    replays of the same game list.
     """
     ratings: dict[str, float] = dict(initial_ratings or {})
     history: list[dict] = []
     prev_season: int | None = None
 
-    ordered = sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
+    ordered = (
+        games
+        if presorted
+        else sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
+    )
 
     for g in ordered:
         winner = g.get("winner_team")
