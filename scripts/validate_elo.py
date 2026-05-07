@@ -11,6 +11,18 @@ games that pure ratings don't capture. Season-boundary regression toward the
 mean is held fixed at DEFAULT_SEASON_REGRESSION; both grid and headline runs
 use it so K/H are tuned for the system as deployed.
 
+Calibration baseline: 2016–present, skip 2020. 2016 is warm-up (all teams
+enter at 1500); predictions are evaluated from 2017 onward (~1500+ games vs
+the prior ~574-game 2024–2025-only run).
+
+Note on production asymmetry: daily_update.py replays from 2024 only, while
+this script evaluates across 2017–present. The gap is benign: with
+DEFAULT_SEASON_REGRESSION=0.5, each season boundary halves a team's deviation
+from 1500, so 8 boundaries of history (2016→2024) contribute ~0.4% of the
+original signal to 2024 starting ratings — extending production replay back
+further would have negligible effect. The wider eval window here tests K/H
+robustness across many warmup scenarios, not just the single 2024→2025 one.
+
 Run from the repo root with the venv active:
     python -m scripts.validate_elo
 """
@@ -18,6 +30,7 @@ Run from the repo root with the venv active:
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 import numpy as np
@@ -34,25 +47,37 @@ from src.scoring.elo import (
 
 # Season windows. WNBA regular season runs roughly mid-May through September;
 # playoffs extend into October. Use generous windows so we catch everything.
+# 2020 is excluded: COVID bubble at a neutral site in Bradenton — applying
+# DEFAULT_HOME_ADVANTAGE to those games would systematically distort ratings.
 _SEASONS = [
-    (date(2024, 5, 1), date(2024, 10, 31), "2024"),
-    (date(2025, 5, 1), date(2025, 10, 31), "2025"),
+    (date(y, 5, 1), date(y, 10, 31), str(y))
+    for y in [2016, 2017, 2018, 2019, 2021, 2022, 2023, 2024, 2025]
 ]
-# Only evaluate predictions from this season onward — 2024 is warm-up.
-_EVAL_START = "2025-01-01"
+# Use 2016 as warm-up; evaluate from 2017 onward (~1500+ games).
+_EVAL_START = "2017-01-01"
 
 
 def _fetch_all_games() -> list[dict]:
-    """Pull games across all configured seasons, filter to completed regular/postseason."""
-    games: list[dict] = []
-    for start, end, label in _SEASONS:
-        season_games = fetch_games_for_range(start, end)
+    """Pull games across all configured seasons, filter to completed regular/postseason.
+
+    Fetches seasons in parallel (network-bound) then merges in chronological order.
+    """
+
+    def _fetch_one(season: tuple[date, date, str]) -> tuple[str, list[dict]]:
+        start, end, label = season
         finished = [
-            g for g in season_games if g["winner_team"] and g.get("season_type", 2) != 1
+            g
+            for g in fetch_games_for_range(start, end)
+            if g["winner_team"] and g.get("season_type", 2) != 1
         ]
         print(f"  {label}: {len(finished)} completed regular/postseason games")
-        games.extend(finished)
-    return games
+        return label, finished
+
+    with ThreadPoolExecutor(max_workers=len(_SEASONS)) as executor:
+        # executor.map preserves _SEASONS order, so merge is chronological.
+        results = list(executor.map(_fetch_one, _SEASONS))
+
+    return [g for _, season_games in results for g in season_games]
 
 
 def _replay_and_score(
@@ -62,6 +87,7 @@ def _replay_and_score(
     eval_start: str,
     season_regression: float = DEFAULT_SEASON_REGRESSION,
     use_mov: bool = False,
+    presorted: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
     """Replay games, return (pre-game win probs, outcomes, final ratings)."""
     replay = replay_games(
@@ -70,6 +96,7 @@ def _replay_and_score(
         home_advantage=home_advantage,
         season_regression=season_regression,
         use_mov=use_mov,
+        presorted=presorted,
     )
     probs: list[float] = []
     outcomes: list[float] = []
@@ -100,7 +127,7 @@ def _grid_search_k_h(
     for k in k_candidates:
         for h in h_candidates:
             probs, outcomes, _ = _replay_and_score(
-                games, float(k), float(h), eval_start, use_mov=use_mov
+                games, float(k), float(h), eval_start, use_mov=use_mov, presorted=True
             )
             if len(probs) == 0:
                 continue
@@ -142,6 +169,9 @@ def main() -> None:
         return
     print(f"Total: {len(games)} games across {len(_SEASONS)} seasons\n")
 
+    # Sort once here; pass presorted=True to every replay to skip redundant sorts.
+    games.sort(key=lambda g: (g.get("date", ""), g.get("event_id", "")))
+
     baseline_brier = 0.25
     baseline_ll = math.log(2)
     print(f"Baselines: random Brier={baseline_brier:.4f}, LogLoss={baseline_ll:.4f}")
@@ -151,7 +181,9 @@ def main() -> None:
     )
 
     print("Headline comparison:")
-    probs_neutral, outcomes, _ = _replay_and_score(games, DEFAULT_K, 0.0, _EVAL_START)
+    probs_neutral, outcomes, _ = _replay_and_score(
+        games, DEFAULT_K, 0.0, _EVAL_START, presorted=True
+    )
     _print_metrics(f"Neutral Elo (K={DEFAULT_K}, H=0)", probs_neutral, outcomes)
 
     probs_no_reg, _, _ = _replay_and_score(
@@ -160,6 +192,7 @@ def main() -> None:
         DEFAULT_HOME_ADVANTAGE,
         _EVAL_START,
         season_regression=0.0,
+        presorted=True,
     )
     _print_metrics(
         f"No regression  (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}, reg=0)",
@@ -168,7 +201,7 @@ def main() -> None:
     )
 
     probs_default, _, _ = _replay_and_score(
-        games, DEFAULT_K, DEFAULT_HOME_ADVANTAGE, _EVAL_START
+        games, DEFAULT_K, DEFAULT_HOME_ADVANTAGE, _EVAL_START, presorted=True
     )
     _print_metrics(
         f"Defaults       (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}, "
@@ -178,7 +211,12 @@ def main() -> None:
     )
 
     probs_mov, _, _ = _replay_and_score(
-        games, DEFAULT_K, DEFAULT_HOME_ADVANTAGE, _EVAL_START, use_mov=True
+        games,
+        DEFAULT_K,
+        DEFAULT_HOME_ADVANTAGE,
+        _EVAL_START,
+        use_mov=True,
+        presorted=True,
     )
     _print_metrics(
         f"Defaults + MOV (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}, mov=on)",
@@ -197,7 +235,9 @@ def main() -> None:
     )
 
     print("\nAt best (K, H):")
-    probs_best, _, ratings_best = _replay_and_score(games, best_k, best_h, _EVAL_START)
+    probs_best, _, ratings_best = _replay_and_score(
+        games, best_k, best_h, _EVAL_START, presorted=True
+    )
     _print_metrics(f"Elo (K={best_k:.0f}, H={best_h:.0f})", probs_best, outcomes)
     _print_calibration(f"K={best_k:.0f}, H={best_h:.0f}", probs_best, outcomes)
 
@@ -210,7 +250,7 @@ def main() -> None:
         f"LogLoss={mov_ll:.4f}, Brier={mov_br:.4f}"
     )
     probs_mov_best, _, _ = _replay_and_score(
-        games, mov_k, mov_h, _EVAL_START, use_mov=True
+        games, mov_k, mov_h, _EVAL_START, use_mov=True, presorted=True
     )
     _print_metrics(f"MOV (K={mov_k:.0f}, H={mov_h:.0f})", probs_mov_best, outcomes)
     _print_calibration(f"MOV K={mov_k:.0f}, H={mov_h:.0f}", probs_mov_best, outcomes)
@@ -261,15 +301,16 @@ def main() -> None:
         )
 
     print("\nConclusion:")
-    if abs(best_k - DEFAULT_K) <= 5.0 and abs(best_h - DEFAULT_HOME_ADVANTAGE) <= 5.0:
+    # Compare the MOV-on optimum against defaults — that's the deployed config.
+    if abs(mov_k - DEFAULT_K) <= 5.0 and abs(mov_h - DEFAULT_HOME_ADVANTAGE) <= 5.0:
         print(
             f"  Current defaults (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}, "
-            f"reg={DEFAULT_SEASON_REGRESSION:.3f}) are within the documented flat "
-            "region of the loss surface."
+            f"reg={DEFAULT_SEASON_REGRESSION:.3f}, mov=on) are within the flat "
+            f"region of the loss surface. MOV optimum: K={mov_k:.0f}, H={mov_h:.0f}."
         )
     else:
         print(
-            f"  Optimal (K={best_k:.0f}, H={best_h:.0f}) differs from defaults "
+            f"  MOV optimum (K={mov_k:.0f}, H={mov_h:.0f}) differs from defaults "
             f"(K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}) by more than the flat "
             "region. Consider updating DEFAULT_K / DEFAULT_HOME_ADVANTAGE in elo.py."
         )

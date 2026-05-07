@@ -17,9 +17,10 @@ from dataclasses import dataclass, field
 from datetime import date
 
 INITIAL_RATING = 1500.0
-# Calibrated against 2024 (warm-up) + 2025 (eval, 311 games) WNBA results.
-# Optimal (K, H) = (16, 50) by log-loss grid search with MOV enabled.
-# K is roughly half the no-MOV optimum (~K=36) because the MOV multiplier
+# Calibrated against 2016–2025 WNBA results (skip 2020 neutral-site bubble),
+# 2016 warm-up + 1910 evaluated games. Optimal (K, H) = (16, 45) with MOV on
+# by log-loss grid search; H=50 is within the flat region (ΔLogLoss <0.0003).
+# K is roughly half the no-MOV optimum (~K=34) because the MOV multiplier
 # now carries part of the per-game responsiveness K used to provide alone.
 # Re-validate after the 2026 season via scripts/validate_elo.py.
 DEFAULT_K = 16.0
@@ -132,6 +133,7 @@ def replay_games(
     home_advantage: float = 0.0,
     season_regression: float = DEFAULT_SEASON_REGRESSION,
     use_mov: bool = True,
+    presorted: bool = False,
 ) -> EloReplay:
     """Replay games chronologically and return final ratings + per-game history.
 
@@ -150,12 +152,20 @@ def replay_games(
     When `use_mov=True`, each game's `final_score_a`/`final_score_b` are read
     and passed to `update_ratings` so blowouts move ratings more than narrow
     wins. Games missing scores still update at multiplier=1.0.
+
+    Pass `presorted=True` when the caller has already sorted by (date, event_id)
+    to skip the redundant sort — useful in grid-search loops over thousands of
+    replays of the same game list.
     """
     ratings: dict[str, float] = dict(initial_ratings or {})
     history: list[dict] = []
     prev_season: int | None = None
 
-    ordered = sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
+    ordered = (
+        games
+        if presorted
+        else sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
+    )
 
     for g in ordered:
         winner = g.get("winner_team")
