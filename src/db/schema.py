@@ -68,6 +68,21 @@ class DailyRanking(Base):
     )
 
 
+class PlayoffProbability(Base):
+    __tablename__ = "playoff_probabilities"
+
+    id = Column(Integer, primary_key=True)
+    date = Column(String(10), nullable=False)  # YYYY-MM-DD
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
+    probability = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("date", "team_id", name="uq_playoff_prob"),
+        Index("idx_playoff_prob_date", "date"),
+    )
+
+
 def get_database_url() -> str:
     db_url = os.getenv("DATABASE_URL", "sqlite:///./data/games_to_watch.db")
     if db_url.startswith("sqlite:///./"):
