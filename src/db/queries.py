@@ -2,7 +2,7 @@
 
 from sqlalchemy.orm import Session
 
-from src.db.schema import DailyRanking, Game, PlayoffProbability, Team
+from src.db.schema import DailyRanking, Game, PlayoffProbability, SeasonConfig, Team
 
 
 def upsert_team(
@@ -314,3 +314,23 @@ def get_playoff_probabilities(session: Session, date: str) -> dict[int, float]:
         session.query(PlayoffProbability).filter(PlayoffProbability.date == date).all()
     )
     return {r.team_id: r.probability for r in records}
+
+
+def get_importance_max_swing(session: Session, season_year: int) -> float | None:
+    """Return the season-start importance ceiling, or None if not yet computed."""
+    cfg = session.get(SeasonConfig, season_year)
+    return cfg.importance_max_swing if cfg else None
+
+
+def save_importance_max_swing(
+    session: Session, season_year: int, max_swing: float
+) -> None:
+    """Persist the season-start importance ceiling (upsert by year)."""
+    cfg = session.get(SeasonConfig, season_year)
+    if cfg:
+        cfg.importance_max_swing = max_swing
+    else:
+        session.add(
+            SeasonConfig(season_year=season_year, importance_max_swing=max_swing)
+        )
+    session.commit()

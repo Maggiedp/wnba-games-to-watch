@@ -45,14 +45,6 @@ _EARLY_SEASON_DAYS = 28
 _REGRESSION_CANDIDATES = [0.0, 0.1, 0.2, 1 / 3, 0.5, 2 / 3, 1.0]
 
 
-def _apply_regression(ratings: dict[str, float], factor: float) -> dict[str, float]:
-    """Pull each rating toward INITIAL_RATING by `factor` (same formula as elo.py)."""
-    if factor <= 0:
-        return dict(ratings)
-    keep = 1.0 - factor
-    return {name: INITIAL_RATING + (r - INITIAL_RATING) * keep for name, r in ratings.items()}
-
-
 def _fetch_seasons() -> dict[int, list[dict]]:
     """Fetch completed regular-season games for each season in the calibration range."""
     print("Fetching game data from ESPN...")
@@ -103,7 +95,7 @@ def _test_boundary(
     ratings = dict(result.final_ratings)
 
     # Apply regression at the boundary we're testing (prior_year → next_year).
-    regressed = _apply_regression(ratings, regression)
+    _regress_toward_mean(ratings, regression)
 
     # First EARLY_SEASON_DAYS of next_year regular season.
     next_games = games_by_year.get(next_year, [])
@@ -119,8 +111,8 @@ def _test_boundary(
 
     probs, outcomes = [], []
     for game in early:
-        elo_a = regressed.get(game["team_a"], INITIAL_RATING)
-        elo_b = regressed.get(game["team_b"], INITIAL_RATING)
+        elo_a = ratings.get(game["team_a"], INITIAL_RATING)
+        elo_b = ratings.get(game["team_b"], INITIAL_RATING)
         pred = expected_win_prob(elo_a, elo_b, home_advantage=DEFAULT_HOME_ADVANTAGE)
         actual = 1.0 if game["winner_team"] == game["team_a"] else 0.0
         probs.append(pred)
@@ -221,10 +213,9 @@ def main() -> None:
         (r for r in rows if abs(r[0] - DEFAULT_SEASON_REGRESSION) < 1e-6), None
     )
 
-
     print(f"\nCalibration at best regression ({best_row[0]:.3f}):")
     print(f"  {'Bucket':<12} {'N':>5} {'Predicted':>10} {'Actual':>10} {'Error':>8}")
-    for row in calibration_table(np.array(best_row[4]), np.array(best_row[5])):
+    for row in calibration_table(best_row[4], best_row[5]):
         err = row["actual"] - row["avg_pred"]
         print(
             f"  {row['bucket']:<12} {row['n']:>5} {row['avg_pred']:>10.1%} "
@@ -234,7 +225,7 @@ def main() -> None:
     if default_row and abs(default_row[0] - best_row[0]) > 1e-6:
         print(f"\nCalibration at current default ({DEFAULT_SEASON_REGRESSION:.3f}):")
         print(f"  {'Bucket':<12} {'N':>5} {'Predicted':>10} {'Actual':>10} {'Error':>8}")
-        for row in calibration_table(np.array(default_row[4]), np.array(default_row[5])):
+        for row in calibration_table(default_row[4], default_row[5]):
             err = row["actual"] - row["avg_pred"]
             print(
                 f"  {row['bucket']:<12} {row['n']:>5} {row['avg_pred']:>10.1%} "
@@ -243,7 +234,6 @@ def main() -> None:
 
     # ── Conclusion ───────────────────────────────────────────────────────────
     print("\nConclusion:")
-    delta = best_row[1] - (default_row[1] if default_row else best_row[1])
     if abs(best_row[0] - DEFAULT_SEASON_REGRESSION) < 0.05:
         print(
             f"  Current default ({DEFAULT_SEASON_REGRESSION:.3f}) is near the optimum. "
