@@ -17,9 +17,10 @@ from dataclasses import dataclass, field
 from datetime import date
 
 INITIAL_RATING = 1500.0
-# Calibrated against 2024 (warm-up) + 2025 (eval, 311 games) WNBA results.
-# Optimal (K, H) = (16, 50) by log-loss grid search with MOV enabled.
-# K is roughly half the no-MOV optimum (~K=36) because the MOV multiplier
+# Calibrated against 2016–2025 WNBA results (skip 2020 neutral-site bubble),
+# 2016 warm-up + 1910 evaluated games. Optimal (K, H) = (16, 45) with MOV on
+# by log-loss grid search; H=50 is within the flat region (ΔLogLoss <0.0003).
+# K is roughly half the no-MOV optimum (~K=34) because the MOV multiplier
 # now carries part of the per-game responsiveness K used to provide alone.
 # Re-validate after the 2026 season via scripts/validate_elo.py.
 DEFAULT_K = 16.0

@@ -11,6 +11,10 @@ games that pure ratings don't capture. Season-boundary regression toward the
 mean is held fixed at DEFAULT_SEASON_REGRESSION; both grid and headline runs
 use it so K/H are tuned for the system as deployed.
 
+Calibration baseline: 2016–present, skip 2020. 2016 is warm-up (all teams
+enter at 1500); predictions are evaluated from 2017 onward (~1500+ games vs
+the prior ~574-game 2024–2025-only run).
+
 Run from the repo root with the venv active:
     python -m scripts.validate_elo
 """
@@ -34,12 +38,22 @@ from src.scoring.elo import (
 
 # Season windows. WNBA regular season runs roughly mid-May through September;
 # playoffs extend into October. Use generous windows so we catch everything.
+# 2020 is excluded: COVID bubble at a neutral site in Bradenton — applying
+# DEFAULT_HOME_ADVANTAGE to those games would systematically distort ratings.
 _SEASONS = [
+    (date(2016, 5, 1), date(2016, 10, 31), "2016"),
+    (date(2017, 5, 1), date(2017, 10, 31), "2017"),
+    (date(2018, 5, 1), date(2018, 10, 31), "2018"),
+    (date(2019, 5, 1), date(2019, 10, 31), "2019"),
+    # 2020 skipped — neutral-site COVID bubble
+    (date(2021, 5, 1), date(2021, 10, 31), "2021"),
+    (date(2022, 5, 1), date(2022, 10, 31), "2022"),
+    (date(2023, 5, 1), date(2023, 10, 31), "2023"),
     (date(2024, 5, 1), date(2024, 10, 31), "2024"),
     (date(2025, 5, 1), date(2025, 10, 31), "2025"),
 ]
-# Only evaluate predictions from this season onward — 2024 is warm-up.
-_EVAL_START = "2025-01-01"
+# Use 2016 as warm-up; evaluate from 2017 onward (~1500+ games).
+_EVAL_START = "2017-01-01"
 
 
 def _fetch_all_games() -> list[dict]:
@@ -261,15 +275,16 @@ def main() -> None:
         )
 
     print("\nConclusion:")
-    if abs(best_k - DEFAULT_K) <= 5.0 and abs(best_h - DEFAULT_HOME_ADVANTAGE) <= 5.0:
+    # Compare the MOV-on optimum against defaults — that's the deployed config.
+    if abs(mov_k - DEFAULT_K) <= 5.0 and abs(mov_h - DEFAULT_HOME_ADVANTAGE) <= 5.0:
         print(
             f"  Current defaults (K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}, "
-            f"reg={DEFAULT_SEASON_REGRESSION:.3f}) are within the documented flat "
-            "region of the loss surface."
+            f"reg={DEFAULT_SEASON_REGRESSION:.3f}, mov=on) are within the flat "
+            f"region of the loss surface. MOV optimum: K={mov_k:.0f}, H={mov_h:.0f}."
         )
     else:
         print(
-            f"  Optimal (K={best_k:.0f}, H={best_h:.0f}) differs from defaults "
+            f"  MOV optimum (K={mov_k:.0f}, H={mov_h:.0f}) differs from defaults "
             f"(K={DEFAULT_K}, H={DEFAULT_HOME_ADVANTAGE}) by more than the flat "
             "region. Consider updating DEFAULT_K / DEFAULT_HOME_ADVANTAGE in elo.py."
         )
