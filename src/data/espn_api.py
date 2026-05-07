@@ -10,6 +10,16 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# ESPN uses inconsistent capitalizations for some team names across endpoints.
+_TEAM_NAME_ALIASES: dict[str, str] = {
+    "Connecticut SUN": "Connecticut Sun",
+}
+
+
+def _canonical_name(name: str) -> str:
+    return _TEAM_NAME_ALIASES.get(name, name)
+
+
 SITE_API = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba"
 CORE_API = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba"
 
@@ -49,7 +59,10 @@ def _fetch_teams_raw() -> list:
 
 def fetch_team_id_map() -> dict[int, str]:
     """Return {espn_team_id: display_name} for all WNBA teams."""
-    return {int(t["team"]["id"]): t["team"]["displayName"] for t in _fetch_teams_raw()}
+    return {
+        int(t["team"]["id"]): _canonical_name(t["team"]["displayName"])
+        for t in _fetch_teams_raw()
+    }
 
 
 def fetch_team_details() -> dict[str, dict]:
@@ -65,7 +78,7 @@ def fetch_team_details() -> dict[str, dict]:
                 break
         if not logo_url and team.get("logos"):
             logo_url = team["logos"][0].get("href", "")
-        out[team["displayName"]] = {
+        out[_canonical_name(team["displayName"])] = {
             "abbreviation": team.get("abbreviation", ""),
             "logo_url": logo_url,
         }
@@ -187,8 +200,8 @@ def _parse_event(event: dict) -> Optional[dict]:
             (c for c in competitors if c.get("homeAway") == "away"), competitors[1]
         )
 
-        team_a = team_a_info["team"]["displayName"]
-        team_b = team_b_info["team"]["displayName"]
+        team_a = _canonical_name(team_a_info["team"]["displayName"])
+        team_b = _canonical_name(team_b_info["team"]["displayName"])
 
         status = comp["status"]["type"]["name"]
         is_final = status == "STATUS_FINAL"
