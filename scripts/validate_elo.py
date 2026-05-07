@@ -15,6 +15,14 @@ Calibration baseline: 2016–present, skip 2020. 2016 is warm-up (all teams
 enter at 1500); predictions are evaluated from 2017 onward (~1500+ games vs
 the prior ~574-game 2024–2025-only run).
 
+Note on production asymmetry: daily_update.py replays from 2024 only, while
+this script evaluates across 2017–present. The gap is benign: with
+DEFAULT_SEASON_REGRESSION=0.5, each season boundary halves a team's deviation
+from 1500, so 8 boundaries of history (2016→2024) contribute ~0.4% of the
+original signal to 2024 starting ratings — extending production replay back
+further would have negligible effect. The wider eval window here tests K/H
+robustness across many warmup scenarios, not just the single 2024→2025 one.
+
 Run from the repo root with the venv active:
     python -m scripts.validate_elo
 """
