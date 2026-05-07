@@ -83,6 +83,16 @@ class PlayoffProbability(Base):
     )
 
 
+class SeasonConfig(Base):
+    """Per-season calibration values computed once at season open."""
+
+    __tablename__ = "season_config"
+
+    season_year = Column(Integer, primary_key=True)
+    importance_max_swing = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=func.now())
+
+
 def get_database_url() -> str:
     db_url = os.getenv("DATABASE_URL", "sqlite:///./data/games_to_watch.db")
     if db_url.startswith("sqlite:///./"):

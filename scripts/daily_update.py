@@ -20,8 +20,10 @@ from src.data.wnba_schedule import (
 from src.db.queries import (
     get_all_teams,
     get_completed_games,
+    get_importance_max_swing,
     get_team_by_id,
     get_team_by_name,
+    save_importance_max_swing,
     upsert_daily_ranking,
     upsert_game,
     upsert_playoff_probability,
@@ -46,6 +48,20 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+def _make_team_id_resolver(session):
+    """Return a cached team-name → team-id lookup for a single session."""
+    cache: dict[str, int | None] = {}
+
+    def resolve(name: str) -> int | None:
+        if name not in cache:
+            team = get_team_by_name(session, name)
+            cache[name] = team.id if team else None
+        return cache[name]
+
+    return resolve
+
 
 # How far back to pull games for Elo warm-up. Two prior seasons gives enough
 # updates that ratings have separated from the 1500 seed by opening day.
@@ -110,14 +126,7 @@ def fetch_and_store_games(session) -> list[dict]:
     broadcasters = fetch_wnba_schedule_broadcasters(today)
     games = enhance_games_with_broadcasters(games, broadcasters)
 
-    team_cache: dict[str, int | None] = {}
-
-    def get_cached_team_id(name: str) -> int | None:
-        if name not in team_cache:
-            team = get_team_by_name(session, name)
-            team_cache[name] = team.id if team else None
-        return team_cache[name]
-
+    get_cached_team_id = _make_team_id_resolver(session)
     stored = 0
     for game in games:
         team_a, team_b = game.get("team_a", ""), game.get("team_b", "")
@@ -196,6 +205,30 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
     return standings
 
 
+def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float:
+    """Return the expected peak importance swing for this season.
+
+    Runs a single 10k Monte Carlo from equal (0-0) standings over all
+    non-preseason games, then returns the max swing across every game.
+    Called once per season on the first daily-update run and cached in DB.
+    """
+    zero_standings = {
+        team: {**info, "wins": 0, "losses": 0, "h2h": {}}
+        for team, info in standings.items()
+    }
+    remaining = [
+        (g["team_a"], g["team_b"]) for g in all_games if g.get("season_type", 2) != 1
+    ]
+    _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+        zero_standings, remaining, num_simulations=10000, return_matrix=True
+    )
+    team_names = list(zero_standings.keys())
+    swings = compute_importance_from_matrix(
+        outcome_matrix, playoff_sets, remaining, team_names
+    )
+    return max(swings) if swings else 0.75
+
+
 def compute_daily_scores(
     session, games: list[dict], standings: dict
 ) -> tuple[list[dict], dict[str, float]]:
@@ -250,12 +283,35 @@ def compute_daily_scores(
     )
     logger.info(f"Computed importance swings for {len(raw_swings)} remaining games")
 
+    # Quality: normalize by current season's live BPI spread (slow-moving, reflects
+    # real team-strength changes).
+    bpi_values = [s["bpi"] for s in standings.values()]
+    bpi_min, bpi_max = min(bpi_values), max(bpi_values)
+
+    # Importance: normalize by the season-start ceiling (computed once from equal
+    # standings over the full schedule, then cached in DB). This keeps scores
+    # comparable all season — later games naturally score higher as swings grow.
+    season_year = int(today[:4])
+    importance_ceiling = get_importance_max_swing(session, season_year)
+    if importance_ceiling is None:
+        logger.info(
+            "First run of season — calibrating importance ceiling from equal standings..."
+        )
+        importance_ceiling = _calibrate_season_max_swing(standings, games)
+        save_importance_max_swing(session, season_year, importance_ceiling)
+        logger.info(f"Season importance ceiling: {importance_ceiling:.3f}")
+
+    logger.info(
+        f"Normalization: BPI=[{bpi_min:.2f}, {bpi_max:.2f}], "
+        f"importance_ceiling={importance_ceiling:.3f}"
+    )
+
     scored = []
     for game in upcoming_games:
         team_a, team_b = game["team_a"], game["team_b"]
         bpi_a = standings.get(team_a, {}).get("bpi", 0.0)
         bpi_b = standings.get(team_b, {}).get("bpi", 0.0)
-        quality = compute_quality_score(bpi_a, bpi_b)
+        quality = compute_quality_score(bpi_a, bpi_b, bpi_min=bpi_min, bpi_max=bpi_max)
 
         game_date = game.get("date", today)
         importance: float | None
@@ -264,7 +320,9 @@ def compute_daily_scores(
         else:
             game_index = remaining_event_index.get(game.get("event_id", ""))
             if game_index is not None:
-                importance = normalize_importance_score(raw_swings[game_index])
+                importance = normalize_importance_score(
+                    raw_swings[game_index], max_swing=importance_ceiling
+                )
             else:
                 importance = None
 
@@ -292,14 +350,7 @@ def compute_daily_scores(
 
 
 def store_daily_rankings(session, scored_games: list[dict]) -> None:
-    team_cache: dict[str, int | None] = {}
-
-    def get_cached_team_id(name: str) -> int | None:
-        if name not in team_cache:
-            team = get_team_by_name(session, name)
-            team_cache[name] = team.id if team else None
-        return team_cache[name]
-
+    get_cached_team_id = _make_team_id_resolver(session)
     stored = 0
     for game in scored_games:
         team_a_id = get_cached_team_id(game["team_a"])
@@ -328,14 +379,7 @@ def store_playoff_probabilities(
     session, playoff_probs: dict[str, float], snapshot_date: str
 ) -> None:
     """Persist per-team playoff probabilities for a given date."""
-    team_cache: dict[str, int | None] = {}
-
-    def get_cached_team_id(name: str) -> int | None:
-        if name not in team_cache:
-            team = get_team_by_name(session, name)
-            team_cache[name] = team.id if team else None
-        return team_cache[name]
-
+    get_cached_team_id = _make_team_id_resolver(session)
     stored = 0
     for team_name, prob in playoff_probs.items():
         team_id = get_cached_team_id(team_name)

@@ -33,15 +33,27 @@ def normalize_quality_score(shifted_hm: float) -> float:
     return (clamped - shifted_min) / (shifted_max - shifted_min) * 100
 
 
-def compute_quality_score(bpi_a: float, bpi_b: float) -> float:
+def compute_quality_score(
+    bpi_a: float,
+    bpi_b: float,
+    bpi_min: float = _BPI_MIN,
+    bpi_max: float = _BPI_MAX,
+) -> float:
     """Compute normalized game quality score (0-100).
 
     Higher = better matchup (strong teams, evenly matched).
     Uses harmonic mean so a lopsided matchup (5 vs -5) scores lower
     than an even one (0 vs 0), even if arithmetic means are similar.
+
+    `bpi_min`/`bpi_max` define the normalization endpoints. Pass the
+    season's observed team BPI range to use the full 0–100 scale;
+    leave as defaults for fixed-scale scoring.
     """
-    hm = harmonic_mean_shifted(bpi_a, bpi_b)
-    score = normalize_quality_score(hm)
+    offset = abs(bpi_min) + 1.0
+    sa, sb = bpi_a + offset, bpi_b + offset
+    hm = 2 * sa * sb / (sa + sb)
+    shifted_max = bpi_max + offset
+    score = max(0.0, min(100.0, (hm - 1.0) / (shifted_max - 1.0) * 100))
     logger.debug(
         f"Quality: BPI({bpi_a:.2f}, {bpi_b:.2f}) → HM={hm:.2f} → {score:.1f}/100"
     )
