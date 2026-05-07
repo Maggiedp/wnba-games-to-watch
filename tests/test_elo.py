@@ -226,9 +226,9 @@ def test_calibrated_defaults_pinned():
     assert DEFAULT_HOME_ADVANTAGE == 50.0
 
 
-def test_default_season_regression_is_one_third():
-    """Pin the FiveThirtyEight-standard regression so a change is caught deliberately."""
-    assert math.isclose(DEFAULT_SEASON_REGRESSION, 1.0 / 3.0)
+def test_default_season_regression():
+    """Pin the calibrated regression value so a change is caught deliberately."""
+    assert math.isclose(DEFAULT_SEASON_REGRESSION, 0.5)
 
 
 def test_home_toss_up_predicts_calibrated_win_rate():

@@ -19,16 +19,17 @@ from datetime import date
 INITIAL_RATING = 1500.0
 # Calibrated against 2024 (warm-up) + 2025 (eval, 311 games) WNBA results.
 # Optimal (K, H) = (16, 50) by log-loss grid search with MOV enabled.
-# K is roughly half the no-MOV optimum (~K=34) because the MOV multiplier
+# K is roughly half the no-MOV optimum (~K=36) because the MOV multiplier
 # now carries part of the per-game responsiveness K used to provide alone.
 # Re-validate after the 2026 season via scripts/validate_elo.py.
 DEFAULT_K = 16.0
 DEFAULT_HOME_ADVANTAGE = 50.0
 # Pull each team's rating this fraction of the way toward INITIAL_RATING at
-# the start of every new season. 1/3 follows FiveThirtyEight's NBA practice
-# and accounts for roster turnover so opening-week ratings aren't carried
-# entirely from the prior season.
-DEFAULT_SEASON_REGRESSION = 1.0 / 3.0
+# the start of every new season. Calibrated against 2016–present WNBA data
+# (scripts/validate_regression.py): 0.5 minimizes early-season Brier score
+# across 7 season boundaries. Higher than FiveThirtyEight's NBA 1/3 because
+# the WNBA's shorter season (~40 games) leaves end-of-season ratings noisier.
+DEFAULT_SEASON_REGRESSION = 0.5
 _ELO_SCALE = 400.0
 
 
