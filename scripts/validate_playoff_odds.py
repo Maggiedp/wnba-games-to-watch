@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from datetime import date
 
-
 from src.scoring.elo import INITIAL_RATING
 from src.scoring.monte_carlo import TeamStanding
 from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
@@ -44,7 +43,7 @@ def _build_standings(
     """
     standings: dict[str, dict] = {}
     for g in season_games:
-        if up_to_date and g.get("date", "") > up_to_date:
+        if up_to_date is not None and g.get("date", "") > up_to_date:
             continue
         if not g.get("winner_team") or g.get("season_type", 2) == 1:
             continue

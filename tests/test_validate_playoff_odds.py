@@ -108,6 +108,10 @@ def test_get_actual_playoffs_top_8():
     for solo-member win buckets.
     """
     teams = [f"Team_{c}" for c in "ABCDEFGHIJKL"]  # 12 teams
+    win_counts = [len(teams) - 1 - i for i in range(len(teams))]
+    assert len(set(win_counts)) == len(win_counts), (
+        "all win counts must be unique so synthetic names are safe"
+    )
     games = []
     for i, team in enumerate(teams):
         n_wins = len(teams) - 1 - i  # 11, 10, 9, ..., 0
