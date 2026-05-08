@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from typing import NamedTuple
 
 import numpy as np
 
@@ -34,7 +35,14 @@ _SNAPSHOT_MD = ["06-15", "07-15", "08-15"]
 _MIN_COMPLETED = 5
 _NUM_SIMS = 2000
 # Custom bucket boundaries: finer split at the top where overconfidence shows up.
+# Upper sentinel is 1.01 so prob=1.0 falls into the top bucket (mask uses < hi).
 _CALIBRATION_BOUNDS = [0.0, 0.2, 0.4, 0.6, 0.8, 0.9, 1.01]
+
+
+class _Record(NamedTuple):
+    prob: float
+    made: float  # 1.0 or 0.0
+    snapshot: str
 
 
 def _build_standings(
@@ -116,8 +124,6 @@ def _get_actual_playoffs(
 
 
 def _fetch_all_games() -> list[dict]:
-    """Fetch all configured seasons in parallel; return chronologically sorted completed games."""
-
     def _fetch_one(season: tuple[date, date, str]) -> list[dict]:
         start, end, label = season
         games = [
@@ -181,9 +187,8 @@ def main() -> None:
         if year_str.isdigit():
             by_year[int(year_str)].append(g)
 
-    # (predicted_prob, actual_made_playoffs_float, snapshot_md)
-    records: list[tuple[float, float, str]] = []
-    # year -> md -> (playoff_probs_dict, actual_playoffs_set) — 2024/2025 only
+    records: list[_Record] = []
+    # 2024/2025 only — for eyeball sample check at end
     sample: dict[int, dict[str, tuple[dict[str, float], set[str]]]] = {}
 
     for eval_year in sorted(_EVAL_YEARS):
@@ -192,7 +197,7 @@ def main() -> None:
             print(f"{eval_year}: no games found, skipping")
             continue
 
-        # End-of-season Elo for tiebreaker consistency in actual-playoff determination
+        # needed for tiebreaker consistency in _get_actual_playoffs
         cutoff = f"{eval_year}-10-31"
         games_through_season = [g for g in all_games if g.get("date", "") <= cutoff]
         end_elo = replay_games(games_through_season, presorted=True).final_ratings
@@ -238,7 +243,9 @@ def main() -> None:
             )
 
             for team, prob in playoff_probs.items():
-                records.append((prob, float(team in actual_playoffs), md))
+                records.append(
+                    _Record(prob=prob, made=float(team in actual_playoffs), snapshot=md)
+                )
 
             if eval_year in (2024, 2025):
                 sample.setdefault(eval_year, {})[md] = (playoff_probs, actual_playoffs)
@@ -247,27 +254,28 @@ def main() -> None:
         print("No data collected — check season fetch.")
         return
 
-    probs_all = np.array([r[0] for r in records])
-    outcomes_all = np.array([r[1] for r in records])
+    probs_all = np.array([r.prob for r in records])
+    outcomes_all = np.array([r.made for r in records])
 
     print(f"\n{'=' * 60}")
     print(f"Total observations: {len(records)} (team × snapshot pairs)")
     _print_calibration("All snapshots combined", probs_all, outcomes_all)
 
     for md in _SNAPSHOT_MD:
-        mask = np.array([r[2] == md for r in records])
-        if mask.sum() > 0:
+        mask = np.array([r.snapshot == md for r in records])
+        if mask.any():
             _print_calibration(f"Snapshot {md}", probs_all[mask], outcomes_all[mask])
 
     # Top-bucket overconfidence verdict
-    top_mask = probs_all >= 0.9
+    top_thresh = _CALIBRATION_BOUNDS[-2]
+    top_mask = probs_all >= top_thresh
     print(f"\n{'=' * 60}")
-    if top_mask.sum() > 0:
+    if top_mask.any():
         top_pred = float(probs_all[top_mask].mean())
         top_actual = float(outcomes_all[top_mask].mean())
         err = top_actual - top_pred
         print(
-            f"90–100% bucket: N={top_mask.sum()}, "
+            f"{top_thresh:.0%}–100% bucket: N={top_mask.sum()}, "
             f"predicted={top_pred:.1%}, actual={top_actual:.1%}, error={err:+.1%}"
         )
         if err < -0.05:
