@@ -6,6 +6,7 @@ from src.scoring.elo import (
     DEFAULT_HOME_ADVANTAGE,
     DEFAULT_K,
     DEFAULT_SEASON_REGRESSION,
+    EXPANSION_SEED_RATING,
     INITIAL_RATING,
     _mov_multiplier,
     expected_win_prob,
@@ -171,8 +172,8 @@ def test_replay_sorts_by_date():
     assert result.history[1]["date"] == "2025-06-01"
     # A 1-1 B net; home bonus applied to team A both times. With H>0, A's win
     # was more expected and B's win was less expected, so net A drifts down.
-    assert result.final_ratings["A"] < INITIAL_RATING
-    assert result.final_ratings["B"] > INITIAL_RATING
+    assert result.final_ratings["A"] < EXPANSION_SEED_RATING
+    assert result.final_ratings["B"] > EXPANSION_SEED_RATING
 
 
 def test_replay_skips_games_without_winner():
@@ -203,8 +204,8 @@ def test_replay_records_pre_game_ratings():
         },
     ]
     result = replay_games(games)
-    assert result.history[1]["pre_a"] > INITIAL_RATING
-    assert result.history[1]["pre_b"] < INITIAL_RATING
+    assert result.history[1]["pre_a"] > EXPANSION_SEED_RATING
+    assert result.history[1]["pre_b"] < EXPANSION_SEED_RATING
 
 
 def test_k_factor_scales_update_magnitude():
@@ -332,10 +333,11 @@ def test_season_boundary_regresses_ratings_toward_mean():
     with_reg = replay_games(games, season_regression=1.0 / 3.0, home_advantage=0.0)
 
     # A built a lead in 2024 with both implementations.
-    assert no_reg.history[1]["pre_a"] > INITIAL_RATING
+    assert no_reg.history[1]["pre_a"] > EXPANSION_SEED_RATING
 
     # With regression, A entered the 2025 game closer to 1500 than without.
-    assert with_reg.history[2]["pre_a"] < no_reg.history[2]["pre_a"]
+    # A starts below 1500 so regression pushes up; no_reg stays lower.
+    assert with_reg.history[2]["pre_a"] > no_reg.history[2]["pre_a"]
     assert abs(with_reg.history[2]["pre_a"] - INITIAL_RATING) < abs(
         no_reg.history[2]["pre_a"] - INITIAL_RATING
     )
