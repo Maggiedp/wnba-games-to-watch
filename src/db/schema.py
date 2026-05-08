@@ -11,6 +11,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     func,
+    text,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -26,7 +27,7 @@ class Team(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), unique=True, nullable=False)
-    abbreviation = Column(String(8), default="")
+    abbreviation = Column(String(16), default="")
     logo_url = Column(String(500), default="")
     bpi_rating = Column(Float, default=0.0)
     last_updated = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -114,6 +115,15 @@ def get_engine():
 def init_db():
     engine = get_engine()
     Base.metadata.create_all(engine)
+    # Widen abbreviation column if it's still VARCHAR(8) from old schema.
+    # ESPN started sending longer abbreviations (e.g. "CONNECTICU") in 2026.
+    # SQLite doesn't support ALTER COLUMN TYPE; skip it for local dev.
+    if engine.dialect.name == "postgresql":
+        with engine.connect() as conn:
+            conn.execute(
+                text("ALTER TABLE teams ALTER COLUMN abbreviation TYPE VARCHAR(16)")
+            )
+            conn.commit()
     return engine
 
 
