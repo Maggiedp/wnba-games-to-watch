@@ -17,6 +17,14 @@ from dataclasses import dataclass, field
 from datetime import date
 
 INITIAL_RATING = 1500.0
+# Calibrated against the old Portland Fire (~30% win rate in 2000–01) and
+# general WNBA/NBA expansion baselines; maps to ~36% expected win rate vs. a
+# league-average opponent. INITIAL_RATING is the regression target (league
+# mean); this is a separate, lower prior for genuinely new franchises.
+# The Golden State Valkyries (2025) are a known outlier — well-funded and
+# built to compete immediately — so their 50% year-1 rate is not the right
+# baseline. Re-evaluate after Toronto Tempo and Portland Fire complete 2026.
+EXPANSION_SEED_RATING = 1350.0
 # Calibrated against 2016–2025 WNBA results (skip 2020 neutral-site bubble),
 # 2016 warm-up + 1910 evaluated games. Optimal (K, H) = (16, 45) with MOV on
 # by log-loss grid search; H=50 is within the flat region (ΔLogLoss <0.0003).
@@ -181,8 +189,8 @@ def replay_games(
                 _regress_toward_mean(ratings, season_regression)
             prev_season = season
 
-        ra = ratings.setdefault(ta, INITIAL_RATING)
-        rb = ratings.setdefault(tb, INITIAL_RATING)
+        ra = ratings.setdefault(ta, EXPANSION_SEED_RATING)
+        rb = ratings.setdefault(tb, EXPANSION_SEED_RATING)
         team_a_won = winner == ta
 
         mov: int | None = None
