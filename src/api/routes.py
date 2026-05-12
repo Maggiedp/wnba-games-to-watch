@@ -284,24 +284,15 @@ _HOMEPAGE_HTML = f"""
             }}
 
             /* ---------- Inline team playoff probability ---------- */
-            .team-prob {{
-                font-size: 0.72rem;
-                color: var(--text-subtle);
-                font-variant-numeric: tabular-nums;
-                margin-top: 1px;
-                line-height: 1;
-                font-family: var(--body);
-            }}
-
-            .win-prob {{
+            .team-prob, .win-prob {{
                 font-size: 0.72rem;
                 color: var(--text-subtle);
                 font-variant-numeric: tabular-nums;
                 line-height: 1;
                 font-family: var(--body);
-                margin-top: 3px;
-                width: 100%;
             }}
+            .team-prob {{ margin-top: 1px; }}
+            .win-prob {{ margin-top: 3px; width: 100%; }}
 
             /* ---------- Controls ---------- */
             .controls {{
