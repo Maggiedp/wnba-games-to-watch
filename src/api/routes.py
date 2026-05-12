@@ -1215,8 +1215,9 @@ _HOMEPAGE_HTML = f"""
                 const importanceTitle = game.importance_score == null
                     ? 'Preseason game — not simulated'
                     : 'Playoff stakes from Monte Carlo';
-                const winProbStat = winProbText(game)
-                    ? `<span class="featured-stat"><span class="featured-stat-label">Win prob</span><span class="featured-stat-value">${{winProbText(game)}}</span></span>`
+                const wp = winProbText(game);
+                const winProbStat = wp
+                    ? `<span class="featured-stat"><span class="featured-stat-label">Win prob</span><span class="featured-stat-value">${{wp}}</span></span>`
                     : '';
 
                 container.innerHTML = `
