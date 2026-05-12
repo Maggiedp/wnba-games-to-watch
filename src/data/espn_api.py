@@ -88,7 +88,8 @@ def fetch_team_details() -> dict[str, dict]:
 def fetch_bpi_ratings() -> dict[str, float]:
     """Return {team_display_name: bpi_value} for the current season."""
     team_names = fetch_team_id_map()
-    data = _get(f"{CORE_API}/seasons/2026/powerindex", limit=50)
+    season = _SEASON_END.year
+    data = _get(f"{CORE_API}/seasons/{season}/powerindex", limit=50)
     ratings = {}
     for item in data.get("items", []):
         ref = item.get("team", {}).get("$ref", "")
@@ -102,7 +103,10 @@ def fetch_bpi_ratings() -> dict[str, float]:
             if stat["name"] == "bpi":
                 ratings[name] = stat["value"]
                 break
-    logger.info(f"Fetched BPI for {len(ratings)} teams from 2026 season")
+    if not ratings:
+        logger.error(f"Could not fetch BPI ratings for {season} season")
+    else:
+        logger.info(f"Fetched BPI for {len(ratings)} teams from {season} season")
     return ratings
 
 
