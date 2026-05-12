@@ -30,6 +30,7 @@ class GameResponse(BaseModel):
     broadcaster: str
     team_a_playoff_prob: float | None = None
     team_b_playoff_prob: float | None = None
+    win_prob_a: float | None = None
 
     class Config:
         from_attributes = True
@@ -88,6 +89,7 @@ def format_games_response(
                 broadcaster=ranking.broadcaster,
                 team_a_playoff_prob=prob_by_team_id.get(ranking.team_a_id),
                 team_b_playoff_prob=prob_by_team_id.get(ranking.team_b_id),
+                win_prob_a=ranking.win_prob_a,
             )
         )
 

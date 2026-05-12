@@ -150,3 +150,62 @@ def test_format_games_response_playoff_probs_none_when_missing(session, team_ids
 
     assert resp.team_a_playoff_prob is None
     assert resp.team_b_playoff_prob is None
+
+
+def test_format_games_response_passes_win_prob(session, team_ids):
+    """win_prob_a from DailyRanking flows through to GameResponse."""
+    from datetime import datetime
+
+    a_id, b_id = team_ids
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    upsert_game(
+        session, team_a_id=a_id, team_b_id=b_id, date=today, time="", broadcaster=""
+    )
+    upsert_daily_ranking(
+        session,
+        date=today,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=40.0,
+        overall_score=46.0,
+        broadcaster="",
+        win_prob_a=0.62,
+    )
+
+    from src.db.queries import get_daily_rankings
+
+    rankings = get_daily_rankings(session, today)
+    [resp] = format_games_response(rankings, session)
+
+    assert resp.win_prob_a == pytest.approx(0.62)
+
+
+def test_format_games_response_win_prob_none_when_missing(session, team_ids):
+    """win_prob_a is None in response when not stored."""
+    from datetime import datetime
+
+    a_id, b_id = team_ids
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    upsert_game(
+        session, team_a_id=a_id, team_b_id=b_id, date=today, time="", broadcaster=""
+    )
+    upsert_daily_ranking(
+        session,
+        date=today,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=None,
+        overall_score=30.0,
+        broadcaster="",
+    )
+
+    from src.db.queries import get_daily_rankings
+
+    rankings = get_daily_rankings(session, today)
+    [resp] = format_games_response(rankings, session)
+
+    assert resp.win_prob_a is None
