@@ -115,13 +115,44 @@ def get_engine():
 def init_db():
     engine = get_engine()
     Base.metadata.create_all(engine)
-    # Widen abbreviation column if it's still VARCHAR(8) from old schema.
-    # ESPN started sending longer abbreviations (e.g. "CONNECTICU") in 2026.
-    # SQLite doesn't support ALTER COLUMN TYPE; skip it for local dev.
+    # SQLite doesn't support ALTER COLUMN TYPE or DO blocks; skip for local dev.
     if engine.dialect.name == "postgresql":
         with engine.connect() as conn:
+            # Widen abbreviation column if it's still VARCHAR(8) from old schema.
+            # ESPN started sending longer abbreviations (e.g. "CONNECTICU") in 2026.
             conn.execute(
                 text("ALTER TABLE teams ALTER COLUMN abbreviation TYPE VARCHAR(16)")
+            )
+            # Merge stale pre-normalization team name aliases into their canonical forms.
+            # Before _canonical_name() was applied consistently, ESPN's all-caps variant
+            # "Connecticut SUN" could end up stored as a separate row alongside the
+            # correct "Connecticut Sun", causing assert_all_teams_have_conferences to fail.
+            conn.execute(
+                text("""
+                DO $$
+                DECLARE
+                    old_id INTEGER;
+                    new_id INTEGER;
+                    alias_pairs TEXT[][] := ARRAY[ARRAY['Connecticut SUN', 'Connecticut Sun']];
+                    pair TEXT[];
+                BEGIN
+                    FOREACH pair SLICE 1 IN ARRAY alias_pairs LOOP
+                        SELECT id INTO old_id FROM teams WHERE name = pair[1];
+                        SELECT id INTO new_id FROM teams WHERE name = pair[2];
+                        IF old_id IS NOT NULL AND new_id IS NOT NULL THEN
+                            UPDATE games SET team_a_id = new_id WHERE team_a_id = old_id;
+                            UPDATE games SET team_b_id = new_id WHERE team_b_id = old_id;
+                            UPDATE games SET winner_id = new_id WHERE winner_id = old_id;
+                            UPDATE daily_rankings SET team_a_id = new_id WHERE team_a_id = old_id;
+                            UPDATE daily_rankings SET team_b_id = new_id WHERE team_b_id = old_id;
+                            UPDATE playoff_probabilities SET team_id = new_id WHERE team_id = old_id;
+                            DELETE FROM teams WHERE id = old_id;
+                        ELSIF old_id IS NOT NULL THEN
+                            UPDATE teams SET name = pair[2] WHERE id = old_id;
+                        END IF;
+                    END LOOP;
+                END $$;
+                """)
             )
             conn.commit()
     return engine
