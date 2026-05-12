@@ -602,7 +602,7 @@ _HOMEPAGE_HTML = f"""
                 letter-spacing: 0.01em;
             }}
 
-            /* ---------- Mini bars (mobile cards) ---------- */
+            /* ---------- Mini bars ---------- */
             .mini-bar-row {{
                 display: grid;
                 grid-template-columns: 80px 1fr 28px;
@@ -638,6 +638,14 @@ _HOMEPAGE_HTML = f"""
                 color: var(--text);
             }}
             .mini-bar-num.empty {{ color: var(--text-subtle); }}
+            .mini-bar-compact {{
+                display: grid;
+                grid-template-columns: 1fr 26px;
+                align-items: center;
+                gap: 7px;
+                font-size: 0.73rem;
+                min-width: 100px;
+            }}
 
             /* ---------- Loading skeleton ---------- */
             .skeleton-bar {{
@@ -1340,6 +1348,25 @@ _HOMEPAGE_HTML = f"""
                 return `
                     <div class="mini-bar-row" role="img" aria-label="${{label}} ${{num}} of 100">
                         <span class="mini-bar-label">${{label}}</span>
+                        <span class="mini-bar-track" aria-hidden="true"><span class="mini-bar-fill ${{kind}}" style="width: ${{pct}}%"></span></span>
+                        <span class="mini-bar-num">${{num}}</span>
+                    </div>
+                `;
+            }}
+
+            function renderMiniBarCompact(score, kind) {{
+                if (score == null) {{
+                    return `
+                        <div class="mini-bar-compact" role="img" aria-label="not simulated">
+                            <span class="mini-bar-track" aria-hidden="true"></span>
+                            <span class="mini-bar-num empty">&mdash;</span>
+                        </div>
+                    `;
+                }}
+                const pct = Math.max(0, Math.min(100, score));
+                const num = score.toFixed(0);
+                return `
+                    <div class="mini-bar-compact" role="img" aria-label="${{num}} of 100">
                         <span class="mini-bar-track" aria-hidden="true"><span class="mini-bar-fill ${{kind}}" style="width: ${{pct}}%"></span></span>
                         <span class="mini-bar-num">${{num}}</span>
                     </div>
