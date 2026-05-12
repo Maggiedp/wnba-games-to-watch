@@ -24,7 +24,7 @@ class GameResponse(BaseModel):
     team_a_logo: str = ""
     team_b_logo: str = ""
     quality_score: float
-    # None for preseason games (season_type == 1) only.
+    # None for non-regular-season games (not simulated).
     importance_score: float | None = None
     overall_score: float
     broadcaster: str
@@ -1014,7 +1014,7 @@ _HOMEPAGE_HTML = f"""
 
                 <h3>Notes</h3>
                 <p>
-                    Preseason games are not simulated and show no importance score. Expansion teams
+                    Non-regular-season games are not simulated and show no importance score. Expansion teams
                     start at league-average strength until they have a real BPI.
                 </p>
             </div>
@@ -1212,7 +1212,7 @@ _HOMEPAGE_HTML = f"""
 
                 const importance = game.importance_score == null ? '—' : game.importance_score.toFixed(0);
                 const importanceTitle = game.importance_score == null
-                    ? 'Preseason game — not simulated'
+                    ? 'Not simulated'
                     : 'Playoff stakes from Monte Carlo';
                 const wp = winProbText(game);
                 const winProbStat = wp
@@ -1336,7 +1336,7 @@ _HOMEPAGE_HTML = f"""
                 if (score == null) {{
                     return `
                         <div class="mini-bar-row" role="img" aria-label="${{label}} not simulated"
-                             title="Preseason game &mdash; not simulated">
+                             title="Not simulated">
                             <span class="mini-bar-label">${{label}}</span>
                             <span class="mini-bar-track" aria-hidden="true"></span>
                             <span class="mini-bar-num empty">&mdash;</span>
@@ -1375,7 +1375,7 @@ _HOMEPAGE_HTML = f"""
 
             function renderGameRow(game, isTopPick) {{
                 const cls = getScoreClass(game.overall_score);
-                const impTitle = game.importance_score == null ? 'Preseason game — not simulated' : '';
+                const impTitle = game.importance_score == null ? 'Not simulated' : '';
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
                     <tr>
