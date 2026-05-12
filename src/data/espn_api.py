@@ -86,36 +86,28 @@ def fetch_team_details() -> dict[str, dict]:
 
 
 def fetch_bpi_ratings() -> dict[str, float]:
-    """Return {team_display_name: bpi_value} using the most recent season with data."""
+    """Return {team_display_name: bpi_value} for the current season."""
     team_names = fetch_team_id_map()
-
-    for season in (2026, 2025):
-        data = _get(f"{CORE_API}/seasons/{season}/powerindex", limit=50)
-        items = data.get("items", [])
-        if not items:
-            logger.info(f"BPI season {season} has no data, trying previous season")
+    season = _SEASON_END.year
+    data = _get(f"{CORE_API}/seasons/{season}/powerindex", limit=50)
+    ratings = {}
+    for item in data.get("items", []):
+        ref = item.get("team", {}).get("$ref", "")
+        team_id = _team_id_from_ref(ref)
+        if team_id is None:
             continue
-
-        ratings = {}
-        for item in items:
-            ref = item.get("team", {}).get("$ref", "")
-            team_id = _team_id_from_ref(ref)
-            if team_id is None:
-                continue
-            name = team_names.get(team_id)
-            if not name:
-                continue
-            for stat in item.get("stats", []):
-                if stat["name"] == "bpi":
-                    ratings[name] = stat["value"]
-                    break
-
-        if ratings:
-            logger.info(f"Fetched BPI for {len(ratings)} teams from {season} season")
-            return ratings
-
-    logger.error("Could not fetch BPI ratings from any season")
-    return {}
+        name = team_names.get(team_id)
+        if not name:
+            continue
+        for stat in item.get("stats", []):
+            if stat["name"] == "bpi":
+                ratings[name] = stat["value"]
+                break
+    if not ratings:
+        logger.error(f"Could not fetch BPI ratings for {season} season")
+    else:
+        logger.info(f"Fetched BPI for {len(ratings)} teams from {season} season")
+    return ratings
 
 
 def fetch_games_for_range(start: date, end: date) -> list[dict]:
@@ -185,7 +177,7 @@ def _parse_event(event: dict) -> Optional[dict]:
 
         time_valid = comp.get("timeValid", False)
         if not time_valid and dt_utc.hour == 0 and dt_utc.minute == 0:
-            game_time = "TBD"
+            game_time = ""
         else:
             game_time = dt_et.strftime("%-I:%M %p ET")
 
