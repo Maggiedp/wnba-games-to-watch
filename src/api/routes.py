@@ -293,6 +293,8 @@ _HOMEPAGE_HTML = f"""
                 font-family: var(--body);
             }}
 
+            .win-prob {{ font-size: 0.72rem; color: var(--text-subtle); font-variant-numeric: tabular-nums; margin-top: 3px; }}
+
             /* ---------- Controls ---------- */
             .controls {{
                 background: var(--surface);
@@ -1225,6 +1227,10 @@ _HOMEPAGE_HTML = f"""
                                     <span class="featured-stat-label">Importance</span>
                                     <span class="featured-stat-value">${{importance}}</span>
                                 </span>
+                                ${{(() => {{
+                                    const t = winProbText(game);
+                                    return t ? `<span class="featured-stat"><span class="featured-stat-label">Win prob</span><span class="featured-stat-value">${{t}}</span></span>` : '';
+                                }})()}}
                                 <span class="featured-broadcaster">${{escapeHtml(game.broadcaster || 'TBD')}}</span>
                             </div>
                         </div>
@@ -1293,6 +1299,20 @@ _HOMEPAGE_HTML = f"""
                 return score >= 40 ? 'high' : score >= 25 ? 'medium' : 'low';
             }}
 
+            function winProbText(game) {{
+                if (game.win_prob_a == null) return '';
+                const pctA = Math.round(game.win_prob_a * 100);
+                const pctB = 100 - pctA;
+                const a = escapeHtml(game.team_a_abbr || game.team_a);
+                const b = escapeHtml(game.team_b_abbr || game.team_b);
+                return `${{a}} ${{pctA}}% · ${{b}} ${{pctB}}%`;
+            }}
+
+            function renderWinProb(game) {{
+                const text = winProbText(game);
+                return text ? `<div class="win-prob">${{text}}</div>` : '';
+            }}
+
             function renderMiniBar(label, score, kind) {{
                 if (score == null) {{
                     return `
@@ -1337,6 +1357,7 @@ _HOMEPAGE_HTML = f"""
                                     ${{renderTeam(game.team_b, game.team_b_logo)}}
                                     ${{game.team_b_playoff_prob != null ? `<div class="team-prob">${{Math.round(game.team_b_playoff_prob * 100)}}% playoff odds</div>` : ''}}
                                 </div>
+                                ${{renderWinProb(game)}}
                             </div>
                         </td>
                         <td class="hide-mobile col-num">${{game.quality_score.toFixed(0)}}</td>
@@ -1371,6 +1392,7 @@ _HOMEPAGE_HTML = f"""
                                 </div>
                             </div>
                             <div class="games-card-meta">${{meta}}</div>
+                            ${{renderWinProb(game)}}
                             ${{renderMiniBar('Quality', game.quality_score, 'quality')}}
                             ${{renderMiniBar('Importance', game.importance_score, 'importance')}}
                         </div>
