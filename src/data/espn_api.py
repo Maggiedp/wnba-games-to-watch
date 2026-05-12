@@ -183,8 +183,8 @@ def _parse_event(event: dict) -> Optional[dict]:
         dt_et = dt_utc.astimezone(_ET)
         game_date = dt_et.strftime("%Y-%m-%d")
 
-        # 00:00 UTC typically means time TBD
-        if dt_utc.hour == 0 and dt_utc.minute == 0:
+        time_valid = comp.get("timeValid", False)
+        if not time_valid and dt_utc.hour == 0 and dt_utc.minute == 0:
             game_time = "TBD"
         else:
             game_time = dt_et.strftime("%-I:%M %p ET")

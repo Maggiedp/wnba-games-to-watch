@@ -30,7 +30,12 @@ from src.db.queries import (
     upsert_team,
 )
 from src.db.schema import get_session, init_db
-from src.scoring.elo import INITIAL_RATING, replay_games
+from src.scoring.elo import (
+    DEFAULT_HOME_ADVANTAGE,
+    INITIAL_RATING,
+    expected_win_prob,
+    replay_games,
+)
 from src.scoring.importance import normalize_importance_score
 from src.scoring.monte_carlo import (
     compute_importance_from_matrix,
@@ -312,6 +317,9 @@ def compute_daily_scores(
         bpi_a = standings.get(team_a, {}).get("bpi", 0.0)
         bpi_b = standings.get(team_b, {}).get("bpi", 0.0)
         quality = compute_quality_score(bpi_a, bpi_b, bpi_min=bpi_min, bpi_max=bpi_max)
+        elo_a = standings.get(team_a, {}).get("elo", INITIAL_RATING)
+        elo_b = standings.get(team_b, {}).get("elo", INITIAL_RATING)
+        win_prob_a = expected_win_prob(elo_a, elo_b, DEFAULT_HOME_ADVANTAGE)
 
         game_date = game.get("date", today)
         importance: float | None
@@ -343,6 +351,7 @@ def compute_daily_scores(
                 "importance": importance,
                 "overall": overall,
                 "broadcaster": game.get("broadcaster", ""),
+                "win_prob_a": win_prob_a,
             }
         )
 
@@ -369,6 +378,7 @@ def store_daily_rankings(session, scored_games: list[dict]) -> None:
             importance_score=game["importance"],
             overall_score=game["overall"],
             broadcaster=game.get("broadcaster", ""),
+            win_prob_a=game.get("win_prob_a"),
         )
         stored += 1
 

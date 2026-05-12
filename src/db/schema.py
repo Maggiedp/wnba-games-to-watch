@@ -61,6 +61,7 @@ class DailyRanking(Base):
     importance_score = Column(Float, nullable=True)
     overall_score = Column(Float, default=0.0)
     broadcaster = Column(String(50), default="")
+    win_prob_a = Column(Float, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     __table_args__ = (
@@ -153,6 +154,11 @@ def init_db():
                     END LOOP;
                 END $$;
                 """)
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE daily_rankings ADD COLUMN IF NOT EXISTS win_prob_a FLOAT"
+                )
             )
             conn.commit()
     return engine

@@ -30,6 +30,7 @@ class GameResponse(BaseModel):
     broadcaster: str
     team_a_playoff_prob: float | None = None
     team_b_playoff_prob: float | None = None
+    win_prob_a: float | None = None
 
     class Config:
         from_attributes = True
@@ -88,6 +89,7 @@ def format_games_response(
                 broadcaster=ranking.broadcaster,
                 team_a_playoff_prob=prob_by_team_id.get(ranking.team_a_id),
                 team_b_playoff_prob=prob_by_team_id.get(ranking.team_b_id),
+                win_prob_a=ranking.win_prob_a,
             )
         )
 
@@ -282,14 +284,15 @@ _HOMEPAGE_HTML = f"""
             }}
 
             /* ---------- Inline team playoff probability ---------- */
-            .team-prob {{
+            .team-prob, .win-prob {{
                 font-size: 0.72rem;
                 color: var(--text-subtle);
                 font-variant-numeric: tabular-nums;
-                margin-top: 1px;
                 line-height: 1;
                 font-family: var(--body);
             }}
+            .team-prob {{ margin-top: 1px; }}
+            .win-prob {{ margin-top: 3px; width: 100%; }}
 
             /* ---------- Controls ---------- */
             .controls {{
@@ -1190,7 +1193,7 @@ _HOMEPAGE_HTML = f"""
                 if (sortBy === 'score') {{
                     rest.sort((a, b) => b.overall_score - a.overall_score);
                 }} else {{
-                    rest.sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''));
+                    rest.sort((a, b) => a.date.localeCompare(b.date) || timeToMinutes(a.time) - timeToMinutes(b.time));
                 }}
                 renderGames(rest, featured);
             }}
@@ -1203,6 +1206,10 @@ _HOMEPAGE_HTML = f"""
                 const importanceTitle = game.importance_score == null
                     ? 'Preseason game — not simulated'
                     : 'Playoff stakes from Monte Carlo';
+                const wp = winProbText(game);
+                const winProbStat = wp
+                    ? `<span class="featured-stat"><span class="featured-stat-label">Win prob</span><span class="featured-stat-value">${{wp}}</span></span>`
+                    : '';
 
                 container.innerHTML = `
                     <div class="featured-eyebrow">Top pick &middot; Next 7 days</div>
@@ -1223,6 +1230,7 @@ _HOMEPAGE_HTML = f"""
                                     <span class="featured-stat-label">Importance</span>
                                     <span class="featured-stat-value">${{importance}}</span>
                                 </span>
+                                ${{winProbStat}}
                                 <span class="featured-broadcaster">${{escapeHtml(game.broadcaster || 'TBD')}}</span>
                             </div>
                         </div>
@@ -1266,6 +1274,17 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
+            function timeToMinutes(t) {{
+                if (!t || t === 'TBD') return Infinity;
+                const m = t.match(/(\d+):(\d+)\s*(AM|PM)/i);
+                if (!m) return Infinity;
+                let h = parseInt(m[1], 10);
+                const min = parseInt(m[2], 10);
+                if (m[3].toUpperCase() === 'PM' && h !== 12) h += 12;
+                if (m[3].toUpperCase() === 'AM' && h === 12) h = 0;
+                return h * 60 + min;
+            }}
+
             function formatDate(dateStr, opts) {{
                 const [year, month, day] = dateStr.split('-');
                 return new Date(year, month - 1, day).toLocaleDateString(
@@ -1289,6 +1308,20 @@ _HOMEPAGE_HTML = f"""
 
             function getScoreClass(score) {{
                 return score >= 40 ? 'high' : score >= 25 ? 'medium' : 'low';
+            }}
+
+            function winProbText(game) {{
+                if (game.win_prob_a == null) return '';
+                const pctA = Math.round(game.win_prob_a * 100);
+                const pctB = 100 - pctA;
+                const a = escapeHtml(game.team_a_abbr || game.team_a);
+                const b = escapeHtml(game.team_b_abbr || game.team_b);
+                return `${{a}} ${{pctA}}% · ${{b}} ${{pctB}}%`;
+            }}
+
+            function renderWinProb(game) {{
+                const text = winProbText(game);
+                return text ? `<div class="win-prob">${{text}}</div>` : '';
             }}
 
             function renderMiniBar(label, score, kind) {{
@@ -1335,6 +1368,7 @@ _HOMEPAGE_HTML = f"""
                                     ${{renderTeam(game.team_b, game.team_b_logo)}}
                                     ${{game.team_b_playoff_prob != null ? `<div class="team-prob">${{Math.round(game.team_b_playoff_prob * 100)}}% playoff odds</div>` : ''}}
                                 </div>
+                                ${{renderWinProb(game)}}
                             </div>
                         </td>
                         <td class="hide-mobile col-num">${{game.quality_score.toFixed(0)}}</td>
@@ -1369,6 +1403,7 @@ _HOMEPAGE_HTML = f"""
                                 </div>
                             </div>
                             <div class="games-card-meta">${{meta}}</div>
+                            ${{renderWinProb(game)}}
                             ${{renderMiniBar('Quality', game.quality_score, 'quality')}}
                             ${{renderMiniBar('Importance', game.importance_score, 'importance')}}
                         </div>
