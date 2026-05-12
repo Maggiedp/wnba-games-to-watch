@@ -590,7 +590,6 @@ _HOMEPAGE_HTML = f"""
                 text-transform: uppercase;
                 padding: 0 2px;
             }}
-            .col-num {{ font-feature-settings: 'tnum' on; color: var(--text-muted); font-weight: 500; }}
             .broadcaster-badge {{
                 display: inline-block;
                 padding: 4px 10px;
@@ -646,6 +645,7 @@ _HOMEPAGE_HTML = f"""
                 font-size: 0.74rem;
                 min-width: 100px;
             }}
+            .mini-bar-compact .mini-bar-num {{ font-size: 0.74rem; }}
 
             /* ---------- Loading skeleton ---------- */
             .skeleton-bar {{
