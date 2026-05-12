@@ -293,7 +293,15 @@ _HOMEPAGE_HTML = f"""
                 font-family: var(--body);
             }}
 
-            .win-prob {{ font-size: 0.72rem; color: var(--text-subtle); font-variant-numeric: tabular-nums; margin-top: 3px; }}
+            .win-prob {{
+                font-size: 0.72rem;
+                color: var(--text-subtle);
+                font-variant-numeric: tabular-nums;
+                line-height: 1;
+                font-family: var(--body);
+                margin-top: 3px;
+                width: 100%;
+            }}
 
             /* ---------- Controls ---------- */
             .controls {{
@@ -1207,6 +1215,9 @@ _HOMEPAGE_HTML = f"""
                 const importanceTitle = game.importance_score == null
                     ? 'Preseason game — not simulated'
                     : 'Playoff stakes from Monte Carlo';
+                const winProbStat = winProbText(game)
+                    ? `<span class="featured-stat"><span class="featured-stat-label">Win prob</span><span class="featured-stat-value">${{winProbText(game)}}</span></span>`
+                    : '';
 
                 container.innerHTML = `
                     <div class="featured-eyebrow">Top pick &middot; Next 7 days</div>
@@ -1227,10 +1238,7 @@ _HOMEPAGE_HTML = f"""
                                     <span class="featured-stat-label">Importance</span>
                                     <span class="featured-stat-value">${{importance}}</span>
                                 </span>
-                                ${{(() => {{
-                                    const t = winProbText(game);
-                                    return t ? `<span class="featured-stat"><span class="featured-stat-label">Win prob</span><span class="featured-stat-value">${{t}}</span></span>` : '';
-                                }})()}}
+                                ${{winProbStat}}
                                 <span class="featured-broadcaster">${{escapeHtml(game.broadcaster || 'TBD')}}</span>
                             </div>
                         </div>
