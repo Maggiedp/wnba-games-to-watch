@@ -643,7 +643,7 @@ _HOMEPAGE_HTML = f"""
                 grid-template-columns: 1fr 26px;
                 align-items: center;
                 gap: 7px;
-                font-size: 0.73rem;
+                font-size: 0.74rem;
                 min-width: 100px;
             }}
 
@@ -1357,7 +1357,7 @@ _HOMEPAGE_HTML = f"""
             function renderMiniBarCompact(score, kind) {{
                 if (score == null) {{
                     return `
-                        <div class="mini-bar-compact" role="img" aria-label="not simulated">
+                        <div class="mini-bar-compact" role="img" aria-label="${{kind}} not simulated">
                             <span class="mini-bar-track" aria-hidden="true"></span>
                             <span class="mini-bar-num empty">&mdash;</span>
                         </div>
@@ -1366,7 +1366,7 @@ _HOMEPAGE_HTML = f"""
                 const pct = Math.max(0, Math.min(100, score));
                 const num = score.toFixed(0);
                 return `
-                    <div class="mini-bar-compact" role="img" aria-label="${{num}} of 100">
+                    <div class="mini-bar-compact" role="img" aria-label="${{kind}} ${{num}} of 100">
                         <span class="mini-bar-track" aria-hidden="true"><span class="mini-bar-fill ${{kind}}" style="width: ${{pct}}%"></span></span>
                         <span class="mini-bar-num">${{num}}</span>
                     </div>
@@ -1376,7 +1376,6 @@ _HOMEPAGE_HTML = f"""
             function renderGameRow(game, isTopPick) {{
                 const cls = getScoreClass(game.overall_score);
                 const impTitle = game.importance_score == null ? 'Preseason game — not simulated' : '';
-                const impVal = game.importance_score == null ? '&mdash;' : game.importance_score.toFixed(0);
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
                     <tr>
@@ -1398,8 +1397,8 @@ _HOMEPAGE_HTML = f"""
                                 ${{renderWinProb(game)}}
                             </div>
                         </td>
-                        <td class="hide-mobile col-num">${{game.quality_score.toFixed(0)}}</td>
-                        <td class="hide-mobile col-num" title="${{impTitle}}">${{impVal}}</td>
+                        <td class="hide-mobile">${{renderMiniBarCompact(game.quality_score, 'quality')}}</td>
+                        <td class="hide-mobile" title="${{impTitle}}">${{renderMiniBarCompact(game.importance_score, 'importance')}}</td>
                         <td><span class="broadcaster-badge">${{escapeHtml(game.broadcaster || 'TBD')}}</span></td>
                     </tr>
                 `;
