@@ -1193,7 +1193,7 @@ _HOMEPAGE_HTML = f"""
                 if (sortBy === 'score') {{
                     rest.sort((a, b) => b.overall_score - a.overall_score);
                 }} else {{
-                    rest.sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''));
+                    rest.sort((a, b) => a.date.localeCompare(b.date) || timeToMinutes(a.time) - timeToMinutes(b.time));
                 }}
                 renderGames(rest, featured);
             }}
@@ -1272,6 +1272,17 @@ _HOMEPAGE_HTML = f"""
                     </table>
                     <div class="games-cards">${{games.map(g => renderGameCard(g, g === featured)).join('')}}</div>
                 `;
+            }}
+
+            function timeToMinutes(t) {{
+                if (!t || t === 'TBD') return Infinity;
+                const m = t.match(/(\d+):(\d+)\s*(AM|PM)/i);
+                if (!m) return Infinity;
+                let h = parseInt(m[1], 10);
+                const min = parseInt(m[2], 10);
+                if (m[3].toUpperCase() === 'PM' && h !== 12) h += 12;
+                if (m[3].toUpperCase() === 'AM' && h === 12) h = 0;
+                return h * 60 + min;
             }}
 
             function formatDate(dateStr, opts) {{
