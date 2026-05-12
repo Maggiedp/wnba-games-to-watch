@@ -6,11 +6,12 @@ from sqlalchemy.orm import sessionmaker
 
 from src.db.queries import (
     get_playoff_probabilities,
+    upsert_daily_ranking,
     upsert_game,
     upsert_playoff_probability,
     upsert_team,
 )
-from src.db.schema import Base, PlayoffProbability
+from src.db.schema import Base, DailyRanking, PlayoffProbability
 
 
 @pytest.fixture
@@ -146,3 +147,68 @@ def test_get_playoff_probabilities_returns_dict(session, team_ids):
 def test_get_playoff_probabilities_empty_for_missing_date(session, team_ids):
     result = get_playoff_probabilities(session, "2099-01-01")
     assert result == {}
+
+
+def test_upsert_daily_ranking_stores_win_prob(session, team_ids):
+    """win_prob_a is stored and retrieved when provided."""
+    a_id, b_id = team_ids
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.4,
+        overall_score=46.0,
+        broadcaster="ESPN",
+        win_prob_a=0.62,
+    )
+    fetched = session.query(DailyRanking).filter_by(id=ranking.id).one()
+    assert fetched.win_prob_a == pytest.approx(0.62)
+
+
+def test_upsert_daily_ranking_win_prob_defaults_to_none(session, team_ids):
+    """win_prob_a is NULL when not provided (backward-compatible default)."""
+    a_id, b_id = team_ids
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-02",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=None,
+        overall_score=30.0,
+        broadcaster="",
+    )
+    fetched = session.query(DailyRanking).filter_by(id=ranking.id).one()
+    assert fetched.win_prob_a is None
+
+
+def test_upsert_daily_ranking_updates_win_prob(session, team_ids):
+    """Re-upserting an existing ranking updates win_prob_a."""
+    a_id, b_id = team_ids
+    upsert_daily_ranking(
+        session,
+        date="2026-06-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.4,
+        overall_score=46.0,
+        broadcaster="ESPN",
+        win_prob_a=0.55,
+    )
+    upsert_daily_ranking(
+        session,
+        date="2026-06-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.4,
+        overall_score=46.0,
+        broadcaster="ESPN",
+        win_prob_a=0.62,
+    )
+    records = session.query(DailyRanking).filter_by(date="2026-06-01").all()
+    assert len(records) == 1
+    assert records[0].win_prob_a == pytest.approx(0.62)
