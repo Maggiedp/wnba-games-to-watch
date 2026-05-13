@@ -53,6 +53,7 @@ BROADCASTER_NORMALIZE: dict[str, str] = {
     "ION": Broadcasters.ION,
     "USA": Broadcasters.USA_NETWORK,
     "USA NETWORK": Broadcasters.USA_NETWORK,
+    "USA NET": Broadcasters.USA_NETWORK,
     "LEAGUE PASS": Broadcasters.LEAGUE_PASS,
     "WNBA LEAGUE PASS": Broadcasters.LEAGUE_PASS,
     "NBA TV": Broadcasters.NBA_TV,
