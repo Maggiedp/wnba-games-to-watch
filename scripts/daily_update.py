@@ -153,6 +153,7 @@ def fetch_and_store_games(session) -> list[dict]:
             winner_id=get_cached_team_id(winner_team) if winner_team else None,
             final_score_a=game.get("final_score_a"),
             final_score_b=game.get("final_score_b"),
+            espn_id=game.get("event_id"),
         )
         stored += 1
 
