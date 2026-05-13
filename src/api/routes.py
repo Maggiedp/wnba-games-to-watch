@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from src.db.queries import get_game_times, get_playoff_probabilities, get_teams_by_ids
@@ -32,8 +32,7 @@ class GameResponse(BaseModel):
     team_b_playoff_prob: float | None = None
     win_prob_a: float | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PlayoffOddsResponse(BaseModel):
