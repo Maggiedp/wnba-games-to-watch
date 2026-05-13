@@ -10,6 +10,11 @@ from fastapi.responses import HTMLResponse
 
 from src.api.routes import GameResponse, PlayoffOddsResponse, format_games_response
 from src.constants import Broadcasters  # noqa: F401 — used in get_broadcasters endpoint
+from src.data.espn_api import (
+    ESPNAPIError,
+    fetch_live_win_probability,
+    fetch_today_game_statuses,
+)
 from src.db.queries import (
     get_daily_rankings,
     get_playoff_probabilities,
@@ -43,7 +48,14 @@ async def get_today_games():
     session = get_session()
     try:
         rankings = get_daily_rankings(session, today)
-        return format_games_response(rankings, session)
+        try:
+            game_statuses = fetch_today_game_statuses(today)
+        except Exception:
+            logger.warning("Failed to fetch today's game statuses from ESPN")
+            game_statuses = {}
+        return format_games_response(
+            rankings, session, game_status_by_espn_id=game_statuses
+        )
     finally:
         session.close()
 
@@ -73,6 +85,14 @@ async def get_games_by_broadcaster(broadcaster: str):
 @app.get("/api/broadcasters")
 async def get_broadcasters():
     return {"broadcasters": Broadcasters.ALL}
+
+
+@app.get("/api/live-wp")
+async def get_live_win_probability(espn_id: str = Query(...)):
+    try:
+        return fetch_live_win_probability(espn_id)
+    except ESPNAPIError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])
