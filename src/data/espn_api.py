@@ -31,12 +31,20 @@ class ESPNAPIError(Exception):
     pass
 
 
-def _get(url: str, **params) -> dict:
+class ESPNNotFoundError(ESPNAPIError):
+    pass
+
+
+def _get(url: str, timeout: int = 10, **params) -> dict:
     """GET with standard error handling."""
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = requests.get(url, params=params, timeout=timeout)
         r.raise_for_status()
         return r.json()
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            raise ESPNNotFoundError(f"ESPN returned 404 for {url}") from e
+        raise ESPNAPIError(f"ESPN API request failed: {e}") from e
     except requests.RequestException as e:
         raise ESPNAPIError(f"ESPN API request failed: {e}") from e
 
@@ -311,7 +319,9 @@ def fetch_today_game_statuses(game_date: str) -> dict[str, str]:
     Returns empty dict if ESPN is unreachable.
     """
     try:
-        data = _get(f"{SITE_API}/scoreboard", dates=game_date.replace("-", ""))
+        data = _get(
+            f"{SITE_API}/scoreboard", timeout=5, dates=game_date.replace("-", "")
+        )
     except ESPNAPIError as e:
         logger.warning(f"Failed to fetch game statuses for {game_date}: {e}")
         return {}

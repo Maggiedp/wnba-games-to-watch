@@ -83,3 +83,24 @@ def test_today_games_calls_fetch_today_game_statuses():
         resp = client.get("/api/games/today")
     assert resp.status_code == 200
     mock_statuses.assert_called_once()
+
+
+def test_live_wp_returns_404_when_espn_event_not_found():
+    from src.data.espn_api import ESPNNotFoundError
+
+    with patch(
+        "src.api.app.fetch_live_win_probability",
+        side_effect=ESPNNotFoundError("ESPN returned 404 for ..."),
+    ):
+        resp = client.get("/api/live-wp?espn_id=999999")
+    assert resp.status_code == 404
+
+
+def test_today_games_graceful_when_status_fetch_raises():
+    """If fetch_today_game_statuses raises, /api/games/today still returns 200."""
+    with patch(
+        "src.api.app.fetch_today_game_statuses",
+        side_effect=Exception("network error"),
+    ):
+        resp = client.get("/api/games/today")
+    assert resp.status_code == 200

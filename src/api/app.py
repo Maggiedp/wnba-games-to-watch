@@ -12,6 +12,7 @@ from src.api.routes import GameResponse, PlayoffOddsResponse, format_games_respo
 from src.constants import Broadcasters  # noqa: F401 — used in get_broadcasters endpoint
 from src.data.espn_api import (
     ESPNAPIError,
+    ESPNNotFoundError,
     fetch_live_win_probability,
     fetch_today_game_statuses,
 )
@@ -91,6 +92,8 @@ async def get_broadcasters():
 async def get_live_win_probability(espn_id: str = Query(...)):
     try:
         return fetch_live_win_probability(espn_id)
+    except ESPNNotFoundError:
+        raise HTTPException(status_code=404, detail="Game not found on ESPN")
     except ESPNAPIError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

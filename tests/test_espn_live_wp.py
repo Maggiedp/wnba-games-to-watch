@@ -6,6 +6,7 @@ import pytest
 
 from src.data.espn_api import (
     ESPNAPIError,
+    ESPNNotFoundError,
     fetch_live_win_probability,
     fetch_today_game_statuses,
 )
@@ -141,5 +142,21 @@ def test_fetch_today_game_statuses_passes_correct_date_param():
         fetch_today_game_statuses("2026-05-13")
     mock_get.assert_called_once_with(
         "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard",
+        timeout=5,
         dates="20260513",
     )
+
+
+def test_get_raises_not_found_error_on_espn_404():
+    """_get raises ESPNNotFoundError when ESPN returns HTTP 404."""
+    import requests as req_lib
+    from unittest.mock import MagicMock
+    from src.data.espn_api import _get
+
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    http_error = req_lib.HTTPError(response=mock_response)
+    mock_response.raise_for_status.side_effect = http_error
+    with patch("requests.get", return_value=mock_response):
+        with pytest.raises(ESPNNotFoundError):
+            _get("http://example.com/api")
