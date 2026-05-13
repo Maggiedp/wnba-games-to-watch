@@ -45,6 +45,7 @@ class Game(Base):
     final_score_a = Column(Integer, nullable=True)
     final_score_b = Column(Integer, nullable=True)
     broadcaster = Column(String(50), default="")
+    espn_id = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     __table_args__ = (Index("idx_game_date", "date"),)
@@ -159,6 +160,9 @@ def init_db():
                 text(
                     "ALTER TABLE daily_rankings ADD COLUMN IF NOT EXISTS win_prob_a FLOAT"
                 )
+            )
+            conn.execute(
+                text("ALTER TABLE games ADD COLUMN IF NOT EXISTS espn_id VARCHAR(20)")
             )
             conn.commit()
     return engine
