@@ -244,3 +244,54 @@ def _parse_broadcaster(comp: dict) -> str:
 
     # No national broadcaster found — game is on League Pass (possibly blacked out locally)
     return Broadcasters.LEAGUE_PASS
+
+
+def fetch_live_win_probability(espn_id: str) -> dict:
+    """Fetch win probability data for a game from ESPN's summary endpoint.
+
+    Returns dict with espn_id, status, home_team, away_team, and plays list.
+    plays entries: {seq, period, clock, home_pct}. Empty list if no WP data.
+    """
+    data = _get(f"{SITE_API}/summary", event=espn_id)
+
+    competitions = data.get("header", {}).get("competitions", [{}])
+    comp = competitions[0] if competitions else {}
+    status = comp.get("status", {}).get("type", {}).get("name", "STATUS_UNKNOWN")
+
+    home_team = ""
+    away_team = ""
+    for c in comp.get("competitors", []):
+        name = _canonical_name(c.get("team", {}).get("displayName", ""))
+        if c.get("homeAway") == "home":
+            home_team = name
+        else:
+            away_team = name
+
+    play_lookup: dict[str, dict] = {
+        str(p.get("id", "")): {
+            "period": p.get("period", {}).get("number", 1),
+            "clock": p.get("clock", {}).get("displayValue", ""),
+        }
+        for p in data.get("plays", [])
+    }
+
+    plays = []
+    for i, entry in enumerate(data.get("winprobability", [])):
+        play_id = str(entry.get("playId", ""))
+        info = play_lookup.get(play_id, {"period": 1, "clock": ""})
+        plays.append(
+            {
+                "seq": i,
+                "period": info["period"],
+                "clock": info["clock"],
+                "home_pct": entry.get("homeWinPercentage", 0.5),
+            }
+        )
+
+    return {
+        "espn_id": espn_id,
+        "status": status,
+        "home_team": home_team,
+        "away_team": away_team,
+        "plays": plays,
+    }
