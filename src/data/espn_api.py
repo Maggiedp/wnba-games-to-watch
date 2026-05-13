@@ -258,14 +258,22 @@ def fetch_live_win_probability(espn_id: str) -> dict:
     comp = competitions[0] if competitions else {}
     status = comp.get("status", {}).get("type", {}).get("name", "STATUS_UNKNOWN")
 
-    home_team = ""
-    away_team = ""
-    for c in comp.get("competitors", []):
-        name = _canonical_name(c.get("team", {}).get("displayName", ""))
-        if c.get("homeAway") == "home":
-            home_team = name
-        else:
-            away_team = name
+    home_team = next(
+        (
+            _canonical_name(c.get("team", {}).get("displayName", ""))
+            for c in comp.get("competitors", [])
+            if c.get("homeAway") == "home"
+        ),
+        "",
+    )
+    away_team = next(
+        (
+            _canonical_name(c.get("team", {}).get("displayName", ""))
+            for c in comp.get("competitors", [])
+            if c.get("homeAway") == "away"
+        ),
+        "",
+    )
 
     play_lookup: dict[str, dict] = {
         str(p.get("id", "")): {
