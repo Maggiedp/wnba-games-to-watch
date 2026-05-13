@@ -144,7 +144,6 @@ async def trigger_daily_update(x_trigger_secret: str = Header(default="")):
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting WNBA Games to Watch API")
-    init_db()
 
 
 @app.on_event("shutdown")
