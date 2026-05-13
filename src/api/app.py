@@ -44,7 +44,7 @@ async def homepage():
 
 
 @app.get("/api/games/today", response_model=list[GameResponse])
-async def get_today_games():
+def get_today_games():
     today = datetime.now().strftime("%Y-%m-%d")
     session = get_session()
     try:
@@ -89,7 +89,7 @@ async def get_broadcasters():
 
 
 @app.get("/api/live-wp")
-async def get_live_win_probability(espn_id: str = Query(...)):
+def get_live_win_probability(espn_id: str = Query(...)):
     try:
         return fetch_live_win_probability(espn_id)
     except ESPNNotFoundError:
