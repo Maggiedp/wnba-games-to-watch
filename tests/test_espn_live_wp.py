@@ -4,7 +4,11 @@ from unittest.mock import patch
 
 import pytest
 
-from src.data.espn_api import fetch_live_win_probability, ESPNAPIError
+from src.data.espn_api import (
+    ESPNAPIError,
+    fetch_live_win_probability,
+    fetch_today_game_statuses,
+)
 
 
 def _make_summary(
@@ -96,3 +100,46 @@ def test_fetch_live_win_probability_falls_back_when_play_id_missing():
     assert result["plays"][0]["period"] == 1
     assert result["plays"][0]["clock"] == ""
     assert result["plays"][0]["home_pct"] == 0.4
+
+
+def _make_scoreboard(*games):
+    """games: list of (event_id, status_name) tuples."""
+    return {
+        "events": [
+            {
+                "id": eid,
+                "competitions": [{"status": {"type": {"name": status}}}],
+            }
+            for eid, status in games
+        ]
+    }
+
+
+def test_fetch_today_game_statuses_returns_status_by_espn_id():
+    sb = _make_scoreboard(
+        ("401856901", "STATUS_FINAL"),
+        ("401856902", "STATUS_IN_PROGRESS"),
+        ("401856903", "STATUS_SCHEDULED"),
+    )
+    with patch("src.data.espn_api._get", return_value=sb):
+        result = fetch_today_game_statuses("2026-05-13")
+    assert result == {
+        "401856901": "STATUS_FINAL",
+        "401856902": "STATUS_IN_PROGRESS",
+        "401856903": "STATUS_SCHEDULED",
+    }
+
+
+def test_fetch_today_game_statuses_returns_empty_on_error():
+    with patch("src.data.espn_api._get", side_effect=ESPNAPIError("down")):
+        result = fetch_today_game_statuses("2026-05-13")
+    assert result == {}
+
+
+def test_fetch_today_game_statuses_passes_correct_date_param():
+    with patch("src.data.espn_api._get", return_value={"events": []}) as mock_get:
+        fetch_today_game_statuses("2026-05-13")
+    mock_get.assert_called_once_with(
+        "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard",
+        dates="20260513",
+    )

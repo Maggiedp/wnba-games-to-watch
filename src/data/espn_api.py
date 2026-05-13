@@ -303,3 +303,29 @@ def fetch_live_win_probability(espn_id: str) -> dict:
         "away_team": away_team,
         "plays": plays,
     }
+
+
+def fetch_today_game_statuses(game_date: str) -> dict[str, str]:
+    """Return {espn_id: status_name} for all games on game_date (YYYY-MM-DD).
+
+    Returns empty dict if ESPN is unreachable.
+    """
+    try:
+        data = _get(f"{SITE_API}/scoreboard", dates=game_date.replace("-", ""))
+    except ESPNAPIError as e:
+        logger.warning(f"Failed to fetch game statuses for {game_date}: {e}")
+        return {}
+
+    result: dict[str, str] = {}
+    for event in data.get("events", []):
+        event_id = event.get("id", "")
+        if not event_id:
+            continue
+        status = (
+            event.get("competitions", [{}])[0]
+            .get("status", {})
+            .get("type", {})
+            .get("name", "")
+        )
+        result[event_id] = status
+    return result
