@@ -213,7 +213,7 @@ def test_format_games_response_win_prob_none_when_missing(session, team_ids):
 
 def test_format_games_response_includes_espn_id(session, team_ids):
     """espn_id from the Game row is passed through to GameResponse."""
-    from src.db.queries import get_espn_ids  # noqa: F401 — verify it's importable
+    from src.db.queries import get_game_fields  # noqa: F401 — verify it's importable
 
     a_id, b_id = team_ids
     upsert_game(

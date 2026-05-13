@@ -7,8 +7,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from src.db.queries import (
-    get_espn_ids,
-    get_game_times,
+    get_game_fields,
     get_playoff_probabilities,
     get_teams_by_ids,
 )
@@ -64,10 +63,7 @@ def format_games_response(
 
     team_ids = {r.team_a_id for r in rankings} | {r.team_b_id for r in rankings}
     teams = get_teams_by_ids(session, team_ids)
-    times = get_game_times(
-        session, [(r.date, r.team_a_id, r.team_b_id) for r in rankings]
-    )
-    espn_ids = get_espn_ids(
+    fields = get_game_fields(
         session, [(r.date, r.team_a_id, r.team_b_id) for r in rankings]
     )
     today = datetime.now().strftime("%Y-%m-%d")
@@ -85,7 +81,7 @@ def format_games_response(
             continue
 
         key = (ranking.date, ranking.team_a_id, ranking.team_b_id)
-        espn_id = espn_ids.get(key)
+        time_val, espn_id = fields.get(key, ("", None))
         game_status = (
             game_status_by_espn_id.get(espn_id)
             if game_status_by_espn_id and espn_id
@@ -95,7 +91,7 @@ def format_games_response(
         results.append(
             GameResponse(
                 date=ranking.date,
-                time=times.get(key, ""),
+                time=time_val,
                 team_a=team_a.name,
                 team_b=team_b.name,
                 team_a_abbr=team_a.abbreviation or "",
@@ -1541,7 +1537,7 @@ _HOMEPAGE_HTML = f"""
                                 const d = await r.json();
                                 renderChartData(espnId, d, game);
                                 if (d.status === 'STATUS_FINAL') {{ clearInterval(pollInterval); pollInterval = null; }}
-                            }} catch (e) {{}}
+                            }} catch (e) {{ console.warn('WP poll failed:', e); }}
                         }}, 30000);
                     }}
                 }} catch (e) {{

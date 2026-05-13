@@ -133,10 +133,10 @@ def get_games_by_date(session: Session, date: str) -> list[Game]:
     return session.query(Game).filter(Game.date == date).order_by(Game.time).all()
 
 
-def get_game_times(
+def get_game_fields(
     session: Session, keys: list[tuple[str, int, int]]
-) -> dict[tuple[str, int, int], str]:
-    """Look up game times for a set of (date, team_a_id, team_b_id) tuples."""
+) -> dict[tuple[str, int, int], tuple[str, str | None]]:
+    """Return {(date, team_a_id, team_b_id): (time, espn_id)} for the given keys."""
     if not keys:
         return {}
     dates = {k[0] for k in keys}
@@ -152,32 +152,7 @@ def get_game_times(
     )
     wanted = set(keys)
     return {
-        (g.date, g.team_a_id, g.team_b_id): g.time or ""
-        for g in games
-        if (g.date, g.team_a_id, g.team_b_id) in wanted
-    }
-
-
-def get_espn_ids(
-    session: Session, keys: list[tuple[str, int, int]]
-) -> dict[tuple[str, int, int], str | None]:
-    """Look up ESPN event IDs for (date, team_a_id, team_b_id) tuples."""
-    if not keys:
-        return {}
-    dates = {k[0] for k in keys}
-    team_ids = {k[1] for k in keys} | {k[2] for k in keys}
-    games = (
-        session.query(Game)
-        .filter(
-            Game.date.in_(dates),
-            Game.team_a_id.in_(team_ids),
-            Game.team_b_id.in_(team_ids),
-        )
-        .all()
-    )
-    wanted = set(keys)
-    return {
-        (g.date, g.team_a_id, g.team_b_id): g.espn_id or None
+        (g.date, g.team_a_id, g.team_b_id): (g.time or "", g.espn_id)
         for g in games
         if (g.date, g.team_a_id, g.team_b_id) in wanted
     }

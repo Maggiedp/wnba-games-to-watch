@@ -51,8 +51,8 @@ async def get_today_games():
         rankings = get_daily_rankings(session, today)
         try:
             game_statuses = fetch_today_game_statuses(today)
-        except Exception:
-            logger.warning("Failed to fetch today's game statuses from ESPN")
+        except Exception as e:
+            logger.warning("Failed to fetch today's game statuses from ESPN: %s", e)
             game_statuses = {}
         return format_games_response(
             rankings, session, game_status_by_espn_id=game_statuses

@@ -250,8 +250,8 @@ def test_upsert_game_updates_espn_id_on_second_call(session, team_ids):
     assert game.espn_id == "401856901"
 
 
-def test_get_espn_ids_returns_ids_by_key(session, team_ids):
-    from src.db.queries import get_espn_ids
+def test_get_game_fields_returns_time_and_espn_id(session, team_ids):
+    from src.db.queries import get_game_fields
 
     a_id, b_id = team_ids
     upsert_game(
@@ -263,12 +263,12 @@ def test_get_espn_ids_returns_ids_by_key(session, team_ids):
         broadcaster="ESPN",
         espn_id="401856901",
     )
-    result = get_espn_ids(session, [("2026-06-15", a_id, b_id)])
-    assert result[("2026-06-15", a_id, b_id)] == "401856901"
+    result = get_game_fields(session, [("2026-06-15", a_id, b_id)])
+    assert result[("2026-06-15", a_id, b_id)] == ("7:00 PM ET", "401856901")
 
 
-def test_get_espn_ids_returns_none_for_missing(session, team_ids):
-    from src.db.queries import get_espn_ids
+def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
+    from src.db.queries import get_game_fields
 
     a_id, b_id = team_ids
     upsert_game(
@@ -279,5 +279,7 @@ def test_get_espn_ids_returns_none_for_missing(session, team_ids):
         time="7:00 PM ET",
         broadcaster="ESPN",
     )
-    result = get_espn_ids(session, [("2026-06-15", a_id, b_id)])
-    assert result.get(("2026-06-15", a_id, b_id)) is None
+    result = get_game_fields(session, [("2026-06-15", a_id, b_id)])
+    time_val, espn_id = result[("2026-06-15", a_id, b_id)]
+    assert time_val == "7:00 PM ET"
+    assert espn_id is None
