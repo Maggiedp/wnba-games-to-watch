@@ -6,7 +6,12 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from src.db.queries import get_game_times, get_playoff_probabilities, get_teams_by_ids
+from src.db.queries import (
+    get_espn_ids,
+    get_game_times,
+    get_playoff_probabilities,
+    get_teams_by_ids,
+)
 from src.db.schema import DailyRanking
 
 logger = logging.getLogger(__name__)
@@ -31,6 +36,10 @@ class GameResponse(BaseModel):
     team_a_playoff_prob: float | None = None
     team_b_playoff_prob: float | None = None
     win_prob_a: float | None = None
+    espn_id: str | None = None
+    game_status: str | None = (
+        None  # STATUS_SCHEDULED | STATUS_IN_PROGRESS | STATUS_FINAL
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -45,7 +54,9 @@ class PlayoffOddsResponse(BaseModel):
 
 
 def format_games_response(
-    rankings: list[DailyRanking], session: Session
+    rankings: list[DailyRanking],
+    session: Session,
+    game_status_by_espn_id: dict[str, str] | None = None,
 ) -> list[GameResponse]:
     """Format DailyRanking objects into GameResponse objects."""
     if not rankings:
@@ -54,6 +65,9 @@ def format_games_response(
     team_ids = {r.team_a_id for r in rankings} | {r.team_b_id for r in rankings}
     teams = get_teams_by_ids(session, team_ids)
     times = get_game_times(
+        session, [(r.date, r.team_a_id, r.team_b_id) for r in rankings]
+    )
+    espn_ids = get_espn_ids(
         session, [(r.date, r.team_a_id, r.team_b_id) for r in rankings]
     )
     today = datetime.now().strftime("%Y-%m-%d")
@@ -70,12 +84,18 @@ def format_games_response(
             )
             continue
 
+        key = (ranking.date, ranking.team_a_id, ranking.team_b_id)
+        espn_id = espn_ids.get(key)
+        game_status = (
+            game_status_by_espn_id.get(espn_id)
+            if game_status_by_espn_id and espn_id
+            else None
+        )
+
         results.append(
             GameResponse(
                 date=ranking.date,
-                time=times.get(
-                    (ranking.date, ranking.team_a_id, ranking.team_b_id), ""
-                ),
+                time=times.get(key, ""),
                 team_a=team_a.name,
                 team_b=team_b.name,
                 team_a_abbr=team_a.abbreviation or "",
@@ -89,6 +109,8 @@ def format_games_response(
                 team_a_playoff_prob=prob_by_team_id.get(ranking.team_a_id),
                 team_b_playoff_prob=prob_by_team_id.get(ranking.team_b_id),
                 win_prob_a=ranking.win_prob_a,
+                espn_id=espn_id,
+                game_status=game_status,
             )
         )
 

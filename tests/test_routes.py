@@ -209,3 +209,86 @@ def test_format_games_response_win_prob_none_when_missing(session, team_ids):
     [resp] = format_games_response(rankings, session)
 
     assert resp.win_prob_a is None
+
+
+def test_format_games_response_includes_espn_id(session, team_ids):
+    """espn_id from the Game row is passed through to GameResponse."""
+    from src.db.queries import get_espn_ids  # noqa: F401 — verify it's importable
+
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="401856901",
+    )
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.3,
+        overall_score=42.0,
+        broadcaster="ESPN",
+    )
+    result = format_games_response([ranking], session)
+    assert result[0].espn_id == "401856901"
+
+
+def test_format_games_response_populates_game_status_from_dict(session, team_ids):
+    """game_status_by_espn_id dict is applied when provided."""
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="401856901",
+    )
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.3,
+        overall_score=42.0,
+        broadcaster="ESPN",
+    )
+    result = format_games_response(
+        [ranking],
+        session,
+        game_status_by_espn_id={"401856901": "STATUS_IN_PROGRESS"},
+    )
+    assert result[0].game_status == "STATUS_IN_PROGRESS"
+
+
+def test_format_games_response_game_status_none_when_no_dict(session, team_ids):
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="401856901",
+    )
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.3,
+        overall_score=42.0,
+        broadcaster="ESPN",
+    )
+    result = format_games_response([ranking], session)
+    assert result[0].game_status is None
