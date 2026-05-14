@@ -1620,13 +1620,15 @@ _HOMEPAGE_HTML = f"""
                 setWpContent(espnId, header, chart);
 
                 const excitementLabel = computeExcitement(plays);
-                document.querySelectorAll(`.excitement-badge[data-wp-id="${{espnId}}"]`).forEach(el => {{
+                document.querySelectorAll(`[data-espn-id="${{espnId}}"]`).forEach(row => {{
+                    const badge = row.querySelector('.excitement-badge');
+                    if (!badge) return;
                     if (excitementLabel) {{
-                        el.textContent = excitementLabel;
-                        el.className = 'excitement-badge ' + (excitementLabel === 'Thriller' ? 'thriller' : 'close');
+                        badge.textContent = excitementLabel;
+                        badge.className = 'excitement-badge ' + (excitementLabel === 'Thriller' ? 'thriller' : 'close');
                     }} else {{
-                        el.textContent = '';
-                        el.className = 'excitement-badge';
+                        badge.textContent = '';
+                        badge.className = 'excitement-badge';
                     }}
                 }});
             }}
