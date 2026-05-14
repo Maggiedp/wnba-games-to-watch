@@ -933,6 +933,17 @@ _HOMEPAGE_HTML = f"""
                 font-style: italic;
                 padding: 4px 0;
             }}
+            .wp-swatch {{
+                display: inline-block;
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                margin-right: 4px;
+                vertical-align: middle;
+                position: relative;
+                top: -1px;
+            }}
+            .wp-swatch-home {{ background: var(--orange); }}
             .wp-chart-svg {{
                 width: 100%;
                 height: 150px;
@@ -1551,6 +1562,7 @@ _HOMEPAGE_HTML = f"""
                 const awayAbbr = escapeHtml(game.team_b_abbr || game.team_b);
                 let header = '';
                 let chart = '';
+                const homeSwatch = `<span class="wp-swatch wp-swatch-home"></span>`;
                 if (plays.length === 0) {{
                     const msg = (data.status === 'STATUS_SCHEDULED' || !data.status || data.status === 'STATUS_UNKNOWN')
                         ? "Game hasn't started yet."
@@ -1561,16 +1573,23 @@ _HOMEPAGE_HTML = f"""
                     const last = plays[plays.length - 1];
                     const hp = Math.round(last.home_pct * 100);
                     const ap = 100 - hp;
+                    const homeLabel = `${{homeSwatch}}${{homeAbbr}} ${{hp}}%`;
+                    const awayLabel = `${{awayAbbr}} ${{ap}}%`;
+                    const wpLabel = `${{homeLabel}} &middot; ${{awayLabel}} win probability`;
+                    const hs = data.home_score != null && data.home_score !== '' ? escapeHtml(String(data.home_score)) : null;
+                    const as_ = data.away_score != null && data.away_score !== '' ? escapeHtml(String(data.away_score)) : null;
+                    const scoreStr = (hs && as_) ? `${{homeAbbr}} ${{hs}}&ndash;${{as_}} ${{awayAbbr}}` : '';
                     if (data.status === 'STATUS_FINAL') {{
-                        header = `${{homeAbbr}} ${{hp}}% &middot; ${{awayAbbr}} ${{ap}}% &mdash; Final`;
+                        header = scoreStr ? `${{scoreStr}} &mdash; Final &middot; ${{wpLabel}}` : `Final &middot; ${{wpLabel}}`;
                     }} else if (data.status === 'STATUS_IN_PROGRESS') {{
                         const q = last.period <= 4 ? `Q${{last.period}}` : `OT`;
                         const clk = last.clock ? ` ${{escapeHtml(last.clock)}}` : '';
-                        header = `Live &middot; ${{q}}${{clk}} &mdash; ${{homeAbbr}} ${{hp}}% &middot; ${{awayAbbr}} ${{ap}}%`;
+                        const gameState = scoreStr ? `${{scoreStr}} &middot; ${{q}}${{clk}}` : `${{q}}${{clk}}`;
+                        header = `${{gameState}} &mdash; ${{wpLabel}}`;
                     }} else {{
-                        header = `${{homeAbbr}} ${{hp}}% &middot; ${{awayAbbr}} ${{ap}}%`;
+                        header = wpLabel;
                     }}
-                    chart = buildWpSvg(plays);
+                    chart = buildWpSvg(plays, homeAbbr, awayAbbr);
                 }}
                 setWpContent(espnId, header, chart);
             }}
@@ -1584,7 +1603,7 @@ _HOMEPAGE_HTML = f"""
                 }});
             }}
 
-            function buildWpSvg(plays) {{
+            function buildWpSvg(plays, homeAbbr, awayAbbr) {{
                 if (!plays || plays.length < 2) return '';
                 const W = 500, H = 150;
                 const padL = 36, padR = 8, padT = 8, padB = 8;
@@ -1607,16 +1626,12 @@ _HOMEPAGE_HTML = f"""
 
                 const firstX = pts[0][0].toFixed(1);
                 const lastX = pts[N - 1][0].toFixed(1);
+                const botY = (H - padB).toFixed(1);
 
-                // Home fill: clamp below-50% points to midY (home territory is above midline)
-                const homePoly = [[firstX, midY],
-                    ...pts.map(p => [p[0].toFixed(1), Math.min(p[1], midY).toFixed(1)]),
-                    [lastX, midY]].map(p => `${{p[0]}},${{p[1]}}`).join(' ');
-
-                // Away fill: clamp above-50% points to midY (away territory is below midline)
-                const awayPoly = [[firstX, midY],
-                    ...pts.map(p => [p[0].toFixed(1), Math.max(p[1], midY).toFixed(1)]),
-                    [lastX, midY]].map(p => `${{p[0]}},${{p[1]}}`).join(' ');
+                // Home fill: always below the line (orange)
+                const homePoly = [[firstX, botY],
+                    ...pts.map(p => [p[0].toFixed(1), p[1].toFixed(1)]),
+                    [lastX, botY]].map(p => `${{p[0]}},${{p[1]}}`).join(' ');
 
                 const linePath = 'M ' + pts.map(p => `${{p[0].toFixed(1)}},${{p[1].toFixed(1)}}`).join(' L ');
                 const [dotX, dotY] = pts[N - 1];
@@ -1625,12 +1640,11 @@ _HOMEPAGE_HTML = f"""
                 ).join('');
 
                 return `<svg class="wp-chart-svg" viewBox="0 0 ${{W}} ${{H}}" role="img" aria-label="Win probability chart">
-                    <text x="${{padL - 4}}" y="${{padT + 5}}" text-anchor="end" font-size="9" fill="#8a929d">100%</text>
+                    <text x="${{padL - 4}}" y="${{padT + 5}}" text-anchor="end" font-size="9" fill="#8a929d">${{awayAbbr}}</text>
                     <text x="${{padL - 4}}" y="${{midY + 3}}" text-anchor="end" font-size="9" fill="#8a929d">50%</text>
-                    <text x="${{padL - 4}}" y="${{H - padB}}" text-anchor="end" font-size="9" fill="#8a929d">0%</text>
-                    <polygon points="${{homePoly}}" fill="rgba(255,107,0,0.12)"/>
-                    <polygon points="${{awayPoly}}" fill="rgba(43,58,82,0.10)"/>
-                    <line x1="${{padL}}" y1="${{midY.toFixed(1)}}" x2="${{W - padR}}" y2="${{midY.toFixed(1)}}" stroke="#e7e2d8" stroke-width="1" stroke-dasharray="3,3"/>
+                    <text x="${{padL - 4}}" y="${{H - padB}}" text-anchor="end" font-size="9" fill="#8a929d">${{homeAbbr}}</text>
+                    <polygon points="${{homePoly}}" fill="rgba(255,107,0,0.15)"/>
+                    <line x1="${{padL}}" y1="${{midY.toFixed(1)}}" x2="${{W - padR}}" y2="${{midY.toFixed(1)}}" stroke="#c8c2b8" stroke-width="1" stroke-dasharray="3,3"/>
                     ${{pBounds}}
                     <path d="${{linePath}}" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-linejoin="round"/>
                     <circle cx="${{dotX.toFixed(1)}}" cy="${{dotY.toFixed(1)}}" r="3" fill="var(--orange)"/>

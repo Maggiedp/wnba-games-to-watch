@@ -266,22 +266,14 @@ def fetch_live_win_probability(espn_id: str) -> dict:
     comp = competitions[0] if competitions else {}
     status = comp.get("status", {}).get("type", {}).get("name", "STATUS_UNKNOWN")
 
-    home_team = next(
-        (
-            _canonical_name(c.get("team", {}).get("displayName", ""))
-            for c in comp.get("competitors", [])
-            if c.get("homeAway") == "home"
-        ),
-        "",
-    )
-    away_team = next(
-        (
-            _canonical_name(c.get("team", {}).get("displayName", ""))
-            for c in comp.get("competitors", [])
-            if c.get("homeAway") == "away"
-        ),
-        "",
-    )
+    competitors = comp.get("competitors", [])
+    home_competitor = next((c for c in competitors if c.get("homeAway") == "home"), {})
+    away_competitor = next((c for c in competitors if c.get("homeAway") == "away"), {})
+
+    home_team = _canonical_name(home_competitor.get("team", {}).get("displayName", ""))
+    away_team = _canonical_name(away_competitor.get("team", {}).get("displayName", ""))
+    home_score = home_competitor.get("score", "")
+    away_score = away_competitor.get("score", "")
 
     play_lookup: dict[str, dict] = {
         str(p.get("id", "")): {
@@ -309,6 +301,8 @@ def fetch_live_win_probability(espn_id: str) -> dict:
         "status": status,
         "home_team": home_team,
         "away_team": away_team,
+        "home_score": home_score,
+        "away_score": away_score,
         "plays": plays,
     }
 
