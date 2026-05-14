@@ -1119,6 +1119,9 @@ _HOMEPAGE_HTML = f"""
                 'League Pass': 'League Pass', 'NBA TV': 'NBA TV',
             }};
 
+            const EXCITEMENT_CLOSE = 0.25;
+            const EXCITEMENT_THRILLER = 0.40;
+
             function addDaysISO(days) {{
                 const d = new Date();
                 d.setDate(d.getDate() + days);
@@ -1675,6 +1678,19 @@ _HOMEPAGE_HTML = f"""
                     <path d="${{linePath}}" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-linejoin="round"/>
                     <circle cx="${{dotX.toFixed(1)}}" cy="${{dotY.toFixed(1)}}" r="3" fill="var(--orange)"/>
                 </svg>`;
+            }}
+
+            function computeExcitement(plays) {{
+                if (!plays || plays.length < 2) return null;
+                let sum = 0;
+                for (let i = 1; i < plays.length; i++) {{
+                    sum += Math.abs(plays[i].home_pct - plays[i - 1].home_pct);
+                }}
+                const maxPeriod = Math.max(...plays.map(p => p.period));
+                const score = sum / maxPeriod;
+                if (score >= EXCITEMENT_THRILLER) return 'Thriller';
+                if (score >= EXCITEMENT_CLOSE) return 'Close game';
+                return null;
             }}
 
             function setSortBy(mode) {{
