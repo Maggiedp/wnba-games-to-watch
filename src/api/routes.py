@@ -1622,6 +1622,17 @@ _HOMEPAGE_HTML = f"""
                     chart = buildWpSvg(plays, homeAbbr, awayAbbr);
                 }}
                 setWpContent(espnId, header, chart);
+
+                const excitementLabel = computeExcitement(plays);
+                document.querySelectorAll(`.excitement-badge[data-wp-id="${{espnId}}"]`).forEach(el => {{
+                    if (excitementLabel) {{
+                        el.textContent = excitementLabel;
+                        el.className = 'excitement-badge ' + (excitementLabel === 'Thriller' ? 'thriller' : 'close');
+                    }} else {{
+                        el.textContent = '';
+                        el.className = 'excitement-badge';
+                    }}
+                }});
             }}
 
             function setWpContent(espnId, header, chart) {{
