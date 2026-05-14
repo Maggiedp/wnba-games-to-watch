@@ -1490,7 +1490,7 @@ _HOMEPAGE_HTML = f"""
                         </td>
                         <td class="hide-mobile">${{renderMiniBarCompact(game.quality_score, 'quality')}}</td>
                         <td class="hide-mobile" title="${{impTitle}}">${{renderMiniBarCompact(game.importance_score, 'importance')}}</td>
-                        <td><span class="broadcaster-badge">${{escapeHtml(game.broadcaster || 'TBD')}}</span></td>
+                        <td>${{game.espn_id ? `<span class="excitement-badge" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="broadcaster-badge">${{escapeHtml(game.broadcaster || 'TBD')}}</span></td>
                     </tr>
                 `;
             }}
@@ -1520,6 +1520,7 @@ _HOMEPAGE_HTML = f"""
                                 </div>
                             </div>
                             <div class="games-card-meta">${{meta}}</div>
+                            ${{game.espn_id ? `<span class="excitement-badge" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}
                             ${{renderWinProb(game)}}
                             ${{renderMiniBar('Quality', game.quality_score, 'quality')}}
                             ${{renderMiniBar('Importance', game.importance_score, 'importance')}}
