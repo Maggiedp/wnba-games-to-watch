@@ -6,7 +6,11 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from src.db.queries import get_game_times, get_playoff_probabilities, get_teams_by_ids
+from src.db.queries import (
+    get_game_fields,
+    get_playoff_probabilities,
+    get_teams_by_ids,
+)
 from src.db.schema import DailyRanking
 
 logger = logging.getLogger(__name__)
@@ -31,6 +35,10 @@ class GameResponse(BaseModel):
     team_a_playoff_prob: float | None = None
     team_b_playoff_prob: float | None = None
     win_prob_a: float | None = None
+    espn_id: str | None = None
+    game_status: str | None = (
+        None  # STATUS_SCHEDULED | STATUS_IN_PROGRESS | STATUS_FINAL
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -45,7 +53,9 @@ class PlayoffOddsResponse(BaseModel):
 
 
 def format_games_response(
-    rankings: list[DailyRanking], session: Session
+    rankings: list[DailyRanking],
+    session: Session,
+    game_status_by_espn_id: dict[str, str] | None = None,
 ) -> list[GameResponse]:
     """Format DailyRanking objects into GameResponse objects."""
     if not rankings:
@@ -53,7 +63,7 @@ def format_games_response(
 
     team_ids = {r.team_a_id for r in rankings} | {r.team_b_id for r in rankings}
     teams = get_teams_by_ids(session, team_ids)
-    times = get_game_times(
+    fields = get_game_fields(
         session, [(r.date, r.team_a_id, r.team_b_id) for r in rankings]
     )
     today = datetime.now().strftime("%Y-%m-%d")
@@ -70,12 +80,18 @@ def format_games_response(
             )
             continue
 
+        key = (ranking.date, ranking.team_a_id, ranking.team_b_id)
+        time_val, espn_id = fields.get(key, ("", None))
+        game_status = (
+            game_status_by_espn_id.get(espn_id)
+            if game_status_by_espn_id and espn_id
+            else None
+        )
+
         results.append(
             GameResponse(
                 date=ranking.date,
-                time=times.get(
-                    (ranking.date, ranking.team_a_id, ranking.team_b_id), ""
-                ),
+                time=time_val,
                 team_a=team_a.name,
                 team_b=team_b.name,
                 team_a_abbr=team_a.abbreviation or "",
@@ -89,6 +105,8 @@ def format_games_response(
                 team_a_playoff_prob=prob_by_team_id.get(ranking.team_a_id),
                 team_b_playoff_prob=prob_by_team_id.get(ranking.team_b_id),
                 win_prob_a=ranking.win_prob_a,
+                espn_id=espn_id,
+                game_status=game_status,
             )
         )
 
@@ -889,6 +907,39 @@ _HOMEPAGE_HTML = f"""
                 margin-top: 2px;
             }}
 
+            /* ---------- WP Chart Panel ---------- */
+            [data-espn-id] {{ cursor: pointer; }}
+            .games-card[data-espn-id]:hover {{ border-color: var(--navy-3); }}
+            .wp-panel-row:hover {{ background: transparent !important; }}
+            .wp-panel {{
+                padding: 16px 20px;
+                background: var(--surface);
+                border-top: 1px solid var(--line-soft);
+                animation: wpFadeIn 0.15s ease;
+            }}
+            @keyframes wpFadeIn {{
+                from {{ opacity: 0; transform: translateY(-4px); }}
+                to {{ opacity: 1; transform: translateY(0); }}
+            }}
+            .wp-panel-header {{
+                font-size: 0.82rem;
+                color: var(--text-muted);
+                margin-bottom: 10px;
+                font-weight: 500;
+            }}
+            .wp-panel-msg {{
+                font-size: 0.88rem;
+                color: var(--text-subtle);
+                font-style: italic;
+                padding: 4px 0;
+            }}
+            .wp-chart-svg {{
+                width: 100%;
+                height: 150px;
+                display: block;
+                overflow: visible;
+            }}
+
             /* ---------- Mobile ---------- */
             @media (max-width: 768px) {{
                 .header {{ padding: 22px 18px 24px; }}
@@ -1163,6 +1214,7 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function applyFilters() {{
+                collapsePanel();
                 const fromDate = document.getElementById('from-date').value;
                 const toDate = document.getElementById('to-date').value;
                 const team = document.getElementById('team-filter').value;
@@ -1377,7 +1429,7 @@ _HOMEPAGE_HTML = f"""
                 const impTitle = game.importance_score == null ? 'Not simulated' : '';
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
-                    <tr>
+                    <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <td class="col-date">${{formatDate(game.date)}}</td>
                         <td class="col-time">${{escapeHtml(game.time || 'TBD')}}</td>
                         <td class="score-cell"><span class="score-num ${{cls}}">${{game.overall_score.toFixed(0)}}</span></td>
@@ -1412,7 +1464,7 @@ _HOMEPAGE_HTML = f"""
                 const broadcastSeg = hasBroadcaster ? ` &middot; ${{escapeHtml(game.broadcaster)}}` : '';
                 const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;
                 return `
-                    <div class="games-card">
+                    <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <div class="games-card-score ${{cls}}">${{game.overall_score.toFixed(0)}}</div>
                         <div class="games-card-stack">
                             ${{eyebrow}}
@@ -1434,6 +1486,155 @@ _HOMEPAGE_HTML = f"""
                         </div>
                     </div>
                 `;
+            }}
+
+            // ---------- WP Chart ----------
+            let openEspnId = null;
+            let pollInterval = null;
+
+            function collapsePanel() {{
+                if (pollInterval) {{ clearInterval(pollInterval); pollInterval = null; }}
+                document.querySelectorAll('.wp-panel-row').forEach(el => el.remove());
+                document.querySelectorAll('.wp-panel-card').forEach(el => el.remove());
+                openEspnId = null;
+            }}
+
+            async function expandPanel(espnId, game) {{
+                collapsePanel();
+                openEspnId = espnId;
+                document.querySelectorAll(`[data-espn-id="${{espnId}}"]`).forEach(el => {{
+                    const panelHtml = `<div class="wp-panel">
+                        <div class="wp-panel-header" data-wp-id="${{espnId}}">Loading…</div>
+                        <div class="wp-chart-content" data-wp-id="${{espnId}}"></div>
+                    </div>`;
+                    if (el.tagName === 'TR') {{
+                        const cols = el.querySelectorAll('td').length;
+                        el.insertAdjacentHTML('afterend', `<tr class="wp-panel-row"><td colspan="${{cols}}">${{panelHtml}}</td></tr>`);
+                    }} else {{
+                        el.insertAdjacentHTML('afterend', `<div class="wp-panel-card">${{panelHtml}}</div>`);
+                    }}
+                }});
+                await fetchAndRenderChart(espnId, game);
+            }}
+
+            async function fetchAndRenderChart(espnId, game) {{
+                try {{
+                    const resp = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
+                    if (!resp.ok) {{
+                        const msg = resp.status === 404 ? 'Game not found.' : 'Chart unavailable.';
+                        setWpContent(espnId, msg, `<div class="wp-panel-msg">${{msg}}</div>`);
+                        return;
+                    }}
+                    const data = await resp.json();
+                    renderChartData(espnId, data, game);
+                    if (data.status === 'STATUS_IN_PROGRESS' && openEspnId === espnId) {{
+                        if (pollInterval) clearInterval(pollInterval);
+                        pollInterval = setInterval(async () => {{
+                            if (openEspnId !== espnId) {{ clearInterval(pollInterval); pollInterval = null; return; }}
+                            try {{
+                                const r = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
+                                if (!r.ok) return;
+                                const d = await r.json();
+                                renderChartData(espnId, d, game);
+                                if (d.status === 'STATUS_FINAL') {{ clearInterval(pollInterval); pollInterval = null; }}
+                            }} catch (e) {{ console.warn('WP poll failed:', e); }}
+                        }}, 30000);
+                    }}
+                }} catch (e) {{
+                    setWpContent(espnId, 'Chart unavailable.', '<div class="wp-panel-msg">Chart unavailable.</div>');
+                }}
+            }}
+
+            function renderChartData(espnId, data, game) {{
+                const plays = data.plays || [];
+                const homeAbbr = escapeHtml(game.team_a_abbr || game.team_a);
+                const awayAbbr = escapeHtml(game.team_b_abbr || game.team_b);
+                let header = '';
+                let chart = '';
+                if (plays.length === 0) {{
+                    const msg = (data.status === 'STATUS_SCHEDULED' || !data.status || data.status === 'STATUS_UNKNOWN')
+                        ? "Game hasn't started yet."
+                        : 'No chart data available.';
+                    header = msg;
+                    chart = `<div class="wp-panel-msg">${{msg}}</div>`;
+                }} else {{
+                    const last = plays[plays.length - 1];
+                    const hp = Math.round(last.home_pct * 100);
+                    const ap = 100 - hp;
+                    if (data.status === 'STATUS_FINAL') {{
+                        header = `${{homeAbbr}} ${{hp}}% &middot; ${{awayAbbr}} ${{ap}}% &mdash; Final`;
+                    }} else if (data.status === 'STATUS_IN_PROGRESS') {{
+                        const q = last.period <= 4 ? `Q${{last.period}}` : `OT`;
+                        const clk = last.clock ? ` ${{escapeHtml(last.clock)}}` : '';
+                        header = `Live &middot; ${{q}}${{clk}} &mdash; ${{homeAbbr}} ${{hp}}% &middot; ${{awayAbbr}} ${{ap}}%`;
+                    }} else {{
+                        header = `${{homeAbbr}} ${{hp}}% &middot; ${{awayAbbr}} ${{ap}}%`;
+                    }}
+                    chart = buildWpSvg(plays);
+                }}
+                setWpContent(espnId, header, chart);
+            }}
+
+            function setWpContent(espnId, header, chart) {{
+                document.querySelectorAll(`.wp-panel-header[data-wp-id="${{espnId}}"]`).forEach(el => {{
+                    el.innerHTML = header;
+                }});
+                document.querySelectorAll(`.wp-chart-content[data-wp-id="${{espnId}}"]`).forEach(el => {{
+                    el.innerHTML = chart || '';
+                }});
+            }}
+
+            function buildWpSvg(plays) {{
+                if (!plays || plays.length < 2) return '';
+                const W = 500, H = 150;
+                const padL = 36, padR = 8, padT = 8, padB = 8;
+                const cW = W - padL - padR;
+                const cH = H - padT - padB;
+                const midY = padT + cH / 2;
+                const N = plays.length;
+
+                const pts = plays.map((p, i) => [
+                    padL + (i / (N - 1)) * cW,
+                    padT + (1 - p.home_pct) * cH
+                ]);
+
+                const periodBounds = [];
+                for (let i = 1; i < plays.length; i++) {{
+                    if (plays[i].period !== plays[i - 1].period) {{
+                        periodBounds.push(pts[i][0].toFixed(1));
+                    }}
+                }}
+
+                const firstX = pts[0][0].toFixed(1);
+                const lastX = pts[N - 1][0].toFixed(1);
+
+                // Home fill: clamp below-50% points to midY (home territory is above midline)
+                const homePoly = [[firstX, midY],
+                    ...pts.map(p => [p[0].toFixed(1), Math.min(p[1], midY).toFixed(1)]),
+                    [lastX, midY]].map(p => `${{p[0]}},${{p[1]}}`).join(' ');
+
+                // Away fill: clamp above-50% points to midY (away territory is below midline)
+                const awayPoly = [[firstX, midY],
+                    ...pts.map(p => [p[0].toFixed(1), Math.max(p[1], midY).toFixed(1)]),
+                    [lastX, midY]].map(p => `${{p[0]}},${{p[1]}}`).join(' ');
+
+                const linePath = 'M ' + pts.map(p => `${{p[0].toFixed(1)}},${{p[1].toFixed(1)}}`).join(' L ');
+                const [dotX, dotY] = pts[N - 1];
+                const pBounds = periodBounds.map(x =>
+                    `<line x1="${{x}}" y1="${{padT}}" x2="${{x}}" y2="${{H - padB}}" stroke="#e7e2d8" stroke-width="1" stroke-dasharray="2,2"/>`
+                ).join('');
+
+                return `<svg class="wp-chart-svg" viewBox="0 0 ${{W}} ${{H}}" role="img" aria-label="Win probability chart">
+                    <text x="${{padL - 4}}" y="${{padT + 5}}" text-anchor="end" font-size="9" fill="#8a929d">100%</text>
+                    <text x="${{padL - 4}}" y="${{midY + 3}}" text-anchor="end" font-size="9" fill="#8a929d">50%</text>
+                    <text x="${{padL - 4}}" y="${{H - padB}}" text-anchor="end" font-size="9" fill="#8a929d">0%</text>
+                    <polygon points="${{homePoly}}" fill="rgba(255,107,0,0.12)"/>
+                    <polygon points="${{awayPoly}}" fill="rgba(43,58,82,0.10)"/>
+                    <line x1="${{padL}}" y1="${{midY.toFixed(1)}}" x2="${{W - padR}}" y2="${{midY.toFixed(1)}}" stroke="#e7e2d8" stroke-width="1" stroke-dasharray="3,3"/>
+                    ${{pBounds}}
+                    <path d="${{linePath}}" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-linejoin="round"/>
+                    <circle cx="${{dotX.toFixed(1)}}" cy="${{dotY.toFixed(1)}}" r="3" fill="var(--orange)"/>
+                </svg>`;
             }}
 
             function setSortBy(mode) {{
@@ -1503,6 +1704,16 @@ _HOMEPAGE_HTML = f"""
                     if (e.target.id === 'modal-backdrop') closeModal();
                 }});
                 document.addEventListener('keydown', handleModalKeydown);
+
+                document.getElementById('games-container').addEventListener('click', (e) => {{
+                    const target = e.target.closest('[data-espn-id]');
+                    if (!target || !target.dataset.espnId) return;
+                    const espnId = target.dataset.espnId;
+                    if (openEspnId === espnId) {{ collapsePanel(); return; }}
+                    const game = allGames.find(g => g.espn_id === espnId);
+                    if (!game) return;
+                    expandPanel(espnId, game);
+                }});
             }});
         </script>
     </body>

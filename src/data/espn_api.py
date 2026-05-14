@@ -31,12 +31,20 @@ class ESPNAPIError(Exception):
     pass
 
 
-def _get(url: str, **params) -> dict:
+class ESPNNotFoundError(ESPNAPIError):
+    pass
+
+
+def _get(url: str, timeout: int = 10, **params) -> dict:
     """GET with standard error handling."""
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = requests.get(url, params=params, timeout=timeout)
         r.raise_for_status()
         return r.json()
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            raise ESPNNotFoundError(f"ESPN returned 404 for {url}") from e
+        raise ESPNAPIError(f"ESPN API request failed: {e}") from e
     except requests.RequestException as e:
         raise ESPNAPIError(f"ESPN API request failed: {e}") from e
 
@@ -244,3 +252,90 @@ def _parse_broadcaster(comp: dict) -> str:
 
     # No national broadcaster found — game is on League Pass (possibly blacked out locally)
     return Broadcasters.LEAGUE_PASS
+
+
+def fetch_live_win_probability(espn_id: str) -> dict:
+    """Fetch win probability data for a game from ESPN's summary endpoint.
+
+    Returns dict with espn_id, status, home_team, away_team, and plays list.
+    plays entries: {seq, period, clock, home_pct}. Empty list if no WP data.
+    """
+    data = _get(f"{SITE_API}/summary", event=espn_id)
+
+    competitions = data.get("header", {}).get("competitions", [{}])
+    comp = competitions[0] if competitions else {}
+    status = comp.get("status", {}).get("type", {}).get("name", "STATUS_UNKNOWN")
+
+    home_team = next(
+        (
+            _canonical_name(c.get("team", {}).get("displayName", ""))
+            for c in comp.get("competitors", [])
+            if c.get("homeAway") == "home"
+        ),
+        "",
+    )
+    away_team = next(
+        (
+            _canonical_name(c.get("team", {}).get("displayName", ""))
+            for c in comp.get("competitors", [])
+            if c.get("homeAway") == "away"
+        ),
+        "",
+    )
+
+    play_lookup: dict[str, dict] = {
+        str(p.get("id", "")): {
+            "period": p.get("period", {}).get("number", 1),
+            "clock": p.get("clock", {}).get("displayValue", ""),
+        }
+        for p in data.get("plays", [])
+    }
+
+    plays = []
+    for i, entry in enumerate(data.get("winprobability", [])):
+        play_id = str(entry.get("playId", ""))
+        info = play_lookup.get(play_id, {"period": 1, "clock": ""})
+        plays.append(
+            {
+                "seq": i,
+                "period": info["period"],
+                "clock": info["clock"],
+                "home_pct": entry.get("homeWinPercentage", 0.5),
+            }
+        )
+
+    return {
+        "espn_id": espn_id,
+        "status": status,
+        "home_team": home_team,
+        "away_team": away_team,
+        "plays": plays,
+    }
+
+
+def fetch_today_game_statuses(game_date: str) -> dict[str, str]:
+    """Return {espn_id: status_name} for all games on game_date (YYYY-MM-DD).
+
+    Returns empty dict if ESPN is unreachable.
+    """
+    try:
+        data = _get(
+            f"{SITE_API}/scoreboard", timeout=5, dates=game_date.replace("-", "")
+        )
+    except ESPNAPIError as e:
+        logger.warning(f"Failed to fetch game statuses for {game_date}: {e}")
+        return {}
+
+    result: dict[str, str] = {}
+    for event in data.get("events", []):
+        event_id = event.get("id", "")
+        if not event_id:
+            continue
+        status = (
+            event.get("competitions", [{}])[0]
+            .get("status", {})
+            .get("type", {})
+            .get("name", "")
+        )
+        result[event_id] = status
+    return result

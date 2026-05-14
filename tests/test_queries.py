@@ -212,3 +212,74 @@ def test_upsert_daily_ranking_updates_win_prob(session, team_ids):
     records = session.query(DailyRanking).filter_by(date="2026-06-01").all()
     assert len(records) == 1
     assert records[0].win_prob_a == pytest.approx(0.62)
+
+
+def test_upsert_game_stores_espn_id(session, team_ids):
+    a_id, b_id = team_ids
+    game = upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-15",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="401856901",
+    )
+    assert game.espn_id == "401856901"
+
+
+def test_upsert_game_updates_espn_id_on_second_call(session, team_ids):
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-15",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+    )
+    game = upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-15",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="401856901",
+    )
+    assert game.espn_id == "401856901"
+
+
+def test_get_game_fields_returns_time_and_espn_id(session, team_ids):
+    from src.db.queries import get_game_fields
+
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-15",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="401856901",
+    )
+    result = get_game_fields(session, [("2026-06-15", a_id, b_id)])
+    assert result[("2026-06-15", a_id, b_id)] == ("7:00 PM ET", "401856901")
+
+
+def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
+    from src.db.queries import get_game_fields
+
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-15",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+    )
+    result = get_game_fields(session, [("2026-06-15", a_id, b_id)])
+    time_val, espn_id = result[("2026-06-15", a_id, b_id)]
+    assert time_val == "7:00 PM ET"
+    assert espn_id is None

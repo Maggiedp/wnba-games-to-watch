@@ -61,6 +61,7 @@ def upsert_game(
     winner_id: int | None = None,
     final_score_a: int | None = None,
     final_score_b: int | None = None,
+    espn_id: str | None = None,
 ) -> Game:
     """Upsert a game (insert if not exists, update result if it has been played)."""
     game = (
@@ -79,6 +80,8 @@ def upsert_game(
             game.broadcaster = broadcaster
         if time:
             game.time = time
+        if espn_id:
+            game.espn_id = espn_id
         session.commit()
         return game
 
@@ -91,6 +94,7 @@ def upsert_game(
         winner_id=winner_id,
         final_score_a=final_score_a,
         final_score_b=final_score_b,
+        espn_id=espn_id,
     )
     session.add(game)
     session.commit()
@@ -129,10 +133,10 @@ def get_games_by_date(session: Session, date: str) -> list[Game]:
     return session.query(Game).filter(Game.date == date).order_by(Game.time).all()
 
 
-def get_game_times(
+def get_game_fields(
     session: Session, keys: list[tuple[str, int, int]]
-) -> dict[tuple[str, int, int], str]:
-    """Look up game times for a set of (date, team_a_id, team_b_id) tuples."""
+) -> dict[tuple[str, int, int], tuple[str, str | None]]:
+    """Return {(date, team_a_id, team_b_id): (time, espn_id)} for the given keys."""
     if not keys:
         return {}
     dates = {k[0] for k in keys}
@@ -148,7 +152,7 @@ def get_game_times(
     )
     wanted = set(keys)
     return {
-        (g.date, g.team_a_id, g.team_b_id): g.time or ""
+        (g.date, g.team_a_id, g.team_b_id): (g.time or "", g.espn_id)
         for g in games
         if (g.date, g.team_a_id, g.team_b_id) in wanted
     }

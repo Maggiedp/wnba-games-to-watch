@@ -45,6 +45,7 @@ class Game(Base):
     final_score_a = Column(Integer, nullable=True)
     final_score_b = Column(Integer, nullable=True)
     broadcaster = Column(String(50), default="")
+    espn_id = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     __table_args__ = (Index("idx_game_date", "date"),)
@@ -116,7 +117,20 @@ def get_engine():
 def init_db():
     engine = get_engine()
     Base.metadata.create_all(engine)
-    # SQLite doesn't support ALTER COLUMN TYPE or DO blocks; skip for local dev.
+    # SQLite: add columns that may be missing from stale DBs (no IF NOT EXISTS support).
+    if engine.dialect.name == "sqlite":
+        with engine.connect() as conn:
+            for stmt in [
+                "ALTER TABLE games ADD COLUMN espn_id VARCHAR(20)",
+                "ALTER TABLE daily_rankings ADD COLUMN win_prob_a FLOAT",
+            ]:
+                try:
+                    conn.execute(text(stmt))
+                    conn.commit()
+                except Exception:
+                    pass  # column already exists
+
+    # PostgreSQL: supports ALTER COLUMN TYPE, DO blocks, and IF NOT EXISTS.
     if engine.dialect.name == "postgresql":
         with engine.connect() as conn:
             # Widen abbreviation column if it's still VARCHAR(8) from old schema.
@@ -159,6 +173,9 @@ def init_db():
                 text(
                     "ALTER TABLE daily_rankings ADD COLUMN IF NOT EXISTS win_prob_a FLOAT"
                 )
+            )
+            conn.execute(
+                text("ALTER TABLE games ADD COLUMN IF NOT EXISTS espn_id VARCHAR(20)")
             )
             conn.commit()
     return engine
