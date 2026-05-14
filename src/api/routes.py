@@ -621,27 +621,23 @@ _HOMEPAGE_HTML = f"""
             .excitement-badge {{
                 display: none;
             }}
-            .excitement-badge.close {{
+            .excitement-badge.close,
+            .excitement-badge.thriller {{
                 display: inline-block;
                 padding: 3px 8px;
-                background: #edeae3;
-                color: #5a6270;
                 border-radius: 3px;
                 font-size: 0.73rem;
                 font-weight: 500;
                 letter-spacing: 0.01em;
                 margin-right: 4px;
             }}
+            .excitement-badge.close {{
+                background: #edeae3;
+                color: #5a6270;
+            }}
             .excitement-badge.thriller {{
-                display: inline-block;
-                padding: 3px 8px;
                 background: #fff0e0;
                 color: #b05800;
-                border-radius: 3px;
-                font-size: 0.73rem;
-                font-weight: 500;
-                letter-spacing: 0.01em;
-                margin-right: 4px;
             }}
 
             /* ---------- Mini bars ---------- */
@@ -1695,10 +1691,11 @@ _HOMEPAGE_HTML = f"""
             function computeExcitement(plays) {{
                 if (!plays || plays.length < 2) return null;
                 let sum = 0;
+                let maxPeriod = 1;
                 for (let i = 1; i < plays.length; i++) {{
                     sum += Math.abs(plays[i].home_pct - plays[i - 1].home_pct);
+                    if (plays[i].period > maxPeriod) maxPeriod = plays[i].period;
                 }}
-                const maxPeriod = Math.max(...plays.map(p => p.period));
                 const score = sum / maxPeriod;
                 if (score >= EXCITEMENT_THRILLER) return 'Thriller';
                 if (score >= EXCITEMENT_CLOSE) return 'Close game';
