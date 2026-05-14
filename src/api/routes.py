@@ -618,6 +618,32 @@ _HOMEPAGE_HTML = f"""
                 letter-spacing: 0.01em;
             }}
 
+            .excitement-badge {{
+                display: none;
+            }}
+            .excitement-badge.close {{
+                display: inline-block;
+                padding: 3px 8px;
+                background: #edeae3;
+                color: #5a6270;
+                border-radius: 3px;
+                font-size: 0.73rem;
+                font-weight: 500;
+                letter-spacing: 0.01em;
+                margin-right: 4px;
+            }}
+            .excitement-badge.thriller {{
+                display: inline-block;
+                padding: 3px 8px;
+                background: #fff0e0;
+                color: #b05800;
+                border-radius: 3px;
+                font-size: 0.73rem;
+                font-weight: 500;
+                letter-spacing: 0.01em;
+                margin-right: 4px;
+            }}
+
             /* ---------- Mini bars ---------- */
             .mini-bar-row {{
                 display: grid;
