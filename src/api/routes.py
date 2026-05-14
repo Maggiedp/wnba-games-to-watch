@@ -1119,8 +1119,8 @@ _HOMEPAGE_HTML = f"""
                 'League Pass': 'League Pass', 'NBA TV': 'NBA TV',
             }};
 
-            const EXCITEMENT_CLOSE = 0.25;
-            const EXCITEMENT_THRILLER = 0.40;
+            const EXCITEMENT_CLOSE = 2.0;
+            const EXCITEMENT_THRILLER = 2.5;
 
             function addDaysISO(days) {{
                 const d = new Date();
