@@ -824,6 +824,55 @@ _HOMEPAGE_HTML = f"""
             }}
 
             /* ---------- Footer ---------- */
+            #completed-section {{
+                margin-top: 48px;
+                border-top: 1px solid rgba(13, 27, 42, 0.08);
+                padding-top: 24px;
+            }}
+            .completed-toggle {{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                margin: 0 auto;
+                padding: 10px 20px;
+                background: transparent;
+                border: 1px solid rgba(13, 27, 42, 0.2);
+                border-radius: 999px;
+                font-family: 'Albert Sans', system-ui, sans-serif;
+                font-size: 14px;
+                font-weight: 500;
+                color: var(--navy);
+                cursor: pointer;
+            }}
+            .completed-toggle:hover {{
+                background: rgba(13, 27, 42, 0.04);
+            }}
+            .completed-toggle:focus-visible {{
+                outline: 2px solid var(--orange);
+                outline-offset: 2px;
+            }}
+            .completed-toggle-count {{
+                color: var(--navy-3);
+            }}
+            .completed-toggle-chevron {{
+                transition: transform 0.15s ease;
+            }}
+            .completed-toggle[aria-expanded="true"] .completed-toggle-chevron {{
+                transform: rotate(180deg);
+            }}
+            .completed-heading {{
+                font-family: 'Fraunces', Georgia, serif;
+                font-weight: 600;
+                font-size: 22px;
+                color: var(--navy);
+                margin: 24px 0 16px;
+            }}
+            .completed-heading-sub {{
+                font-weight: 500;
+                font-style: italic;
+                color: var(--navy-3);
+            }}
             .footer {{
                 text-align: center;
                 padding: 28px 16px;
@@ -1125,6 +1174,21 @@ _HOMEPAGE_HTML = f"""
         <main class="content">
             <div id="featured-container"></div>
             <div id="games-container"></div>
+            <section id="completed-section" aria-labelledby="completed-heading">
+                <button type="button" id="completed-toggle"
+                        class="completed-toggle" aria-expanded="false"
+                        aria-controls="completed-content" hidden>
+                    <span class="completed-toggle-text">Show completed games</span>
+                    <span class="completed-toggle-count" id="completed-toggle-count"></span>
+                    <span class="completed-toggle-chevron" aria-hidden="true">&#9662;</span>
+                </button>
+                <div id="completed-content" hidden>
+                    <h2 id="completed-heading" class="completed-heading">
+                        Completed games <span class="completed-heading-sub">&middot; Sorted by excitement</span>
+                    </h2>
+                    <div id="completed-games-container"></div>
+                </div>
+            </section>
         </main>
 
         <footer class="footer">
@@ -1169,6 +1233,8 @@ _HOMEPAGE_HTML = f"""
 
         <script>
             let allGames = [];
+            let allCompleted = [];
+            let completedExpanded = false;
             let selectedNetworks = new Set();
             let sortBy = 'date';
 
@@ -1244,6 +1310,7 @@ _HOMEPAGE_HTML = f"""
                     allGames = await response.json();
                     populateFilters();
                     applyFilters();
+                    loadCompleted();
                 }} catch (error) {{
                     document.getElementById('featured-container').innerHTML = '';
                     document.getElementById('games-container').innerHTML =
@@ -1356,6 +1423,71 @@ _HOMEPAGE_HTML = f"""
                     rest.sort((a, b) => a.date.localeCompare(b.date) || timeToMinutes(a.time) - timeToMinutes(b.time));
                 }}
                 renderGames(rest, featured);
+                if (completedExpanded) renderCompleted();
+            }}
+
+            async function loadCompleted() {{
+                try {{
+                    const resp = await fetch('/api/games/completed');
+                    if (!resp.ok) return;
+                    allCompleted = await resp.json();
+                    setupCompletedToggle();
+                }} catch (e) {{
+                    console.error('Failed to load completed games', e);
+                }}
+            }}
+
+            function setupCompletedToggle() {{
+                const btn = document.getElementById('completed-toggle');
+                const content = document.getElementById('completed-content');
+                const countEl = document.getElementById('completed-toggle-count');
+                if (!btn || !content || !countEl) return;
+                if (!allCompleted || allCompleted.length === 0) {{
+                    btn.hidden = true;
+                    return;
+                }}
+                btn.hidden = false;
+                countEl.textContent = '(' + allCompleted.length + ')';
+                btn.addEventListener('click', () => {{
+                    completedExpanded = !completedExpanded;
+                    btn.setAttribute('aria-expanded', String(completedExpanded));
+                    content.hidden = !completedExpanded;
+                    btn.querySelector('.completed-toggle-text').textContent =
+                        completedExpanded ? 'Hide completed games' : 'Show completed games';
+                    if (completedExpanded) renderCompleted();
+                }});
+            }}
+
+            function completedMatchesScope(game) {{
+                if (selectedNetworks.size > 0 && !selectedNetworks.has(game.broadcaster)) return false;
+                const team = document.getElementById('team-filter').value;
+                if (team && game.team_a !== team && game.team_b !== team) return false;
+                return true;
+            }}
+
+            function renderCompleted() {{
+                const container = document.getElementById('completed-games-container');
+                if (!container) return;
+                const filtered = allCompleted.filter(completedMatchesScope);
+                renderGames(filtered, null, 'completed-games-container');
+                paintStoredExcitement(container, filtered);
+            }}
+
+            function paintStoredExcitement(container, games) {{
+                games.forEach(g => {{
+                    if (!g.espn_id || g.excitement_index == null) return;
+                    const row = container.querySelector(`[data-espn-id="${{g.espn_id}}"]`);
+                    if (!row) return;
+                    const eyebrow = row.querySelector('.excitement-eyebrow');
+                    if (!eyebrow) return;
+                    if (g.excitement_index >= EXCITEMENT_THRILLER) {{
+                        eyebrow.textContent = 'Thriller';
+                        eyebrow.className = 'excitement-eyebrow thriller';
+                    }} else if (g.excitement_index >= EXCITEMENT_CLOSE) {{
+                        eyebrow.textContent = 'Close game';
+                        eyebrow.className = 'excitement-eyebrow close';
+                    }}
+                }});
             }}
 
             function renderFeatured(game) {{
@@ -1412,8 +1544,8 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
-            function renderGames(games, featured) {{
-                const container = document.getElementById('games-container');
+            function renderGames(games, featured, containerId) {{
+                const container = document.getElementById(containerId || 'games-container');
                 if (games.length === 0) {{ container.innerHTML = ''; return; }}
                 container.innerHTML = `
                     <table class="games-table">
