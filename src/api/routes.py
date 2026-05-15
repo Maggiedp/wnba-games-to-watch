@@ -321,6 +321,35 @@ _HOMEPAGE_HTML = f"""
             }}
             .team-prob {{ margin-top: 1px; }}
             .win-prob {{ margin-top: 3px; width: 100%; }}
+            .final-score {{
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                font-family: 'Albert Sans', system-ui, sans-serif;
+                font-size: 14px;
+                color: var(--navy);
+                margin-top: 4px;
+            }}
+            .final-team {{
+                color: var(--navy-3);
+            }}
+            .final-team.win {{
+                color: var(--navy);
+                font-weight: 600;
+            }}
+            .final-sep {{
+                color: var(--navy-3);
+            }}
+            .final-tag {{
+                margin-left: 4px;
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                color: var(--navy-3);
+                background: rgba(13, 27, 42, 0.06);
+                padding: 1px 6px;
+                border-radius: 3px;
+            }}
 
             /* ---------- Controls ---------- */
             .controls {{
@@ -1455,6 +1484,31 @@ _HOMEPAGE_HTML = f"""
                 return text ? `<div class="win-prob">${{text}}</div>` : '';
             }}
 
+            function renderFinalScore(game) {{
+                if (game.final_score_a == null || game.final_score_b == null) return '';
+                const a = escapeHtml(game.team_a_abbr || game.team_a);
+                const b = escapeHtml(game.team_b_abbr || game.team_b);
+                const winA = game.final_score_a > game.final_score_b;
+                const winB = game.final_score_b > game.final_score_a;
+                const aCls = winA ? 'final-team win' : 'final-team';
+                const bCls = winB ? 'final-team win' : 'final-team';
+                return `<div class="final-score" aria-label="Final score">
+                    <span class="${{aCls}}">${{a}} ${{game.final_score_a}}</span>
+                    <span class="final-sep">·</span>
+                    <span class="${{bCls}}">${{b}} ${{game.final_score_b}}</span>
+                    <span class="final-tag">Final</span>
+                </div>`;
+            }}
+
+            function renderScoreLine(game) {{
+                // Completed games show the final score; everything else falls back
+                // to the projected win probability text.
+                if (game.final_score_a != null && game.final_score_b != null) {{
+                    return renderFinalScore(game);
+                }}
+                return renderWinProb(game);
+            }}
+
             function renderMiniBar(label, score, kind) {{
                 if (score == null) {{
                     return `
@@ -1517,7 +1571,7 @@ _HOMEPAGE_HTML = f"""
                                     ${{renderTeam(game.team_b, game.team_b_logo)}}
                                     ${{game.team_b_playoff_prob != null ? `<div class="team-prob">${{Math.round(game.team_b_playoff_prob * 100)}}% playoff odds</div>` : ''}}
                                 </div>
-                                ${{renderWinProb(game)}}
+                                ${{renderScoreLine(game)}}
                             </div>
                         </td>
                         <td class="hide-mobile">${{renderMiniBarCompact(game.quality_score, 'quality')}}</td>
@@ -1553,7 +1607,7 @@ _HOMEPAGE_HTML = f"""
                                 </div>
                             </div>
                             <div class="games-card-meta">${{meta}}</div>
-                            ${{renderWinProb(game)}}
+                            ${{renderScoreLine(game)}}
                             ${{renderMiniBar('Quality', game.quality_score, 'quality')}}
                             ${{renderMiniBar('Importance', game.importance_score, 'importance')}}
                         </div>
