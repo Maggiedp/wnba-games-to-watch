@@ -1413,6 +1413,7 @@ _HOMEPAGE_HTML = f"""
 
                 if (games.length === 0) {{
                     renderEmpty();
+                    if (completedExpanded) renderCompleted();
                     return;
                 }}
 
