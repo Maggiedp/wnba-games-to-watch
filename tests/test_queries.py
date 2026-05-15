@@ -283,3 +283,48 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
     time_val, espn_id = result[("2026-06-15", a_id, b_id)]
     assert time_val == "7:00 PM ET"
     assert espn_id is None
+
+
+def test_game_has_excitement_index_column(tmp_path, monkeypatch):
+    """init_db creates Game with excitement_index column (NULL-able FLOAT)."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    # Force fresh engine
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        # Insert a game with explicit excitement_index, then read it back.
+        g = Game(
+            team_a_id=1,
+            team_b_id=2,
+            date="2026-06-01",
+            time="7:00 PM ET",
+            broadcaster="ION",
+            final_score_a=85,
+            final_score_b=80,
+            excitement_index=5.4,
+        )
+        session.add(g)
+        session.commit()
+        fetched = session.query(Game).filter(Game.date == "2026-06-01").first()
+        assert fetched.excitement_index == 5.4
+        # New rows default to NULL.
+        g2 = Game(team_a_id=1, team_b_id=2, date="2026-06-02", time="", broadcaster="")
+        session.add(g2)
+        session.commit()
+        assert (
+            session.query(Game)
+            .filter(Game.date == "2026-06-02")
+            .first()
+            .excitement_index
+            is None
+        )
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None

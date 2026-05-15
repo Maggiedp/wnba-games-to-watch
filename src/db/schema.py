@@ -44,6 +44,7 @@ class Game(Base):
     winner_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
     final_score_a = Column(Integer, nullable=True)
     final_score_b = Column(Integer, nullable=True)
+    excitement_index = Column(Float, nullable=True)
     broadcaster = Column(String(50), default="")
     espn_id = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=func.now())
@@ -123,6 +124,7 @@ def init_db():
             for stmt in [
                 "ALTER TABLE games ADD COLUMN espn_id VARCHAR(20)",
                 "ALTER TABLE daily_rankings ADD COLUMN win_prob_a FLOAT",
+                "ALTER TABLE games ADD COLUMN excitement_index FLOAT",
             ]:
                 try:
                     conn.execute(text(stmt))
@@ -176,6 +178,11 @@ def init_db():
             )
             conn.execute(
                 text("ALTER TABLE games ADD COLUMN IF NOT EXISTS espn_id VARCHAR(20)")
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE games ADD COLUMN IF NOT EXISTS excitement_index FLOAT"
+                )
             )
             conn.commit()
     return engine
