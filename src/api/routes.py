@@ -141,7 +141,7 @@ _HOMEPAGE_HTML = f"""
 
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=Albert+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,500&family=Albert+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 
         <style>
             :root {{
@@ -616,6 +616,52 @@ _HOMEPAGE_HTML = f"""
                 font-size: 0.78rem;
                 font-weight: 500;
                 letter-spacing: 0.01em;
+            }}
+
+            .excitement-eyebrow {{
+                display: none;
+                font-family: var(--display);
+                line-height: 1.1;
+                white-space: nowrap;
+            }}
+            .excitement-eyebrow.close {{
+                display: block;
+                font-style: italic;
+                font-size: 0.82rem;
+                font-weight: 500;
+                letter-spacing: -0.005em;
+                color: var(--text-muted);
+                margin-bottom: 4px;
+            }}
+            .excitement-eyebrow.thriller {{
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                font-style: normal;
+                font-weight: 900;
+                font-variation-settings: 'opsz' 144;
+                font-size: 1rem;
+                text-transform: uppercase;
+                letter-spacing: 0.015em;
+                color: var(--orange);
+                transform: rotate(-3deg);
+                transform-origin: left center;
+                margin-bottom: 6px;
+                text-shadow: 1.5px 1.5px 0 var(--orange-deep);
+                line-height: 1;
+            }}
+            .excitement-eyebrow.thriller::before {{
+                content: '✸';
+                color: var(--orange);
+                font-size: 0.95em;
+                line-height: 1;
+                transform: rotate(3deg);
+                text-shadow: none;
+            }}
+            .score-stack {{
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
             }}
 
             /* ---------- Mini bars ---------- */
@@ -1093,6 +1139,10 @@ _HOMEPAGE_HTML = f"""
                 'League Pass': 'League Pass', 'NBA TV': 'NBA TV',
             }};
 
+            const EXCITEMENT_CLOSE = 4.0;
+            const EXCITEMENT_THRILLER = 6.0;
+            const EXCITEMENT_FUTURE_WEIGHT = 2.5;
+
             function addDaysISO(days) {{
                 const d = new Date();
                 d.setDate(d.getDate() + days);
@@ -1443,7 +1493,7 @@ _HOMEPAGE_HTML = f"""
                     <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <td class="col-date">${{formatDate(game.date)}}</td>
                         <td class="col-time">${{escapeHtml(game.time || 'TBD')}}</td>
-                        <td class="score-cell"><span class="score-num ${{cls}}">${{game.overall_score.toFixed(0)}}</span></td>
+                        <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{game.overall_score.toFixed(0)}}</span></div></td>
                         <td>
                             ${{badge}}
                             <div class="matchup">
@@ -1478,6 +1528,7 @@ _HOMEPAGE_HTML = f"""
                     <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <div class="games-card-score ${{cls}}">${{game.overall_score.toFixed(0)}}</div>
                         <div class="games-card-stack">
+                            ${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}
                             ${{eyebrow}}
                             <div class="games-card-matchup">
                                 <div>
@@ -1592,6 +1643,19 @@ _HOMEPAGE_HTML = f"""
                     chart = buildWpSvg(plays, homeAbbr, awayAbbr);
                 }}
                 setWpContent(espnId, header, chart);
+
+                const excitementLabel = computeExcitement(plays);
+                document.querySelectorAll(`[data-espn-id="${{espnId}}"]`).forEach(row => {{
+                    const eyebrow = row.querySelector('.excitement-eyebrow');
+                    if (!eyebrow) return;
+                    if (excitementLabel) {{
+                        eyebrow.textContent = excitementLabel;
+                        eyebrow.className = 'excitement-eyebrow ' + (excitementLabel === 'Thriller' ? 'thriller' : 'close');
+                    }} else {{
+                        eyebrow.textContent = '';
+                        eyebrow.className = 'excitement-eyebrow';
+                    }}
+                }});
             }}
 
             function setWpContent(espnId, header, chart) {{
@@ -1649,6 +1713,48 @@ _HOMEPAGE_HTML = f"""
                     <path d="${{linePath}}" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-linejoin="round"/>
                     <circle cx="${{dotX.toFixed(1)}}" cy="${{dotY.toFixed(1)}}" r="3" fill="var(--orange)"/>
                 </svg>`;
+            }}
+
+            // Elapsed game seconds for a play; regulation = 2400s (4×10 min), each OT = 300s.
+            // Returns >2400 for OT plays, which correctly weights them as higher-leverage.
+            // ESPN's clock is "M:SS" most of the time but switches to "S.S" (decimal seconds)
+            // when under a minute remains in the period.
+            function elapsedSeconds(play) {{
+                const clock = play.clock || '';
+                let remainingInPeriod;
+                if (clock.indexOf(':') >= 0) {{
+                    const [m, s] = clock.split(':');
+                    remainingInPeriod = (parseFloat(m) || 0) * 60 + (parseFloat(s) || 0);
+                }} else {{
+                    remainingInPeriod = parseFloat(clock) || 0;
+                }}
+                const periodLength = play.period <= 4 ? 600 : 300;
+                const elapsedInPeriod = periodLength - remainingInPeriod;
+                let prior = 0;
+                for (let q = 1; q < play.period; q++) prior += (q <= 4 ? 600 : 300);
+                return prior + elapsedInPeriod;
+            }}
+
+            // Excitement = leverage-weighted past WP movement + expected future WP movement.
+            //   past   = Σ |ΔWPᵢ| · Lᵢ                  where Lᵢ = elapsed_s / 2400
+            //   future = γ · 2p(1−p) · L_now            where p = current WP
+            // The future term naturally vanishes when the game is decided (p → 0 or 1),
+            // and dominates for currently-tight late-game situations.
+            function computeExcitement(plays) {{
+                if (!plays || plays.length < 2) return null;
+                const REGULATION_SECS = 2400;
+                let past = 0;
+                for (let i = 1; i < plays.length; i++) {{
+                    const dWP = Math.abs(plays[i].home_pct - plays[i - 1].home_pct);
+                    past += dWP * (elapsedSeconds(plays[i]) / REGULATION_SECS);
+                }}
+                const last = plays[plays.length - 1];
+                const p = last.home_pct;
+                const future = 2 * p * (1 - p) * (elapsedSeconds(last) / REGULATION_SECS);
+                const score = past + EXCITEMENT_FUTURE_WEIGHT * future;
+                if (score >= EXCITEMENT_THRILLER) return 'Thriller';
+                if (score >= EXCITEMENT_CLOSE) return 'Close game';
+                return null;
             }}
 
             function setSortBy(mode) {{
