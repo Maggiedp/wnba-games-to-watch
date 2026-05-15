@@ -1116,8 +1116,9 @@ _HOMEPAGE_HTML = f"""
                 'League Pass': 'League Pass', 'NBA TV': 'NBA TV',
             }};
 
-            const EXCITEMENT_CLOSE = 2.0;
-            const EXCITEMENT_THRILLER = 2.5;
+            const EXCITEMENT_CLOSE = 4.0;
+            const EXCITEMENT_THRILLER = 6.0;
+            const EXCITEMENT_FUTURE_WEIGHT = 2.5;
 
             function addDaysISO(days) {{
                 const d = new Date();
@@ -1691,15 +1692,43 @@ _HOMEPAGE_HTML = f"""
                 </svg>`;
             }}
 
+            // Elapsed game seconds for a play; regulation = 2400s (4×10 min), each OT = 300s.
+            // Returns >2400 for OT plays, which correctly weights them as higher-leverage.
+            // ESPN's clock is "M:SS" most of the time but switches to "S.S" (decimal seconds)
+            // when under a minute remains in the period.
+            function elapsedSeconds(play) {{
+                const clock = play.clock || '';
+                let remainingInPeriod;
+                if (clock.indexOf(':') >= 0) {{
+                    const [m, s] = clock.split(':');
+                    remainingInPeriod = (parseFloat(m) || 0) * 60 + (parseFloat(s) || 0);
+                }} else {{
+                    remainingInPeriod = parseFloat(clock) || 0;
+                }}
+                const periodLength = play.period <= 4 ? 600 : 300;
+                const elapsedInPeriod = periodLength - remainingInPeriod;
+                let prior = 0;
+                for (let q = 1; q < play.period; q++) prior += (q <= 4 ? 600 : 300);
+                return prior + elapsedInPeriod;
+            }}
+
+            // Excitement = leverage-weighted past WP movement + expected future WP movement.
+            //   past   = Σ |ΔWPᵢ| · Lᵢ                  where Lᵢ = elapsed_s / 2400
+            //   future = γ · 2p(1−p) · L_now            where p = current WP
+            // The future term naturally vanishes when the game is decided (p → 0 or 1),
+            // and dominates for currently-tight late-game situations.
             function computeExcitement(plays) {{
                 if (!plays || plays.length < 2) return null;
-                let sum = 0;
-                let maxPeriod = 1;
+                const REGULATION_SECS = 2400;
+                let past = 0;
                 for (let i = 1; i < plays.length; i++) {{
-                    sum += Math.abs(plays[i].home_pct - plays[i - 1].home_pct);
-                    if (plays[i].period > maxPeriod) maxPeriod = plays[i].period;
+                    const dWP = Math.abs(plays[i].home_pct - plays[i - 1].home_pct);
+                    past += dWP * (elapsedSeconds(plays[i]) / REGULATION_SECS);
                 }}
-                const score = sum / maxPeriod;
+                const last = plays[plays.length - 1];
+                const p = last.home_pct;
+                const future = 2 * p * (1 - p) * (elapsedSeconds(last) / REGULATION_SECS);
+                const score = past + EXCITEMENT_FUTURE_WEIGHT * future;
                 if (score >= EXCITEMENT_THRILLER) return 'Thriller';
                 if (score >= EXCITEMENT_CLOSE) return 'Close game';
                 return null;
