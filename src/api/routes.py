@@ -141,7 +141,7 @@ _HOMEPAGE_HTML = f"""
 
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=Albert+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,500&family=Albert+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 
         <style>
             :root {{
@@ -621,20 +621,43 @@ _HOMEPAGE_HTML = f"""
             .excitement-eyebrow {{
                 display: none;
                 font-family: var(--display);
+                line-height: 1.1;
+                white-space: nowrap;
+            }}
+            .excitement-eyebrow.close {{
+                display: block;
                 font-style: italic;
                 font-size: 0.82rem;
                 font-weight: 500;
-                line-height: 1.1;
                 letter-spacing: -0.005em;
-                white-space: nowrap;
-            }}
-            .excitement-eyebrow.close,
-            .excitement-eyebrow.thriller {{
-                display: block;
+                color: var(--text-muted);
                 margin-bottom: 4px;
             }}
-            .excitement-eyebrow.close {{ color: var(--text-muted); }}
-            .excitement-eyebrow.thriller {{ color: var(--orange); }}
+            .excitement-eyebrow.thriller {{
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                font-style: normal;
+                font-weight: 900;
+                font-variation-settings: 'opsz' 144;
+                font-size: 1rem;
+                text-transform: uppercase;
+                letter-spacing: 0.015em;
+                color: var(--orange);
+                transform: rotate(-3deg);
+                transform-origin: left center;
+                margin-bottom: 6px;
+                text-shadow: 1.5px 1.5px 0 var(--orange-deep);
+                line-height: 1;
+            }}
+            .excitement-eyebrow.thriller::before {{
+                content: '✸';
+                color: var(--orange);
+                font-size: 0.95em;
+                line-height: 1;
+                transform: rotate(3deg);
+                text-shadow: none;
+            }}
             .score-stack {{
                 display: flex;
                 flex-direction: column;
