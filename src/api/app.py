@@ -85,11 +85,13 @@ async def get_completed_games_endpoint():
 
 
 @app.get("/api/games/filter", response_model=list[GameResponse])
-async def get_games_by_broadcaster(broadcaster: str):
+async def get_games_by_broadcaster(broadcaster: str, mode: str = "upcoming"):
     start_date = datetime.now().strftime("%Y-%m-%d")
     session = get_session()
     try:
-        rankings = get_rankings_by_broadcaster(session, start_date, broadcaster)
+        rankings = get_rankings_by_broadcaster(
+            session, start_date, broadcaster, mode=mode
+        )
         return format_games_response(rankings, session)
     finally:
         session.close()
