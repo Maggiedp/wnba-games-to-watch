@@ -8,8 +8,11 @@ from datetime import date, datetime
 
 from src.constants import GameStatus
 from src.data.espn_api import (
+    ESPNAPIError,
+    ESPNNotFoundError,
     fetch_bpi_ratings,
     fetch_games_for_range,
+    fetch_live_win_probability,
     fetch_schedule_and_results,
     fetch_team_details,
 )
@@ -20,6 +23,7 @@ from src.data.wnba_schedule import (
 from src.db.queries import (
     get_all_teams,
     get_completed_games,
+    get_completed_games_missing_excitement,
     get_importance_max_swing,
     get_team_by_id,
     get_team_by_name,
@@ -36,6 +40,7 @@ from src.scoring.elo import (
     expected_win_prob,
     replay_games,
 )
+from src.scoring.excitement import compute_excitement
 from src.scoring.importance import normalize_importance_score
 from src.scoring.monte_carlo import (
     compute_importance_from_matrix,
@@ -159,6 +164,40 @@ def fetch_and_store_games(session) -> list[dict]:
 
     logger.info(f"Upserted {stored} games")
     return games
+
+
+def populate_excitement_for_recent_completions(session) -> None:
+    """For 2026 games that completed but have no excitement_index, fetch
+    play-by-play from ESPN and compute and store the final excitement score.
+
+    Failures (ESPN unreachable, missing PBP, parse error) are logged and the
+    game is stored as 0.0 — one bad game must not block the rest of the job.
+    """
+    games = get_completed_games_missing_excitement(session, season_year=2026)
+    if not games:
+        logger.info("No completed games need excitement backfill")
+        return
+    logger.info(f"Computing excitement_index for {len(games)} completed games")
+    stored = 0
+    for game in games:
+        try:
+            wp = fetch_live_win_probability(game.espn_id)
+            plays = wp.get("plays") or []
+            score = compute_excitement(plays)
+        except (ESPNAPIError, ESPNNotFoundError) as e:
+            logger.warning(
+                f"Could not fetch PBP for game {game.id} (espn_id={game.espn_id}): {e}"
+            )
+            score = 0.0
+        except Exception as e:
+            logger.warning(
+                f"Failed to compute excitement for game {game.id} (espn_id={game.espn_id}): {e}"
+            )
+            score = 0.0
+        game.excitement_index = score
+        stored += 1
+    session.commit()
+    logger.info(f"Stored excitement_index for {stored} games")
 
 
 def compute_elo_ratings() -> dict[str, float]:
@@ -412,6 +451,7 @@ def main() -> int:
         try:
             fetch_and_store_bpi_ratings(session)
             games = fetch_and_store_games(session)
+            populate_excitement_for_recent_completions(session)
             elo_ratings = compute_elo_ratings()
             standings = compute_standings(session, elo_ratings)
             scored, playoff_probs = compute_daily_scores(session, games, standings)

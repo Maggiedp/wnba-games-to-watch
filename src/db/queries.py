@@ -62,6 +62,7 @@ def upsert_game(
     final_score_a: int | None = None,
     final_score_b: int | None = None,
     espn_id: str | None = None,
+    excitement_index: float | None = None,
 ) -> Game:
     """Upsert a game (insert if not exists, update result if it has been played)."""
     game = (
@@ -82,6 +83,8 @@ def upsert_game(
             game.time = time
         if espn_id:
             game.espn_id = espn_id
+        if excitement_index is not None:
+            game.excitement_index = excitement_index
         session.commit()
         return game
 
@@ -95,6 +98,7 @@ def upsert_game(
         final_score_a=final_score_a,
         final_score_b=final_score_b,
         espn_id=espn_id,
+        excitement_index=excitement_index,
     )
     session.add(game)
     session.commit()
@@ -176,6 +180,25 @@ def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
         .order_by(Game.date, Game.time)
+        .all()
+    )
+
+
+def get_completed_games_missing_excitement(
+    session: Session, season_year: int = 2026
+) -> list[Game]:
+    """Completed games for `season_year` that still need excitement_index computed.
+
+    A game is "completed" when winner_id is set. An espn_id is required because
+    the computation needs ESPN play-by-play; games without one can't be backfilled.
+    """
+    return (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(Game.excitement_index.is_(None))
+        .filter(Game.espn_id.isnot(None))
+        .order_by(Game.date)
         .all()
     )
 

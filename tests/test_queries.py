@@ -285,6 +285,140 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
     assert espn_id is None
 
 
+def test_upsert_game_writes_excitement_index(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import upsert_game
+        from src.db.schema import Game
+
+        upsert_game(
+            session,
+            team_a_id=1,
+            team_b_id=2,
+            date="2026-06-01",
+            time="7:00 PM ET",
+            broadcaster="ION",
+            final_score_a=90,
+            final_score_b=85,
+            winner_id=1,
+            excitement_index=5.5,
+        )
+        g = session.query(Game).filter(Game.date == "2026-06-01").first()
+        assert g.excitement_index == 5.5
+
+        # Upserting again without excitement_index does NOT clobber the existing value.
+        upsert_game(
+            session,
+            team_a_id=1,
+            team_b_id=2,
+            date="2026-06-01",
+            time="7:00 PM ET",
+            broadcaster="ION",
+        )
+        g = session.query(Game).filter(Game.date == "2026-06-01").first()
+        assert g.excitement_index == 5.5
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
+def test_get_completed_games_missing_excitement(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import get_completed_games_missing_excitement
+        from src.db.schema import Game
+
+        # Completed, no excitement → returned.
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="111",
+            )
+        )
+        # Completed, has excitement → not returned.
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-21",
+                time="",
+                broadcaster="",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="222",
+                excitement_index=4.2,
+            )
+        )
+        # Not completed (no final score) → not returned.
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-22",
+                time="",
+                broadcaster="",
+                espn_id="333",
+            )
+        )
+        # Completed but no espn_id → not returned (can't fetch PBP).
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-23",
+                time="",
+                broadcaster="",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+            )
+        )
+        # Different year → not returned.
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2025-09-15",
+                time="",
+                broadcaster="",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="444",
+            )
+        )
+        session.commit()
+
+        games = get_completed_games_missing_excitement(session, season_year=2026)
+        espn_ids = {g.espn_id for g in games}
+        assert espn_ids == {"111"}
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_game_has_excitement_index_column(tmp_path, monkeypatch):
     """init_db creates Game with excitement_index column (NULL-able FLOAT)."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
