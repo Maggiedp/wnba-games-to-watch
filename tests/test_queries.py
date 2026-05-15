@@ -504,3 +504,95 @@ def test_get_game_fields_returns_final_scores_and_excitement(tmp_path, monkeypat
         session.close()
         schema._engine = None
         schema._session_factory = None
+
+
+def test_get_completed_rankings_sorts_by_excitement(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import get_completed_rankings, upsert_daily_ranking
+        from src.db.schema import Game
+
+        # Three completed 2026 games with different excitement values.
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=75,
+                espn_id="A",
+                excitement_index=2.0,
+            )
+        )
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-21",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=78,
+                espn_id="B",
+                excitement_index=6.5,
+            )
+        )
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-22",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=79,
+                espn_id="C",
+                excitement_index=4.2,
+            )
+        )
+        # One missing-excitement game — must be excluded.
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-23",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="D",
+            )
+        )
+        session.commit()
+        # Matching DailyRanking rows (required — the query joins on date+team pair).
+        for date in ("2026-05-20", "2026-05-21", "2026-05-22", "2026-05-23"):
+            upsert_daily_ranking(
+                session,
+                date=date,
+                team_a_id=1,
+                team_b_id=2,
+                quality_score=50.0,
+                importance_score=None,
+                overall_score=50.0,
+                broadcaster="ION",
+            )
+        rankings = get_completed_rankings(session, season_year=2026)
+        # Sorted by excitement desc; the no-excitement row excluded.
+        dates_in_order = [r.date for r in rankings]
+        assert dates_in_order == ["2026-05-21", "2026-05-22", "2026-05-20"]
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None

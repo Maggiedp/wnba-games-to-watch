@@ -17,6 +17,7 @@ from src.data.espn_api import (
     fetch_today_game_statuses,
 )
 from src.db.queries import (
+    get_completed_rankings,
     get_daily_rankings,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
@@ -67,6 +68,17 @@ async def get_upcoming_games_endpoint(days: int = Query(7, ge=1, le=30)):  # noq
     session = get_session()
     try:
         rankings = get_upcoming_rankings(session, start_date)
+        return format_games_response(rankings, session)
+    finally:
+        session.close()
+
+
+@app.get("/api/games/completed", response_model=list[GameResponse])
+async def get_completed_games_endpoint():
+    """Return all completed 2026 games sorted by excitement desc."""
+    session = get_session()
+    try:
+        rankings = get_completed_rankings(session, season_year=2026)
         return format_games_response(rankings, session)
     finally:
         session.close()

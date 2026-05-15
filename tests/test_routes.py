@@ -292,3 +292,69 @@ def test_format_games_response_game_status_none_when_no_dict(session, team_ids):
     )
     result = format_games_response([ranking], session)
     assert result[0].game_status is None
+
+
+def test_completed_endpoint_returns_excitement_sorted_games(tmp_path, monkeypatch):
+    """GET /api/games/completed returns 2026 completed games sorted by excitement desc."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    from src.db.queries import upsert_daily_ranking, upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    team_a_id = session.query(schema.Team).filter_by(name="Aces").one().id
+    team_b_id = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    for date, excitement in [
+        ("2026-05-20", 3.0),
+        ("2026-05-21", 7.0),
+        ("2026-05-22", 5.0),
+    ]:
+        session.add(
+            Game(
+                team_a_id=team_a_id,
+                team_b_id=team_b_id,
+                date=date,
+                time="",
+                broadcaster="ION",
+                winner_id=team_a_id,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id=f"e{date}",
+                excitement_index=excitement,
+            )
+        )
+        upsert_daily_ranking(
+            session,
+            date=date,
+            team_a_id=team_a_id,
+            team_b_id=team_b_id,
+            quality_score=50.0,
+            importance_score=None,
+            overall_score=50.0,
+            broadcaster="ION",
+        )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/completed")
+    assert resp.status_code == 200
+    rows = resp.json()
+    dates_in_order = [r["date"] for r in rows]
+    assert dates_in_order == ["2026-05-21", "2026-05-22", "2026-05-20"]
+    assert rows[0]["excitement_index"] == 7.0
+    assert rows[0]["final_score_a"] == 80
+    assert rows[0]["final_score_b"] == 70
+    schema._engine = None
+    schema._session_factory = None

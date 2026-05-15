@@ -282,6 +282,32 @@ def get_upcoming_rankings(session: Session, start_date: str) -> list[DailyRankin
     )
 
 
+def get_completed_rankings(
+    session: Session, season_year: int = 2026
+) -> list[DailyRanking]:
+    """DailyRanking rows for completed games in `season_year`, sorted by
+    excitement_index descending (ties broken by date descending).
+
+    Joins `daily_rankings` to `games` on (date, team_a_id, team_b_id). Games
+    with winner_id IS NULL (not finished) or excitement_index IS NULL
+    (not yet computed) are excluded.
+    """
+    return (
+        session.query(DailyRanking)
+        .join(
+            Game,
+            (Game.date == DailyRanking.date)
+            & (Game.team_a_id == DailyRanking.team_a_id)
+            & (Game.team_b_id == DailyRanking.team_b_id),
+        )
+        .filter(DailyRanking.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(Game.excitement_index.isnot(None))
+        .order_by(Game.excitement_index.desc(), DailyRanking.date.desc())
+        .all()
+    )
+
+
 def get_rankings_by_broadcaster(
     session: Session, start_date: str, broadcaster: str
 ) -> list[DailyRanking]:
