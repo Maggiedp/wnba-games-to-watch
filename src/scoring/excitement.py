@@ -1,0 +1,64 @@
+"""Python port of the JS excitement-index formula.
+
+Mirrors the live in-browser computation in src/api/routes.py
+(computeExcitement, elapsedSeconds). Used at daily-update time to store
+a final excitement score per completed game so the archive endpoint
+can sort by it cheaply.
+
+Formula:
+    past   = Σ |ΔWPᵢ| · Lᵢ                    where Lᵢ = elapsedSecondsᵢ / 2400
+    future = γ · 2·p·(1−p) · L_now            where p = last play's home_pct
+    score  = past + future
+
+The future term naturally vanishes for finished games (p → 0 or 1),
+so a stored score is dominated by the realized past-movement signal.
+
+Constants must stay in sync with the JS template literals in
+src/api/routes.py — tests/test_excitement.py asserts this.
+"""
+
+EXCITEMENT_CLOSE = 4.0
+EXCITEMENT_THRILLER = 6.0
+EXCITEMENT_FUTURE_WEIGHT = 2.5
+
+REGULATION_SECONDS = 2400  # 4 × 10 min
+OT_PERIOD_SECONDS = 300
+
+
+def elapsed_seconds(play: dict) -> float:
+    """Total elapsed game-time seconds at this play.
+
+    ESPN's clock is "M:SS" most of the time, but switches to decimal
+    seconds like "48.7" when under a minute remains in the period.
+    """
+    clock = play.get("clock", "") or ""
+    if ":" in clock:
+        m, s = clock.split(":", 1)
+        remaining = (float(m) if m else 0.0) * 60 + (float(s) if s else 0.0)
+    else:
+        try:
+            remaining = float(clock)
+        except ValueError:
+            remaining = 0.0
+    period = int(play.get("period", 1))
+    period_length = 600 if period <= 4 else OT_PERIOD_SECONDS
+    elapsed_in_period = period_length - remaining
+    prior = sum(600 if q <= 4 else OT_PERIOD_SECONDS for q in range(1, period))
+    return prior + elapsed_in_period
+
+
+def compute_excitement(plays: list[dict]) -> float:
+    """Return the raw excitement score for a completed game.
+
+    Returns 0.0 if there are fewer than 2 plays (insufficient data).
+    """
+    if not plays or len(plays) < 2:
+        return 0.0
+    past = 0.0
+    for i in range(1, len(plays)):
+        d_wp = abs(plays[i]["home_pct"] - plays[i - 1]["home_pct"])
+        past += d_wp * (elapsed_seconds(plays[i]) / REGULATION_SECONDS)
+    last = plays[-1]
+    p = last["home_pct"]
+    future = 2 * p * (1 - p) * (elapsed_seconds(last) / REGULATION_SECONDS)
+    return past + EXCITEMENT_FUTURE_WEIGHT * future
