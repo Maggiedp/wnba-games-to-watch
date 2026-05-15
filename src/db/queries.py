@@ -1,5 +1,7 @@
 """Database query helpers for WNBA Games to Watch."""
 
+from dataclasses import dataclass
+
 from sqlalchemy.orm import Session
 
 from src.db.schema import DailyRanking, Game, PlayoffProbability, SeasonConfig, Team
@@ -137,10 +139,21 @@ def get_games_by_date(session: Session, date: str) -> list[Game]:
     return session.query(Game).filter(Game.date == date).order_by(Game.time).all()
 
 
+@dataclass(frozen=True)
+class GameFields:
+    """Per-game metadata joined into ranking responses."""
+
+    time: str
+    espn_id: str | None
+    final_score_a: int | None
+    final_score_b: int | None
+    excitement_index: float | None
+
+
 def get_game_fields(
     session: Session, keys: list[tuple[str, int, int]]
-) -> dict[tuple[str, int, int], tuple[str, str | None]]:
-    """Return {(date, team_a_id, team_b_id): (time, espn_id)} for the given keys."""
+) -> dict[tuple[str, int, int], GameFields]:
+    """Return {(date, team_a_id, team_b_id): GameFields} for the given keys."""
     if not keys:
         return {}
     dates = {k[0] for k in keys}
@@ -156,7 +169,13 @@ def get_game_fields(
     )
     wanted = set(keys)
     return {
-        (g.date, g.team_a_id, g.team_b_id): (g.time or "", g.espn_id)
+        (g.date, g.team_a_id, g.team_b_id): GameFields(
+            time=g.time or "",
+            espn_id=g.espn_id,
+            final_score_a=g.final_score_a,
+            final_score_b=g.final_score_b,
+            excitement_index=g.excitement_index,
+        )
         for g in games
         if (g.date, g.team_a_id, g.team_b_id) in wanted
     }

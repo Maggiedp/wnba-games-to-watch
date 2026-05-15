@@ -264,7 +264,9 @@ def test_get_game_fields_returns_time_and_espn_id(session, team_ids):
         espn_id="401856901",
     )
     result = get_game_fields(session, [("2026-06-15", a_id, b_id)])
-    assert result[("2026-06-15", a_id, b_id)] == ("7:00 PM ET", "401856901")
+    gf = result[("2026-06-15", a_id, b_id)]
+    assert gf.time == "7:00 PM ET"
+    assert gf.espn_id == "401856901"
 
 
 def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
@@ -280,9 +282,9 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
         broadcaster="ESPN",
     )
     result = get_game_fields(session, [("2026-06-15", a_id, b_id)])
-    time_val, espn_id = result[("2026-06-15", a_id, b_id)]
-    assert time_val == "7:00 PM ET"
-    assert espn_id is None
+    gf = result[("2026-06-15", a_id, b_id)]
+    assert gf.time == "7:00 PM ET"
+    assert gf.espn_id is None
 
 
 def test_upsert_game_writes_excitement_index(tmp_path, monkeypatch):
@@ -458,6 +460,46 @@ def test_game_has_excitement_index_column(tmp_path, monkeypatch):
             .excitement_index
             is None
         )
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
+def test_get_game_fields_returns_final_scores_and_excitement(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import get_game_fields
+        from src.db.schema import Game
+
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-06-01",
+                time="7:00 PM ET",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=88,
+                final_score_b=82,
+                espn_id="42",
+                excitement_index=5.5,
+            )
+        )
+        session.commit()
+        fields = get_game_fields(session, [("2026-06-01", 1, 2)])
+        gf = fields[("2026-06-01", 1, 2)]
+        assert gf.time == "7:00 PM ET"
+        assert gf.espn_id == "42"
+        assert gf.final_score_a == 88
+        assert gf.final_score_b == 82
+        assert gf.excitement_index == 5.5
     finally:
         session.close()
         schema._engine = None

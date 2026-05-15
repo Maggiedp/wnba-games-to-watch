@@ -39,6 +39,9 @@ class GameResponse(BaseModel):
     game_status: str | None = (
         None  # STATUS_SCHEDULED | STATUS_IN_PROGRESS | STATUS_FINAL
     )
+    final_score_a: int | None = None
+    final_score_b: int | None = None
+    excitement_index: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -81,7 +84,12 @@ def format_games_response(
             continue
 
         key = (ranking.date, ranking.team_a_id, ranking.team_b_id)
-        time_val, espn_id = fields.get(key, ("", None))
+        gf = fields.get(key)
+        time_val = gf.time if gf else ""
+        espn_id = gf.espn_id if gf else None
+        final_score_a = gf.final_score_a if gf else None
+        final_score_b = gf.final_score_b if gf else None
+        excitement_index = gf.excitement_index if gf else None
         game_status = (
             game_status_by_espn_id.get(espn_id)
             if game_status_by_espn_id and espn_id
@@ -107,6 +115,9 @@ def format_games_response(
                 win_prob_a=ranking.win_prob_a,
                 espn_id=espn_id,
                 game_status=game_status,
+                final_score_a=final_score_a,
+                final_score_b=final_score_b,
+                excitement_index=excitement_index,
             )
         )
 
