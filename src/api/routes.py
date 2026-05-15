@@ -618,26 +618,27 @@ _HOMEPAGE_HTML = f"""
                 letter-spacing: 0.01em;
             }}
 
-            .excitement-badge {{
+            .excitement-eyebrow {{
                 display: none;
-            }}
-            .excitement-badge.close,
-            .excitement-badge.thriller {{
-                display: inline-block;
-                padding: 3px 8px;
-                border-radius: 3px;
-                font-size: 0.73rem;
+                font-family: var(--display);
+                font-style: italic;
+                font-size: 0.82rem;
                 font-weight: 500;
-                letter-spacing: 0.01em;
-                margin-right: 4px;
+                line-height: 1.1;
+                letter-spacing: -0.005em;
+                white-space: nowrap;
             }}
-            .excitement-badge.close {{
-                background: #edeae3;
-                color: #5a6270;
+            .excitement-eyebrow.close,
+            .excitement-eyebrow.thriller {{
+                display: block;
+                margin-bottom: 4px;
             }}
-            .excitement-badge.thriller {{
-                background: #fff0e0;
-                color: #b05800;
+            .excitement-eyebrow.close {{ color: var(--text-muted); }}
+            .excitement-eyebrow.thriller {{ color: var(--orange); }}
+            .score-stack {{
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
             }}
 
             /* ---------- Mini bars ---------- */
@@ -1468,7 +1469,7 @@ _HOMEPAGE_HTML = f"""
                     <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <td class="col-date">${{formatDate(game.date)}}</td>
                         <td class="col-time">${{escapeHtml(game.time || 'TBD')}}</td>
-                        <td class="score-cell"><span class="score-num ${{cls}}">${{game.overall_score.toFixed(0)}}</span></td>
+                        <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{game.overall_score.toFixed(0)}}</span></div></td>
                         <td>
                             ${{badge}}
                             <div class="matchup">
@@ -1486,7 +1487,7 @@ _HOMEPAGE_HTML = f"""
                         </td>
                         <td class="hide-mobile">${{renderMiniBarCompact(game.quality_score, 'quality')}}</td>
                         <td class="hide-mobile" title="${{impTitle}}">${{renderMiniBarCompact(game.importance_score, 'importance')}}</td>
-                        <td>${{game.espn_id ? `<span class="excitement-badge" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="broadcaster-badge">${{escapeHtml(game.broadcaster || 'TBD')}}</span></td>
+                        <td><span class="broadcaster-badge">${{escapeHtml(game.broadcaster || 'TBD')}}</span></td>
                     </tr>
                 `;
             }}
@@ -1503,6 +1504,7 @@ _HOMEPAGE_HTML = f"""
                     <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <div class="games-card-score ${{cls}}">${{game.overall_score.toFixed(0)}}</div>
                         <div class="games-card-stack">
+                            ${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}
                             ${{eyebrow}}
                             <div class="games-card-matchup">
                                 <div>
@@ -1516,7 +1518,6 @@ _HOMEPAGE_HTML = f"""
                                 </div>
                             </div>
                             <div class="games-card-meta">${{meta}}</div>
-                            ${{game.espn_id ? `<span class="excitement-badge" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}
                             ${{renderWinProb(game)}}
                             ${{renderMiniBar('Quality', game.quality_score, 'quality')}}
                             ${{renderMiniBar('Importance', game.importance_score, 'importance')}}
@@ -1621,14 +1622,14 @@ _HOMEPAGE_HTML = f"""
 
                 const excitementLabel = computeExcitement(plays);
                 document.querySelectorAll(`[data-espn-id="${{espnId}}"]`).forEach(row => {{
-                    const badge = row.querySelector('.excitement-badge');
-                    if (!badge) return;
+                    const eyebrow = row.querySelector('.excitement-eyebrow');
+                    if (!eyebrow) return;
                     if (excitementLabel) {{
-                        badge.textContent = excitementLabel;
-                        badge.className = 'excitement-badge ' + (excitementLabel === 'Thriller' ? 'thriller' : 'close');
+                        eyebrow.textContent = excitementLabel;
+                        eyebrow.className = 'excitement-eyebrow ' + (excitementLabel === 'Thriller' ? 'thriller' : 'close');
                     }} else {{
-                        badge.textContent = '';
-                        badge.className = 'excitement-badge';
+                        eyebrow.textContent = '';
+                        eyebrow.className = 'excitement-eyebrow';
                     }}
                 }});
             }}
