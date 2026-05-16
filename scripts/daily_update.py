@@ -6,7 +6,7 @@ import random
 import sys
 from datetime import date, datetime, timedelta
 
-from src.constants import GameStatus
+from src.constants import UN_FINALIZE_STATUSES, GameStatus
 from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
@@ -290,10 +290,10 @@ def refresh_recent_excitement_scores(
                 f"Refresh failed for game {game.id} (espn_id={game.espn_id}): {e}"
             )
             continue
-        if status != GameStatus.FINAL:
-            # ESPN un-finalized this game (postponement, data correction).
-            # Clear cached completion so the archive doesn't keep showing
-            # the stale result. Matches upsert_game(is_complete=False).
+        if status in UN_FINALIZE_STATUSES:
+            # Explicit un-finalization (postponed, canceled, rescheduled,
+            # in-progress, or back to scheduled). Clear cached completion
+            # so the archive doesn't keep showing the stale result.
             logger.info(
                 f"Game {game.id} (espn_id={game.espn_id}) un-finalized "
                 f"(status={status!r}); clearing stored completion."
@@ -304,6 +304,10 @@ def refresh_recent_excitement_scores(
             game.excitement_index = None
             game.excitement_computed_at = None
             game.excitement_last_attempt_at = None
+            continue
+        if status != GameStatus.FINAL:
+            # STATUS_UNKNOWN or any other unrecognized status — treat as
+            # a transient ESPN glitch, don't downgrade a stored final.
             continue
         if score is None:
             continue

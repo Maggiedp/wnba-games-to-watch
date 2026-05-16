@@ -33,6 +33,25 @@ class GameStatus:
     FINAL = "STATUS_FINAL"
     SCHEDULED = "STATUS_SCHEDULED"
     IN_PROGRESS = "STATUS_IN_PROGRESS"
+    POSTPONED = "STATUS_POSTPONED"
+    CANCELED = "STATUS_CANCELED"
+    RESCHEDULED = "STATUS_RESCHEDULED"
+
+
+# Statuses that explicitly mean "not final any more." Used by the
+# excitement-refresh path to decide whether to clear stored completion.
+# STATUS_UNKNOWN is *not* in this set — that's the parser fallback for
+# malformed/partial ESPN responses, and treating it as un-finalization
+# would erase valid completed games on a transient glitch.
+UN_FINALIZE_STATUSES = frozenset(
+    {
+        GameStatus.SCHEDULED,
+        GameStatus.IN_PROGRESS,
+        GameStatus.POSTPONED,
+        GameStatus.CANCELED,
+        GameStatus.RESCHEDULED,
+    }
+)
 
 
 # Maps raw ESPN broadcast name (uppercased) → canonical display name.

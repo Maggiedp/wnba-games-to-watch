@@ -419,6 +419,65 @@ def test_upsert_game_matches_by_espn_id_on_reschedule(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
+def test_refresh_preserves_completion_on_unknown_status(tmp_path, monkeypatch):
+    """STATUS_UNKNOWN is fetch_live_win_probability's parser fallback for
+    malformed/partial ESPN responses — not a real un-finalization. The
+    refresh path must NOT clear stored completion on it, otherwise a
+    transient ESPN glitch erases valid completed games."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime, timedelta
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        one_day_ago = datetime.now() - timedelta(days=1)
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="7:00 PM ET",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="glitched",
+                excitement_index=5.0,
+                excitement_computed_at=one_day_ago,
+                excitement_last_attempt_at=one_day_ago,
+            )
+        )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        monkeypatch.setattr(
+            daily_update,
+            "fetch_live_win_probability",
+            lambda espn_id, timeout=10: {
+                "status": "STATUS_UNKNOWN",
+                "plays": [],
+            },
+        )
+        daily_update.refresh_recent_excitement_scores(session, window_days=2)
+        session.expire_all()
+        g = session.query(Game).filter(Game.espn_id == "glitched").one()
+        # All completion fields preserved — UNKNOWN is treated as transient.
+        assert g.winner_id == 1
+        assert g.final_score_a == 80 and g.final_score_b == 70
+        assert g.excitement_index == 5.0
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_refresh_clears_completion_when_status_un_finalizes(tmp_path, monkeypatch):
     """If the refresh fetch reports status != FINAL for a previously-scored
     game, the cached completion (winner, scores, excitement) must be cleared
