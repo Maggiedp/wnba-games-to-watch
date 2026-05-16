@@ -1467,6 +1467,8 @@ _HOMEPAGE_HTML = f"""
                 if (!allCompleted.length) return;
                 btn.hidden = false;
                 countEl.textContent = '(' + allCompleted.length + ')';
+                if (btn.dataset.toggleReady) return;
+                btn.dataset.toggleReady = '1';
                 btn.addEventListener('click', () => {{
                     const next = btn.getAttribute('aria-expanded') !== 'true';
                     btn.setAttribute('aria-expanded', String(next));
@@ -1625,9 +1627,7 @@ _HOMEPAGE_HTML = f"""
                 return score == null ? '—' : score.toFixed(0);
             }}
 
-            // For completed archive rows, the list is sorted by excitement_index,
-            // so the visible Score cell must show that same metric — not the
-            // pre-game overall_score, which would mismatch the sort order.
+            // Show excitement_index so the visible Score matches the archive's sort key.
             function primaryScore(game) {{
                 if (game.excitement_index != null) return game.excitement_index.toFixed(1);
                 return formatScore(game.overall_score);
