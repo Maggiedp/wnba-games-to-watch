@@ -271,7 +271,6 @@ def refresh_recent_excitement_scores(
         logger.info("No recent games eligible for excitement refresh")
         return
     logger.info(f"Refreshing excitement for {len(games)} recent games")
-    now = datetime.now()
     refreshed = 0
     for game in games:
         try:
@@ -298,7 +297,9 @@ def refresh_recent_excitement_scores(
                 f"{game.excitement_index} -> {score}"
             )
             game.excitement_index = score
-        game.excitement_computed_at = now
+        # Leave `excitement_computed_at` immutable — it anchors the freshness
+        # window. Updating it on refresh would turn the bounded window into
+        # a sliding one, keeping rows eligible forever.
         refreshed += 1
     session.commit()
     logger.info(f"Re-checked excitement for {refreshed} games")

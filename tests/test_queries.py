@@ -472,6 +472,129 @@ def test_get_completed_games_missing_excitement_respects_limit(tmp_path, monkeyp
         schema._session_factory = None
 
 
+def test_refresh_window_is_bounded_not_sliding(tmp_path, monkeypatch):
+    """The freshness window must be anchored to `excitement_computed_at`
+    from the first compute, never extended by subsequent refreshes.
+    Otherwise refresh attempts perpetually re-qualify the same row and
+    the daily job hammers ESPN for stale games indefinitely."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime, timedelta
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        long_ago = datetime.now() - timedelta(days=10)
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-10",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="locked",
+                excitement_index=5.0,
+                excitement_computed_at=long_ago,
+            )
+        )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        # If refresh wrongly selects this row, fetch would be invoked and
+        # we'd overwrite the score. The mock makes that visible.
+        call_count = {"n": 0}
+
+        def fake_fetch(espn_id, timeout=10):
+            call_count["n"] += 1
+            return {
+                "status": "STATUS_FINAL",
+                "plays": [
+                    {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                    {"period": 4, "clock": "0:00", "home_pct": 0.99},
+                ],
+            }
+
+        monkeypatch.setattr(daily_update, "fetch_live_win_probability", fake_fetch)
+        daily_update.refresh_recent_excitement_scores(session, window_days=2)
+
+        game = session.query(Game).filter(Game.espn_id == "locked").one()
+        # Past the 2-day window → not selected, no ESPN call, score unchanged.
+        assert call_count["n"] == 0
+        assert game.excitement_index == 5.0
+        assert game.excitement_computed_at == long_ago
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
+def test_refresh_does_not_slide_window_on_successive_runs(tmp_path, monkeypatch):
+    """A successful refresh must NOT update `excitement_computed_at`,
+    otherwise the row would keep re-qualifying every run forever."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime, timedelta
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        # Stored 1 day ago — still inside a 2-day window.
+        one_day_ago = datetime.now() - timedelta(days=1)
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-10",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="evolving",
+                excitement_index=3.0,
+                excitement_computed_at=one_day_ago,
+            )
+        )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        monkeypatch.setattr(
+            daily_update,
+            "fetch_live_win_probability",
+            lambda espn_id, timeout=10: {
+                "status": "STATUS_FINAL",
+                "plays": [
+                    {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                    {"period": 4, "clock": "0:00", "home_pct": 0.6},
+                ],
+            },
+        )
+        daily_update.refresh_recent_excitement_scores(session, window_days=2)
+        game = session.query(Game).filter(Game.espn_id == "evolving").one()
+        # Score may have changed, but computed_at must still anchor at the
+        # first-compute timestamp — never extended by refresh.
+        assert game.excitement_computed_at == one_day_ago
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_refresh_updates_score_after_late_espn_correction(tmp_path, monkeypatch):
     """A persisted STATUS_FINAL excitement_index must still be refreshable
     inside a bounded window. ESPN sometimes refines PBP after first
