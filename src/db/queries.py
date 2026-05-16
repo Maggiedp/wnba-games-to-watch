@@ -286,21 +286,30 @@ def get_completed_rankings(
     session: Session, season_year: int = 2026
 ) -> list[DailyRanking]:
     """DailyRanking rows for completed games in `season_year`, sorted by
-    excitement_index descending (ties broken by date descending).
+    excitement_index descending (NULLs last, ties broken by date descending).
 
     Sources from `Game` (not `DailyRanking`) so a completed game that
     somehow lacks a ranking row — e.g. a missed daily-update day —
     still appears in the archive. Missing rankings are filled with a
     transient `DailyRanking` carrying None for the scored fields.
-    Games with `winner_id IS NULL` or `excitement_index IS NULL` are
-    excluded.
+
+    Games with `winner_id IS NULL` are excluded. Games with NULL
+    excitement_index are *included* and sorted last, so a persistent
+    ESPN PBP outage doesn't silently delete real completed games from
+    the archive. NULL remains the retry signal in
+    `get_completed_games_missing_excitement`.
     """
     games = (
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
-        .filter(Game.excitement_index.isnot(None))
-        .order_by(Game.excitement_index.desc(), Game.date.desc())
+        # `excitement_index IS NULL` evaluates to 0/1 (SQLite) or false/true
+        # (Postgres); ASC orders non-null first, NULL last, portably.
+        .order_by(
+            Game.excitement_index.is_(None),
+            Game.excitement_index.desc(),
+            Game.date.desc(),
+        )
         .all()
     )
     if not games:

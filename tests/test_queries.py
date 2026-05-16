@@ -561,7 +561,9 @@ def test_get_completed_rankings_sorts_by_excitement(tmp_path, monkeypatch):
                 excitement_index=4.2,
             )
         )
-        # One missing-excitement game — must be excluded.
+        # One missing-excitement game — must be INCLUDED, sorted last.
+        # An ESPN outage shouldn't silently delete a completed game from
+        # the archive; NULL is the retry signal, not the exclude signal.
         session.add(
             Game(
                 team_a_id=1,
@@ -576,7 +578,7 @@ def test_get_completed_rankings_sorts_by_excitement(tmp_path, monkeypatch):
             )
         )
         session.commit()
-        # Matching DailyRanking rows (required — the query joins on date+team pair).
+        # Matching DailyRanking rows.
         for date in ("2026-05-20", "2026-05-21", "2026-05-22", "2026-05-23"):
             upsert_daily_ranking(
                 session,
@@ -589,9 +591,20 @@ def test_get_completed_rankings_sorts_by_excitement(tmp_path, monkeypatch):
                 broadcaster="ION",
             )
         rankings = get_completed_rankings(session, season_year=2026)
-        # Sorted by excitement desc; the no-excitement row excluded.
+        # Excitement desc with NULLs last (then date desc inside each bucket).
         dates_in_order = [r.date for r in rankings]
-        assert dates_in_order == ["2026-05-21", "2026-05-22", "2026-05-20"]
+        assert dates_in_order == [
+            "2026-05-21",  # 6.5
+            "2026-05-22",  # 4.2
+            "2026-05-20",  # 2.0
+            "2026-05-23",  # NULL — surfaces last, not omitted
+        ]
+        # The NULL-excitement row appears with excitement_index unset, ready
+        # for the next retry. The other scored fields come from DailyRanking.
+        null_row = next(r for r in rankings if r.date == "2026-05-23")
+        # Mirror what the API would see: real ranking values present, NULL
+        # excitement is on the joined Game row, not the ranking itself.
+        assert null_row.quality_score == 50.0
     finally:
         session.close()
         schema._engine = None

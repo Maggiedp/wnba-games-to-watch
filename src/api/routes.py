@@ -2037,15 +2037,18 @@ _HOMEPAGE_HTML = f"""
                 }});
                 document.addEventListener('keydown', handleModalKeydown);
 
-                document.getElementById('games-container').addEventListener('click', (e) => {{
+                const handleEspnRowClick = (e) => {{
                     const target = e.target.closest('[data-espn-id]');
                     if (!target || !target.dataset.espnId) return;
                     const espnId = target.dataset.espnId;
                     if (openEspnId === espnId) {{ collapsePanel(); return; }}
-                    const game = allGames.find(g => g.espn_id === espnId);
+                    const game = allGames.find(g => g.espn_id === espnId)
+                        || allCompleted.find(g => g.espn_id === espnId);
                     if (!game) return;
                     expandPanel(espnId, game);
-                }});
+                }};
+                document.getElementById('games-container').addEventListener('click', handleEspnRowClick);
+                document.getElementById('completed-games-container').addEventListener('click', handleEspnRowClick);
             }});
         </script>
     </body>

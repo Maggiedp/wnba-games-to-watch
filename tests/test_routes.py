@@ -360,6 +360,70 @@ def test_completed_endpoint_returns_excitement_sorted_games(tmp_path, monkeypatc
     schema._session_factory = None
 
 
+def test_completed_endpoint_includes_null_excitement_sorted_last(tmp_path, monkeypatch):
+    """A completed game with NULL excitement_index (ESPN PBP missing or
+    transiently unavailable) must still appear in the archive, sorted
+    after games that have a score. Otherwise an ESPN outage silently
+    deletes real completed games from the user-visible list."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    from src.db.queries import upsert_daily_ranking, upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(schema.Team).filter_by(name="Aces").one().id
+    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    # Two scored games + one NULL-excitement.
+    for date, exc in [("2026-05-20", 4.0), ("2026-05-21", 6.0), ("2026-05-22", None)]:
+        game_kwargs = dict(
+            team_a_id=a,
+            team_b_id=b,
+            date=date,
+            time="",
+            broadcaster="ION",
+            winner_id=a,
+            final_score_a=80,
+            final_score_b=70,
+            espn_id=f"e{date}",
+        )
+        if exc is not None:
+            game_kwargs["excitement_index"] = exc
+        session.add(Game(**game_kwargs))
+        upsert_daily_ranking(
+            session,
+            date=date,
+            team_a_id=a,
+            team_b_id=b,
+            quality_score=50.0,
+            importance_score=None,
+            overall_score=50.0,
+            broadcaster="ION",
+        )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    rows = client.get("/api/games/completed").json()
+    dates_in_order = [r["date"] for r in rows]
+    assert dates_in_order == ["2026-05-21", "2026-05-20", "2026-05-22"]
+    null_row = next(r for r in rows if r["date"] == "2026-05-22")
+    assert null_row["excitement_index"] is None
+    assert null_row["final_score_a"] == 80
+    schema._engine = None
+    schema._session_factory = None
+
+
 def test_completed_endpoint_uses_game_broadcaster_over_stale_ranking(
     tmp_path, monkeypatch
 ):
