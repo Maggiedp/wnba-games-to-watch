@@ -1355,12 +1355,20 @@ _HOMEPAGE_HTML = f"""
                 section.style.display = '';
             }}
 
+            // Idempotent: sources options from the union of upcoming and
+            // completed games and is called after each list loads, so a
+            // team/broadcaster that only appears in the archive is still
+            // selectable. Preserves prior selections across re-runs.
             function populateFilters() {{
-                const networks = [...new Set(allGames.map(g => g.broadcaster).filter(Boolean))].sort();
+                const lists = [allGames, allCompleted];
+                const networks = [...new Set(
+                    lists.flatMap(list => list.map(g => g.broadcaster).filter(Boolean))
+                )].sort();
                 const pillGroup = document.getElementById('network-pills');
-                pillGroup.innerHTML = networks.map(n =>
-                    `<button class="pill" data-network="${{escapeHtml(n)}}" type="button" aria-pressed="false">${{escapeHtml(NETWORK_LABELS[n] || n)}}</button>`
-                ).join('');
+                pillGroup.innerHTML = networks.map(n => {{
+                    const pressed = selectedNetworks.has(n) ? 'true' : 'false';
+                    return `<button class="pill" data-network="${{escapeHtml(n)}}" type="button" aria-pressed="${{pressed}}">${{escapeHtml(NETWORK_LABELS[n] || n)}}</button>`;
+                }}).join('');
                 pillGroup.querySelectorAll('.pill').forEach(btn => {{
                     btn.addEventListener('click', () => {{
                         const net = btn.dataset.network;
@@ -1375,14 +1383,17 @@ _HOMEPAGE_HTML = f"""
                     }});
                 }});
 
-                const teams = [...new Set(allGames.flatMap(g => [g.team_a, g.team_b]))].sort();
+                const teams = [...new Set(
+                    lists.flatMap(list => list.flatMap(g => [g.team_a, g.team_b]))
+                )].sort();
                 const teamSelect = document.getElementById('team-filter');
-                teams.forEach(t => {{
-                    const opt = document.createElement('option');
-                    opt.value = t;
-                    opt.textContent = t;
-                    teamSelect.appendChild(opt);
-                }});
+                const currentTeam = teamSelect.value;
+                teamSelect.innerHTML = '<option value="">All</option>' + teams.map(t =>
+                    `<option value="${{escapeHtml(t)}}">${{escapeHtml(t)}}</option>`
+                ).join('');
+                if (currentTeam && teams.includes(currentTeam)) {{
+                    teamSelect.value = currentTeam;
+                }}
             }}
 
             // Shared by `applyFilters` (upcoming list) and `renderCompleted`
@@ -1439,6 +1450,9 @@ _HOMEPAGE_HTML = f"""
                     const resp = await fetch('/api/games/completed');
                     if (!resp.ok) return;
                     allCompleted = await resp.json();
+                    // Re-populate so completed-only broadcasters/teams are
+                    // selectable in the pills and dropdown.
+                    populateFilters();
                     setupCompletedToggle();
                 }} catch (e) {{
                     console.error('Failed to load completed games', e);
