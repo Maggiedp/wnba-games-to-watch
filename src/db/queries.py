@@ -325,6 +325,13 @@ def get_completed_rankings(
                 broadcaster=g.broadcaster or "",
                 win_prob_a=None,
             )
+        else:
+            # `Game.broadcaster` is refreshed every daily run, so it picks
+            # up post-game corrections; `DailyRanking.broadcaster` froze at
+            # pre-game scoring time. Detach and overwrite in memory so the
+            # archive serves the current value without persisting back.
+            session.expunge(ranking)
+            ranking.broadcaster = g.broadcaster or ""
         result.append(ranking)
     return result
 

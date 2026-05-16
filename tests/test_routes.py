@@ -360,6 +360,84 @@ def test_completed_endpoint_returns_excitement_sorted_games(tmp_path, monkeypatc
     schema._session_factory = None
 
 
+def test_completed_endpoint_uses_game_broadcaster_over_stale_ranking(
+    tmp_path, monkeypatch
+):
+    """Late broadcaster corrections must reach the archive. `Game.broadcaster`
+    is refreshed by every daily run; `DailyRanking.broadcaster` froze at
+    pre-game scoring time. The archive must serve the Game value so the
+    list and the filter agree with reality after a network change."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    from src.db.queries import upsert_daily_ranking, upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(schema.Team).filter_by(name="Aces").one().id
+    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    # Game (source of truth) shows the corrected broadcaster; DailyRanking
+    # has the stale pre-game value.
+    session.add(
+        Game(
+            team_a_id=a,
+            team_b_id=b,
+            date="2026-05-20",
+            time="",
+            broadcaster="NBA TV",
+            winner_id=a,
+            final_score_a=80,
+            final_score_b=70,
+            espn_id="corr",
+            excitement_index=5.0,
+        )
+    )
+    upsert_daily_ranking(
+        session,
+        date="2026-05-20",
+        team_a_id=a,
+        team_b_id=b,
+        quality_score=50.0,
+        importance_score=None,
+        overall_score=50.0,
+        broadcaster="ION",
+    )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/completed")
+    rows = resp.json()
+    assert len(rows) == 1 and rows[0]["broadcaster"] == "NBA TV"
+    # Filter by the corrected broadcaster: game appears.
+    resp_correct = client.get("/api/games/filter?mode=completed&broadcaster=NBA%20TV")
+    assert [r["date"] for r in resp_correct.json()] == ["2026-05-20"]
+    # Filter by the stale value: game does NOT appear.
+    resp_stale = client.get("/api/games/filter?mode=completed&broadcaster=ION")
+    assert resp_stale.json() == []
+    # Stored DailyRanking row is unchanged (we expunged, not persisted).
+    fresh_session = schema.get_session()
+    try:
+        from src.db.schema import DailyRanking
+
+        stored = fresh_session.query(DailyRanking).one()
+        assert stored.broadcaster == "ION"
+    finally:
+        fresh_session.close()
+    schema._engine = None
+    schema._session_factory = None
+
+
 def test_completed_endpoint_includes_orphan_games_without_ranking(
     tmp_path, monkeypatch
 ):
