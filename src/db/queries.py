@@ -211,8 +211,13 @@ def get_completed_games_missing_excitement(
     A game is "completed" when winner_id is set. An espn_id is required because
     the computation needs ESPN play-by-play; games without one can't be backfilled.
 
-    Returns newest-first; pass `limit` to bound retry work per run so a backlog
-    of permanently-failing ESPN responses can't stall the daily job.
+    Order: least-recently-attempted first (NULL `excitement_last_attempt_at`
+    counts as "never attempted" and comes first), then newer dates within
+    each attempt bucket. Without this, a 50-cap + newest-first ordering would
+    let a cluster of permanently-failing newest games starve older NULL rows
+    indefinitely — the same head would be retried every run.
+
+    Pass `limit` to bound retry work per run.
     """
     q = (
         session.query(Game)
@@ -220,7 +225,16 @@ def get_completed_games_missing_excitement(
         .filter(Game.winner_id.isnot(None))
         .filter(Game.excitement_index.is_(None))
         .filter(Game.espn_id.isnot(None))
-        .order_by(Game.date.desc())
+        # `IS NOT NULL` returns 0 for NULL and 1 for set; ASC puts NULL
+        # (never-attempted) ahead of any timestamp, portably across SQLite
+        # and Postgres. Then by attempt timestamp ASC (oldest first), then
+        # by date DESC so the most user-visible rows are surfaced first
+        # within each bucket.
+        .order_by(
+            Game.excitement_last_attempt_at.isnot(None),
+            Game.excitement_last_attempt_at.asc(),
+            Game.date.desc(),
+        )
     )
     if limit is not None:
         q = q.limit(limit)

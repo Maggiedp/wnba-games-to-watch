@@ -45,6 +45,10 @@ class Game(Base):
     final_score_a = Column(Integer, nullable=True)
     final_score_b = Column(Integer, nullable=True)
     excitement_index = Column(Float, nullable=True)
+    # Last time the backfill loop tried to compute excitement for this game.
+    # NULL = never attempted. Ordering retries by this timestamp prevents
+    # a permanently-failing head from starving older NULL rows under the cap.
+    excitement_last_attempt_at = Column(DateTime, nullable=True)
     broadcaster = Column(String(50), default="")
     espn_id = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=func.now())
@@ -125,6 +129,7 @@ def init_db():
                 "ALTER TABLE games ADD COLUMN espn_id VARCHAR(20)",
                 "ALTER TABLE daily_rankings ADD COLUMN win_prob_a FLOAT",
                 "ALTER TABLE games ADD COLUMN excitement_index FLOAT",
+                "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
             ]:
                 try:
                     conn.execute(text(stmt))
@@ -182,6 +187,12 @@ def init_db():
             conn.execute(
                 text(
                     "ALTER TABLE games ADD COLUMN IF NOT EXISTS excitement_index FLOAT"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
+                    "excitement_last_attempt_at TIMESTAMP"
                 )
             )
             conn.commit()

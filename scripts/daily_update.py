@@ -196,8 +196,13 @@ def populate_excitement_for_recent_completions(
         logger.info("No completed games need excitement backfill")
         return
     logger.info(f"Computing excitement_index for {len(games)} completed games")
+    now = datetime.now()
     stored = 0
     for game in games:
+        # Stamp the attempt timestamp BEFORE the network call so a failure
+        # path still records that we tried — this is what keeps the retry
+        # queue rotating instead of pinning to a permanently-failing head.
+        game.excitement_last_attempt_at = now
         try:
             wp = fetch_live_win_probability(game.espn_id, timeout=timeout)
             plays = wp.get("plays") or []

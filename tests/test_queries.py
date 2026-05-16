@@ -472,6 +472,90 @@ def test_get_completed_games_missing_excitement_respects_limit(tmp_path, monkeyp
         schema._session_factory = None
 
 
+def test_populate_excitement_rotates_through_failing_backlog(tmp_path, monkeypatch):
+    """A cluster of permanently-failing newest rows must not starve older
+    NULL rows forever. After a run, those rows' last_attempt_at is set, so
+    on the next run never-attempted rows take precedence under the cap."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.data.espn_api import ESPNAPIError
+        from src.db.schema import Game
+
+        # Three "newest" rows that always fail.
+        for i, date in enumerate(("2026-05-30", "2026-05-29", "2026-05-28")):
+            session.add(
+                Game(
+                    team_a_id=1,
+                    team_b_id=2,
+                    date=date,
+                    time="",
+                    broadcaster="",
+                    winner_id=1,
+                    final_score_a=80,
+                    final_score_b=70,
+                    espn_id=f"fail-{i}",
+                )
+            )
+        # One older row that would succeed if given a turn.
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="old-ok",
+            )
+        )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        def fake_fetch(espn_id, timeout=10):
+            if espn_id.startswith("fail-"):
+                raise ESPNAPIError("permanent failure")
+            return {
+                "plays": [
+                    {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                    {"period": 4, "clock": "0:00", "home_pct": 0.9},
+                ]
+            }
+
+        monkeypatch.setattr(daily_update, "fetch_live_win_probability", fake_fetch)
+
+        # Run 1 with cap=3: the three newest failing rows are tried first
+        # (never-attempted bucket, ordered by date desc), older row waits.
+        daily_update.populate_excitement_for_recent_completions(
+            session, limit=3, timeout=1
+        )
+        old_row = session.query(Game).filter(Game.espn_id == "old-ok").one()
+        assert old_row.excitement_index is None  # not yet attempted
+        assert old_row.excitement_last_attempt_at is None
+        fail_attempts = session.query(Game).filter(Game.espn_id.like("fail-%")).all()
+        assert all(g.excitement_last_attempt_at is not None for g in fail_attempts)
+
+        # Run 2 with cap=3: the failing rows have a timestamp now, so the
+        # never-attempted older row jumps ahead and gets a turn.
+        daily_update.populate_excitement_for_recent_completions(
+            session, limit=3, timeout=1
+        )
+        old_row = session.query(Game).filter(Game.espn_id == "old-ok").one()
+        assert old_row.excitement_index is not None  # rotated in, succeeded
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_game_has_excitement_index_column(tmp_path, monkeypatch):
     """init_db creates Game with excitement_index column (NULL-able FLOAT)."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
