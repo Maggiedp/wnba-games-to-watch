@@ -109,6 +109,8 @@ def upsert_game(
             or _changed(game.winner_id, winner_id)
             or _changed(game.final_score_a, final_score_a)
             or _changed(game.final_score_b, final_score_b)
+            or _changed(game.team_a_id, team_a_id)
+            or _changed(game.team_b_id, team_b_id)
         )
         # ESPN says this game is no longer final (postponed, protested, data
         # correction). Clear stored completion + cached excitement so the
@@ -128,9 +130,14 @@ def upsert_game(
             game.time = time
         if espn_id:
             game.espn_id = espn_id
-        # If we matched by espn_id, the row's date may differ (reschedule).
+        # If we matched by espn_id, the row's date/teams may differ
+        # (reschedule, or ESPN correcting the matchup itself).
         if date and game.date != date:
             game.date = date
+        if game.team_a_id != team_a_id:
+            game.team_a_id = team_a_id
+        if game.team_b_id != team_b_id:
+            game.team_b_id = team_b_id
         if excitement_index is not None:
             game.excitement_index = excitement_index
         elif invalidate_excitement or un_finalized:

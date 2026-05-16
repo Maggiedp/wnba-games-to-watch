@@ -287,6 +287,72 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
     assert gf.espn_id is None
 
 
+def test_upsert_game_corrects_team_ids_when_matched_by_espn_id(tmp_path, monkeypatch):
+    """If ESPN corrects an event's participating teams (data fix on the
+    same event_id), the existing row's team_a_id / team_b_id must update
+    to match the incoming source of truth — and the cached excitement
+    must invalidate, since it was computed against the wrong matchup."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import upsert_game
+        from src.db.schema import Game
+
+        now = datetime.now()
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="7:00 PM ET",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="evt",
+                excitement_index=5.0,
+                excitement_computed_at=now,
+            )
+        )
+        session.commit()
+
+        # ESPN later reports the same event with the corrected team_a.
+        upsert_game(
+            session,
+            team_a_id=3,
+            team_b_id=2,
+            date="2026-05-20",
+            time="7:00 PM ET",
+            broadcaster="ION",
+            winner_id=3,
+            final_score_a=85,
+            final_score_b=72,
+            espn_id="evt",
+            is_complete=True,
+        )
+        games = session.query(Game).filter(Game.espn_id == "evt").all()
+        assert len(games) == 1
+        g = games[0]
+        assert g.team_a_id == 3
+        assert g.team_b_id == 2
+        assert g.winner_id == 3
+        # Excitement cache invalidated because the matchup changed —
+        # the previous score was computed against teams 1 vs 2.
+        assert g.excitement_index is None
+        assert g.excitement_computed_at is None
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_upsert_game_matches_by_espn_id_on_reschedule(tmp_path, monkeypatch):
     """When ESPN reschedules an event (same event_id, new date), upsert_game
     must update the existing row's date instead of inserting a duplicate.
