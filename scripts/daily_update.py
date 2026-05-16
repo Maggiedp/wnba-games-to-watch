@@ -166,7 +166,15 @@ def fetch_and_store_games(session) -> list[dict]:
     return games
 
 
-def populate_excitement_for_recent_completions(session) -> None:
+DAILY_EXCITEMENT_RETRY_CAP = 50
+BACKFILL_ESPN_TIMEOUT_S = 5
+
+
+def populate_excitement_for_recent_completions(
+    session,
+    limit: int | None = DAILY_EXCITEMENT_RETRY_CAP,
+    timeout: int = BACKFILL_ESPN_TIMEOUT_S,
+) -> None:
     """For 2026 games that completed but have no excitement_index, fetch
     play-by-play from ESPN and compute and store the final excitement score.
 
@@ -174,8 +182,16 @@ def populate_excitement_for_recent_completions(session) -> None:
     row's excitement_index as NULL so the next run retries it. A persisted
     0.0 would be indistinguishable from a true blowout score and would never
     be retried since the retry query filters on NULL.
+
+    `limit` caps retries per run (newest games first) so a backlog of
+    permanently-failing PBP responses can't stall the daily job. Pass
+    `limit=None` from the one-shot backfill script to process everything.
+    `timeout` is per ESPN call; the default is shorter than the live-WP
+    panel default since one slow game shouldn't hold up the daily run.
     """
-    games = get_completed_games_missing_excitement(session, season_year=2026)
+    games = get_completed_games_missing_excitement(
+        session, season_year=2026, limit=limit
+    )
     if not games:
         logger.info("No completed games need excitement backfill")
         return
@@ -183,7 +199,7 @@ def populate_excitement_for_recent_completions(session) -> None:
     stored = 0
     for game in games:
         try:
-            wp = fetch_live_win_probability(game.espn_id)
+            wp = fetch_live_win_probability(game.espn_id, timeout=timeout)
             plays = wp.get("plays") or []
             score = compute_excitement(plays, final=True)
         except (ESPNAPIError, ESPNNotFoundError) as e:
@@ -461,13 +477,18 @@ def main() -> int:
         try:
             fetch_and_store_bpi_ratings(session)
             games = fetch_and_store_games(session)
-            populate_excitement_for_recent_completions(session)
             elo_ratings = compute_elo_ratings()
             standings = compute_standings(session, elo_ratings)
             scored, playoff_probs = compute_daily_scores(session, games, standings)
             store_daily_rankings(session, scored)
             today = datetime.now().strftime("%Y-%m-%d")
             store_playoff_probabilities(session, playoff_probs, today)
+            # Archive backfill runs LAST and bounded — a slow/failing ESPN
+            # PBP API must not delay the user-visible ranking computation.
+            try:
+                populate_excitement_for_recent_completions(session)
+            except Exception as e:
+                logger.warning(f"Excitement backfill failed (non-fatal): {e}")
             logger.info("=== Daily update job completed successfully ===")
             return 0
         finally:

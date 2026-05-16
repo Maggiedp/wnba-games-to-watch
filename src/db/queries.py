@@ -204,22 +204,27 @@ def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]
 
 
 def get_completed_games_missing_excitement(
-    session: Session, season_year: int = 2026
+    session: Session, season_year: int = 2026, limit: int | None = None
 ) -> list[Game]:
     """Completed games for `season_year` that still need excitement_index computed.
 
     A game is "completed" when winner_id is set. An espn_id is required because
     the computation needs ESPN play-by-play; games without one can't be backfilled.
+
+    Returns newest-first; pass `limit` to bound retry work per run so a backlog
+    of permanently-failing ESPN responses can't stall the daily job.
     """
-    return (
+    q = (
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
         .filter(Game.excitement_index.is_(None))
         .filter(Game.espn_id.isnot(None))
-        .order_by(Game.date)
-        .all()
+        .order_by(Game.date.desc())
     )
+    if limit is not None:
+        q = q.limit(limit)
+    return q.all()
 
 
 def update_game_result(

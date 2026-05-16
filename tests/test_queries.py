@@ -421,6 +421,57 @@ def test_get_completed_games_missing_excitement(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
+def test_get_completed_games_missing_excitement_respects_limit(tmp_path, monkeypatch):
+    """The retry-finder must honor `limit` (newest first) so the daily job
+    can't be stalled by an unbounded ESPN-failure backlog."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import get_completed_games_missing_excitement
+        from src.db.schema import Game
+
+        for date, espn_id in [
+            ("2026-05-20", "old"),
+            ("2026-05-21", "mid"),
+            ("2026-05-22", "new"),
+        ]:
+            session.add(
+                Game(
+                    team_a_id=1,
+                    team_b_id=2,
+                    date=date,
+                    time="",
+                    broadcaster="",
+                    winner_id=1,
+                    final_score_a=80,
+                    final_score_b=70,
+                    espn_id=espn_id,
+                )
+            )
+        session.commit()
+
+        capped = get_completed_games_missing_excitement(
+            session, season_year=2026, limit=2
+        )
+        # Newest first; old game waits for the next run.
+        assert [g.espn_id for g in capped] == ["new", "mid"]
+
+        # limit=None returns everything.
+        full = get_completed_games_missing_excitement(
+            session, season_year=2026, limit=None
+        )
+        assert [g.espn_id for g in full] == ["new", "mid", "old"]
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_game_has_excitement_index_column(tmp_path, monkeypatch):
     """init_db creates Game with excitement_index column (NULL-able FLOAT)."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
@@ -645,7 +696,7 @@ def test_populate_excitement_leaves_null_on_empty_plays(tmp_path, monkeypatch):
         monkeypatch.setattr(
             daily_update,
             "fetch_live_win_probability",
-            lambda espn_id: {"plays": []},
+            lambda espn_id, timeout=10: {"plays": []},
         )
         daily_update.populate_excitement_for_recent_completions(session)
 
@@ -700,7 +751,7 @@ def test_populate_excitement_leaves_null_on_espn_failure(tmp_path, monkeypatch):
         )
         session.commit()
 
-        def fake_fetch(espn_id):
+        def fake_fetch(espn_id, timeout=10):
             if espn_id == "FAIL":
                 raise ESPNAPIError("simulated outage")
             return {

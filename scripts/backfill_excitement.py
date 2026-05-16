@@ -24,7 +24,9 @@ def main() -> int:
         init_db()
         session = get_session()
         try:
-            populate_excitement_for_recent_completions(session)
+            # No retry cap and the live-WP timeout — one-shot script,
+            # we want every backlog row attempted.
+            populate_excitement_for_recent_completions(session, limit=None, timeout=10)
             logger.info("=== Backfill complete ===")
             return 0
         finally:
