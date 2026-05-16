@@ -287,6 +287,136 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
     assert gf.espn_id is None
 
 
+def test_upsert_game_matches_by_espn_id_on_reschedule(tmp_path, monkeypatch):
+    """When ESPN reschedules an event (same event_id, new date), upsert_game
+    must update the existing row's date instead of inserting a duplicate.
+    Otherwise the old completed row stays stale in the archive and a fresh
+    row appears at the new date."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import upsert_game
+        from src.db.schema import Game
+
+        now = datetime.now()
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="7:00 PM ET",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="evt123",
+                excitement_index=5.0,
+                excitement_computed_at=now,
+            )
+        )
+        session.commit()
+
+        # ESPN reschedules the same event to a new date and un-finalizes.
+        upsert_game(
+            session,
+            team_a_id=1,
+            team_b_id=2,
+            date="2026-05-25",
+            time="8:00 PM ET",
+            broadcaster="ION",
+            winner_id=None,
+            final_score_a=None,
+            final_score_b=None,
+            espn_id="evt123",
+            is_complete=False,
+        )
+
+        games = session.query(Game).filter(Game.espn_id == "evt123").all()
+        assert len(games) == 1
+        g = games[0]
+        assert g.date == "2026-05-25"
+        assert g.time == "8:00 PM ET"
+        assert g.winner_id is None
+        assert g.excitement_index is None
+        # No orphan row at the old date.
+        assert session.query(Game).filter(Game.date == "2026-05-20").count() == 0
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
+def test_refresh_clears_completion_when_status_un_finalizes(tmp_path, monkeypatch):
+    """If the refresh fetch reports status != FINAL for a previously-scored
+    game, the cached completion (winner, scores, excitement) must be cleared
+    so the archive doesn't keep showing the stale result."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime, timedelta
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        # Stored a day ago — inside the 2-day refresh window.
+        one_day_ago = datetime.now() - timedelta(days=1)
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="7:00 PM ET",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="reverted",
+                excitement_index=5.0,
+                excitement_computed_at=one_day_ago,
+                excitement_last_attempt_at=one_day_ago,
+            )
+        )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        # ESPN now reports STATUS_IN_PROGRESS (e.g. corrected after wrongful final).
+        monkeypatch.setattr(
+            daily_update,
+            "fetch_live_win_probability",
+            lambda espn_id, timeout=10: {
+                "status": "STATUS_IN_PROGRESS",
+                "plays": [
+                    {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                    {"period": 4, "clock": "5:00", "home_pct": 0.6},
+                ],
+            },
+        )
+        daily_update.refresh_recent_excitement_scores(session, window_days=2)
+        session.expire_all()
+        g = session.query(Game).filter(Game.espn_id == "reverted").one()
+        assert g.winner_id is None
+        assert g.final_score_a is None and g.final_score_b is None
+        assert g.excitement_index is None
+        assert g.excitement_computed_at is None
+        assert g.excitement_last_attempt_at is None
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_upsert_game_clears_completion_when_un_finalized(tmp_path, monkeypatch):
     """If ESPN un-finalizes a previously-stored game (postponed, protested,
     or a data correction), upsert_game with is_complete=False must clear

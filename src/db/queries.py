@@ -77,13 +77,23 @@ def upsert_game(
     correction). None (default) means "don't touch completion fields" —
     used by legacy/partial-update callers.
     """
-    game = (
-        session.query(Game)
-        .filter(
-            Game.date == date, Game.team_a_id == team_a_id, Game.team_b_id == team_b_id
+    # Identity preference: espn_id (stable across reschedules) → fall back
+    # to (date, team_a_id, team_b_id) for legacy rows without an espn_id.
+    # Without this, an ESPN reschedule (same event, new date) would leave
+    # the old completed row stale while inserting a fresh row at the new date.
+    game = None
+    if espn_id:
+        game = session.query(Game).filter(Game.espn_id == espn_id).first()
+    if game is None:
+        game = (
+            session.query(Game)
+            .filter(
+                Game.date == date,
+                Game.team_a_id == team_a_id,
+                Game.team_b_id == team_b_id,
+            )
+            .first()
         )
-        .first()
-    )
     if game:
         # If any source-of-truth field for excitement changes (espn_id,
         # winner_id, final scores), invalidate the cached excitement so
@@ -118,6 +128,9 @@ def upsert_game(
             game.time = time
         if espn_id:
             game.espn_id = espn_id
+        # If we matched by espn_id, the row's date may differ (reschedule).
+        if date and game.date != date:
+            game.date = date
         if excitement_index is not None:
             game.excitement_index = excitement_index
         elif invalidate_excitement or un_finalized:

@@ -291,7 +291,19 @@ def refresh_recent_excitement_scores(
             )
             continue
         if status != GameStatus.FINAL:
-            # The game un-finalized? Skip — don't downgrade a stored score.
+            # ESPN un-finalized this game (postponement, data correction).
+            # Clear cached completion so the archive doesn't keep showing
+            # the stale result. Matches upsert_game(is_complete=False).
+            logger.info(
+                f"Game {game.id} (espn_id={game.espn_id}) un-finalized "
+                f"(status={status!r}); clearing stored completion."
+            )
+            game.winner_id = None
+            game.final_score_a = None
+            game.final_score_b = None
+            game.excitement_index = None
+            game.excitement_computed_at = None
+            game.excitement_last_attempt_at = None
             continue
         if score is None:
             continue
