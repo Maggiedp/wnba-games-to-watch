@@ -592,6 +592,96 @@ def test_get_completed_games_missing_excitement_respects_limit(tmp_path, monkeyp
         schema._session_factory = None
 
 
+def test_refresh_one_bad_payload_does_not_abort_queue(tmp_path, monkeypatch):
+    """A malformed ESPN payload (e.g. home_pct=None raising inside
+    compute_excitement) must not abort the refresh loop. Otherwise one
+    bad row could permanently block every other eligible refresh."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime, timedelta
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        # Two rows in the refresh window. Refresh ordering is by
+        # computed_at ASC, so "bad" (older computed_at) goes first.
+        older = datetime.now() - timedelta(days=1, hours=12)
+        newer = datetime.now() - timedelta(hours=1)
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-19",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="bad",
+                excitement_index=2.0,
+                excitement_computed_at=older,
+            )
+        )
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=85,
+                final_score_b=72,
+                espn_id="good",
+                excitement_index=3.0,
+                excitement_computed_at=newer,
+            )
+        )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        def fake_fetch(espn_id, timeout=10):
+            if espn_id == "bad":
+                # home_pct=None will raise inside compute_excitement when
+                # the formula tries to subtract.
+                return {
+                    "status": "STATUS_FINAL",
+                    "plays": [
+                        {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                        {"period": 4, "clock": "0:00", "home_pct": None},
+                    ],
+                }
+            return {
+                "status": "STATUS_FINAL",
+                "plays": [
+                    {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                    {"period": 4, "clock": "0:30", "home_pct": 0.7},
+                    {"period": 4, "clock": "0:00", "home_pct": 0.05},
+                ],
+            }
+
+        monkeypatch.setattr(daily_update, "fetch_live_win_probability", fake_fetch)
+        daily_update.refresh_recent_excitement_scores(session, window_days=2)
+
+        session.expire_all()
+        bad = session.query(Game).filter(Game.espn_id == "bad").one()
+        good = session.query(Game).filter(Game.espn_id == "good").one()
+        # Bad row: score untouched, no crash.
+        assert bad.excitement_index == 2.0
+        # Good row: still got refreshed despite the earlier failure.
+        assert good.excitement_index != 3.0
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_refresh_window_is_bounded_not_sliding(tmp_path, monkeypatch):
     """The freshness window must be anchored to `excitement_computed_at`
     from the first compute, never extended by subsequent refreshes.

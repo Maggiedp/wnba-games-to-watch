@@ -275,6 +275,12 @@ def refresh_recent_excitement_scores(
     for game in games:
         try:
             wp = fetch_live_win_probability(game.espn_id, timeout=timeout)
+            status = wp.get("status")
+            # compute_excitement indexes home_pct directly; a malformed
+            # entry (e.g. home_pct=None) can raise from inside the formula.
+            # Catching here keeps one bad payload from aborting the whole
+            # refresh queue.
+            score = compute_excitement(wp.get("plays") or [], final=True)
         except (ESPNAPIError, ESPNNotFoundError) as e:
             logger.warning(
                 f"Refresh fetch failed for game {game.id} (espn_id={game.espn_id}): {e}"
@@ -282,13 +288,12 @@ def refresh_recent_excitement_scores(
             continue
         except Exception as e:
             logger.warning(
-                f"Refresh fetch errored for game {game.id} (espn_id={game.espn_id}): {e}"
+                f"Refresh failed for game {game.id} (espn_id={game.espn_id}): {e}"
             )
             continue
-        if wp.get("status") != GameStatus.FINAL:
+        if status != GameStatus.FINAL:
             # The game un-finalized? Skip — don't downgrade a stored score.
             continue
-        score = compute_excitement(wp.get("plays") or [], final=True)
         if score is None:
             continue
         if score != game.excitement_index:
