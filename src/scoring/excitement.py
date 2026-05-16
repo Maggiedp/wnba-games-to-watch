@@ -47,13 +47,21 @@ def elapsed_seconds(play: dict) -> float:
     return prior + elapsed_in_period
 
 
-def compute_excitement(plays: list[dict]) -> float | None:
-    """Return the raw excitement score for a completed game, or None if
-    there are fewer than 2 plays.
+def compute_excitement(plays: list[dict], final: bool = False) -> float | None:
+    """Return the raw excitement score, or None if there are fewer than
+    2 plays.
 
-    None signals "no usable data" so callers leave `excitement_index` NULL
-    and retry on the next run. A persisted 0.0 would be indistinguishable
-    from a real blowout score and would never be retried.
+    `final=False` (default, live games): includes γ·2p(1−p)·L_now to
+    capture expected residual movement when the game is still close.
+
+    `final=True` (completed games): omits the future term. ESPN's last
+    recorded WP sample for a finished game often stops at e.g. 0.92
+    instead of snapping to 1.0, so the live formula would otherwise
+    persist a phantom future-swing component in the archive's stored
+    score.
+
+    None signals "no usable data" so callers leave `excitement_index`
+    NULL and retry on the next run.
     """
     if not plays or len(plays) < 2:
         return None
@@ -61,6 +69,8 @@ def compute_excitement(plays: list[dict]) -> float | None:
     for i in range(1, len(plays)):
         d_wp = abs(plays[i]["home_pct"] - plays[i - 1]["home_pct"])
         past += d_wp * (elapsed_seconds(plays[i]) / REGULATION_SECONDS)
+    if final:
+        return past
     last = plays[-1]
     p = last["home_pct"]
     future = 2 * p * (1 - p) * (elapsed_seconds(last) / REGULATION_SECONDS)

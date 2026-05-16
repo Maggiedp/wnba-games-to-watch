@@ -185,7 +185,7 @@ def populate_excitement_for_recent_completions(session) -> None:
         try:
             wp = fetch_live_win_probability(game.espn_id)
             plays = wp.get("plays") or []
-            score = compute_excitement(plays)
+            score = compute_excitement(plays, final=True)
         except (ESPNAPIError, ESPNNotFoundError) as e:
             logger.warning(
                 f"Could not fetch PBP for game {game.id} (espn_id={game.espn_id}): {e} "

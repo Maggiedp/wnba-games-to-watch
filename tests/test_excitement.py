@@ -95,7 +95,8 @@ def test_compute_excitement_empty_returns_none():
 
 
 def test_compute_excitement_finished_game_future_collapses():
-    """When final p is 0 or 1, future term is 0 regardless of weight."""
+    """Live (default) formula: when final p is 0 or 1, future term is 0
+    regardless of weight."""
     plays_blowout = [
         {"period": 1, "clock": "10:00", "home_pct": 0.5},
         {"period": 4, "clock": "0:00", "home_pct": 1.0},
@@ -107,3 +108,35 @@ def test_compute_excitement_finished_game_future_collapses():
     # The close-final case has future = 2·0.5·0.5·1.0 = 0.5; total includes γ·0.5 = 1.25.
     # The blowout case has future = 0; total is just past = 0.25.
     assert compute_excitement(plays_close_final) > compute_excitement(plays_blowout)
+
+
+def test_compute_excitement_final_strips_future_term():
+    """`final=True` (completed-game backfill) must NOT include the future
+    term, even when ESPN's last WP sample is non-terminal. Otherwise the
+    stored archive score embeds a phantom 'live drama' projection for a
+    game that's already over."""
+    plays = [
+        {"period": 1, "clock": "10:00", "home_pct": 0.5},
+        {"period": 4, "clock": "0:00", "home_pct": 0.5},
+    ]
+    live = compute_excitement(plays)
+    final = compute_excitement(plays, final=True)
+    # Past alone: |0.5 - 0.5| · (2400 / 2400) = 0.0 → final stays at 0.
+    assert final == 0.0
+    # Live formula adds γ · 2·0.5·0.5·1.0 = 2.5 · 0.5 = 1.25.
+    assert live == pytest.approx(1.25)
+
+
+def test_compute_excitement_final_keeps_past_term():
+    """`final=True` keeps the past leverage-weighted movement; only the
+    future term is dropped."""
+    plays = [
+        {"period": 1, "clock": "10:00", "home_pct": 0.5},
+        {"period": 4, "clock": "0:30", "home_pct": 0.7},
+        {"period": 4, "clock": "0:00", "home_pct": 0.92},  # didn't snap to 1.0
+    ]
+    final = compute_excitement(plays, final=True)
+    live = compute_excitement(plays)
+    assert final is not None and final > 0
+    # Live > final because live adds the (non-terminal) future term.
+    assert live > final
