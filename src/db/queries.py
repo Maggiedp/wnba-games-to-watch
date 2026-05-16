@@ -1,6 +1,7 @@
 """Database query helpers for WNBA Games to Watch."""
 
 from dataclasses import dataclass
+from datetime import datetime  # noqa: F401 — used in get_games_for_excitement_refresh type hint
 
 from sqlalchemy.orm import Session
 
@@ -81,11 +82,14 @@ def upsert_game(
         # ESPN correcting a finalized game would leave the archive sorted
         # on stale data forever — beyond the bounded refresh window the
         # value would otherwise be locked.
+        def _changed(old, new) -> bool:
+            return new is not None and new != "" and new != old
+
         invalidate_excitement = game.excitement_index is not None and (
-            (espn_id and espn_id != game.espn_id)
-            or (winner_id is not None and winner_id != game.winner_id)
-            or (final_score_a is not None and final_score_a != game.final_score_a)
-            or (final_score_b is not None and final_score_b != game.final_score_b)
+            _changed(game.espn_id, espn_id)
+            or _changed(game.winner_id, winner_id)
+            or _changed(game.final_score_a, final_score_a)
+            or _changed(game.final_score_b, final_score_b)
         )
         if winner_id is not None:
             game.winner_id = winner_id
@@ -157,13 +161,17 @@ def get_games_by_date(session: Session, date: str) -> list[Game]:
 
 @dataclass(frozen=True)
 class GameFields:
-    """Per-game metadata joined into ranking responses."""
+    """Per-game metadata joined into ranking responses. Broadcaster is
+    sourced here (not from DailyRanking) because Game.broadcaster is
+    refreshed by every daily run and reflects late corrections, while
+    DailyRanking.broadcaster freezes at scoring time."""
 
     time: str
     espn_id: str | None
     final_score_a: int | None
     final_score_b: int | None
     excitement_index: float | None
+    broadcaster: str
 
 
 def get_game_fields(
@@ -191,6 +199,7 @@ def get_game_fields(
             final_score_a=g.final_score_a,
             final_score_b=g.final_score_b,
             excitement_index=g.excitement_index,
+            broadcaster=g.broadcaster or "",
         )
         for g in games
         if (g.date, g.team_a_id, g.team_b_id) in wanted
@@ -259,7 +268,7 @@ def get_completed_games_missing_excitement(
 
 def get_games_for_excitement_refresh(
     session: Session,
-    cutoff,
+    cutoff: datetime,
     season_year: int = 2026,
     limit: int | None = None,
 ) -> list[Game]:
@@ -346,7 +355,9 @@ def get_upcoming_rankings(session: Session, start_date: str) -> list[DailyRankin
 
 
 def get_completed_rankings(
-    session: Session, season_year: int = 2026
+    session: Session,
+    season_year: int = 2026,
+    broadcaster: str | None = None,
 ) -> list[DailyRanking]:
     """DailyRanking rows for completed games in `season_year`, sorted by
     excitement_index descending (NULLs last, ties broken by date descending).
@@ -361,20 +372,25 @@ def get_completed_rankings(
     ESPN PBP outage doesn't silently delete real completed games from
     the archive. NULL remains the retry signal in
     `get_completed_games_missing_excitement`.
+
+    `broadcaster` (optional) filters at the `Game.broadcaster` level —
+    the source of truth, refreshed every daily run — so late ESPN
+    broadcaster corrections take effect immediately.
     """
-    games = (
+    q = (
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
-        # `excitement_index IS NULL` evaluates to 0/1 (SQLite) or false/true
-        # (Postgres); ASC orders non-null first, NULL last, portably.
-        .order_by(
-            Game.excitement_index.is_(None),
-            Game.excitement_index.desc(),
-            Game.date.desc(),
-        )
-        .all()
     )
+    if broadcaster is not None:
+        q = q.filter(Game.broadcaster == broadcaster)
+    # `excitement_index IS NULL` evaluates to 0/1 (SQLite) or false/true
+    # (Postgres); ASC orders non-null first, NULL last, portably.
+    games = q.order_by(
+        Game.excitement_index.is_(None),
+        Game.excitement_index.desc(),
+        Game.date.desc(),
+    ).all()
     if not games:
         return []
     rankings_by_key = {
@@ -383,6 +399,11 @@ def get_completed_rankings(
         .filter(DailyRanking.date.like(f"{season_year}-%"))
         .all()
     }
+    # Note on broadcaster: callers consuming this list should source the
+    # broadcaster from the Game row (via GameFields), not from the
+    # DailyRanking. DailyRanking.broadcaster freezes at pre-game scoring
+    # time; Game.broadcaster is refreshed every daily run and reflects
+    # late corrections. `format_games_response` handles this.
     result: list[DailyRanking] = []
     for g in games:
         ranking = rankings_by_key.get((g.date, g.team_a_id, g.team_b_id))
@@ -397,13 +418,6 @@ def get_completed_rankings(
                 broadcaster=g.broadcaster or "",
                 win_prob_a=None,
             )
-        else:
-            # `Game.broadcaster` is refreshed every daily run, so it picks
-            # up post-game corrections; `DailyRanking.broadcaster` froze at
-            # pre-game scoring time. Detach and overwrite in memory so the
-            # archive serves the current value without persisting back.
-            session.expunge(ranking)
-            ranking.broadcaster = g.broadcaster or ""
         result.append(ranking)
     return result
 
@@ -421,11 +435,9 @@ def get_rankings_by_broadcaster(
                       sorted by excitement desc.
     """
     if mode == "completed":
-        return [
-            r
-            for r in get_completed_rankings(session, season_year=2026)
-            if r.broadcaster == broadcaster
-        ]
+        return get_completed_rankings(
+            session, season_year=2026, broadcaster=broadcaster
+        )
     return (
         session.query(DailyRanking)
         .filter(DailyRanking.date >= start_date)

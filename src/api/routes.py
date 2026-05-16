@@ -91,6 +91,9 @@ def format_games_response(
         final_score_a = gf.final_score_a if gf else None
         final_score_b = gf.final_score_b if gf else None
         excitement_index = gf.excitement_index if gf else None
+        # Game.broadcaster (via gf) wins over DailyRanking.broadcaster — the
+        # former reflects the latest ESPN data, the latter froze at scoring.
+        broadcaster = gf.broadcaster if gf else ranking.broadcaster
         game_status = (
             game_status_by_espn_id.get(espn_id)
             if game_status_by_espn_id and espn_id
@@ -110,7 +113,7 @@ def format_games_response(
                 quality_score=ranking.quality_score,
                 importance_score=ranking.importance_score,
                 overall_score=ranking.overall_score,
-                broadcaster=ranking.broadcaster,
+                broadcaster=broadcaster,
                 team_a_playoff_prob=prob_by_team_id.get(ranking.team_a_id),
                 team_b_playoff_prob=prob_by_team_id.get(ranking.team_b_id),
                 win_prob_a=ranking.win_prob_a,
@@ -1382,23 +1385,26 @@ _HOMEPAGE_HTML = f"""
                 }});
             }}
 
+            // Shared by `applyFilters` (upcoming list) and `renderCompleted`
+            // (archive). Reads selectedNetworks from module scope.
+            function matchesScope(game, team) {{
+                if (selectedNetworks.size > 0 && !selectedNetworks.has(game.broadcaster)) return false;
+                if (team && game.team_a !== team && game.team_b !== team) return false;
+                return true;
+            }}
+
             function applyFilters() {{
                 collapsePanel();
                 const fromDate = document.getElementById('from-date').value;
                 const toDate = document.getElementById('to-date').value;
                 const team = document.getElementById('team-filter').value;
-
-                const matchesScope = (game) => {{
-                    if (selectedNetworks.size > 0 && !selectedNetworks.has(game.broadcaster)) return false;
-                    if (team && game.team_a !== team && game.team_b !== team) return false;
-                    return true;
-                }};
+                const inScope = (g) => matchesScope(g, team);
 
                 // Top pick is fixed to the next 7 days regardless of the user's date range.
                 const today = addDaysISO(0);
                 const weekOut = addDaysISO(7);
                 const featuredCandidates = allGames.filter(g =>
-                    matchesScope(g) && g.date >= today && g.date <= weekOut
+                    inScope(g) && g.date >= today && g.date <= weekOut
                 );
                 const featured = featuredCandidates.length === 0
                     ? null
@@ -1406,7 +1412,7 @@ _HOMEPAGE_HTML = f"""
                 renderFeatured(featured);
 
                 const games = allGames.filter(game => {{
-                    if (!matchesScope(game)) return false;
+                    if (!inScope(game)) return false;
                     if (fromDate && game.date < fromDate) return false;
                     if (toDate && game.date > toDate) return false;
                     return true;
@@ -1479,11 +1485,7 @@ _HOMEPAGE_HTML = f"""
                 const container = document.getElementById('completed-games-container');
                 if (!container) return;
                 const team = document.getElementById('team-filter').value;
-                const filtered = allCompleted.filter(g => {{
-                    if (selectedNetworks.size > 0 && !selectedNetworks.has(g.broadcaster)) return false;
-                    if (team && g.team_a !== team && g.team_b !== team) return false;
-                    return true;
-                }});
+                const filtered = allCompleted.filter(g => matchesScope(g, team));
                 renderGames(filtered, null, 'completed-games-container');
                 filtered.forEach(g => {{
                     if (!g.espn_id) return;

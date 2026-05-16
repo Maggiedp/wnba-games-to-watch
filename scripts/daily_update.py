@@ -4,7 +4,7 @@
 import logging
 import random
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from src.constants import GameStatus
 from src.data.espn_api import (
@@ -24,6 +24,7 @@ from src.db.queries import (
     get_all_teams,
     get_completed_games,
     get_completed_games_missing_excitement,
+    get_games_for_excitement_refresh,
     get_importance_max_swing,
     get_team_by_id,
     get_team_by_name,
@@ -259,9 +260,6 @@ def refresh_recent_excitement_scores(
     even if ESPN later adds/fixes plays. After `window_days` past compute
     time the value is treated as locked.
     """
-    from datetime import timedelta
-
-    from src.db.queries import get_games_for_excitement_refresh
 
     cutoff = datetime.now() - timedelta(days=window_days)
     games = get_games_for_excitement_refresh(
@@ -271,7 +269,8 @@ def refresh_recent_excitement_scores(
         logger.info("No recent games eligible for excitement refresh")
         return
     logger.info(f"Refreshing excitement for {len(games)} recent games")
-    refreshed = 0
+    rechecked = 0
+    updated = 0
     for game in games:
         try:
             wp = fetch_live_win_probability(game.espn_id, timeout=timeout)
@@ -302,12 +301,13 @@ def refresh_recent_excitement_scores(
                 f"{game.excitement_index} -> {score}"
             )
             game.excitement_index = score
+            updated += 1
         # Leave `excitement_computed_at` immutable — it anchors the freshness
         # window. Updating it on refresh would turn the bounded window into
         # a sliding one, keeping rows eligible forever.
-        refreshed += 1
+        rechecked += 1
     session.commit()
-    logger.info(f"Re-checked excitement for {refreshed} games")
+    logger.info(f"Re-checked {rechecked} games; updated {updated}")
 
 
 def compute_elo_ratings() -> dict[str, float]:
