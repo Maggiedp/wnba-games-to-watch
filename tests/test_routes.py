@@ -360,6 +360,65 @@ def test_completed_endpoint_returns_excitement_sorted_games(tmp_path, monkeypatc
     schema._session_factory = None
 
 
+def test_completed_endpoint_includes_orphan_games_without_ranking(
+    tmp_path, monkeypatch
+):
+    """A completed game with excitement_index but no DailyRanking row must
+    still appear in /api/games/completed (with None scored fields), so the
+    archive doesn't silently hide games on a missed daily-update day."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    from src.db.queries import upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(schema.Team).filter_by(name="Aces").one().id
+    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    # Orphan: completed + has excitement, no DailyRanking row.
+    session.add(
+        Game(
+            team_a_id=a,
+            team_b_id=b,
+            date="2026-05-20",
+            time="",
+            broadcaster="ESPN",
+            winner_id=a,
+            final_score_a=85,
+            final_score_b=82,
+            espn_id="orphan",
+            excitement_index=6.4,
+        )
+    )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/completed")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["date"] == "2026-05-20"
+    assert row["excitement_index"] == 6.4
+    assert row["final_score_a"] == 85 and row["final_score_b"] == 82
+    # Pre-game ranking fields are None because no DailyRanking exists.
+    assert row["quality_score"] is None
+    assert row["overall_score"] is None
+    schema._engine = None
+    schema._session_factory = None
+
+
 def test_filter_endpoint_mode_completed(tmp_path, monkeypatch):
     """/api/games/filter?mode=completed&broadcaster=ION restricts to completed ION games."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")

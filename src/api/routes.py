@@ -1609,6 +1609,23 @@ _HOMEPAGE_HTML = f"""
                 return score == null ? '—' : score.toFixed(0);
             }}
 
+            // For completed archive rows, the list is sorted by excitement_index,
+            // so the visible Score cell must show that same metric — not the
+            // pre-game overall_score, which would mismatch the sort order.
+            function primaryScore(game) {{
+                if (game.excitement_index != null) return game.excitement_index.toFixed(1);
+                return formatScore(game.overall_score);
+            }}
+
+            function primaryScoreClass(game) {{
+                if (game.excitement_index != null) {{
+                    if (game.excitement_index >= EXCITEMENT_THRILLER) return 'high';
+                    if (game.excitement_index >= EXCITEMENT_CLOSE) return 'medium';
+                    return 'low';
+                }}
+                return getScoreClass(game.overall_score);
+            }}
+
             function winProbText(game) {{
                 if (game.win_prob_a == null) return '';
                 const pctA = Math.round(game.win_prob_a * 100);
@@ -1688,14 +1705,14 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function renderGameRow(game, isTopPick) {{
-                const cls = getScoreClass(game.overall_score);
+                const cls = primaryScoreClass(game);
                 const impTitle = game.importance_score == null ? 'Not simulated' : '';
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
                     <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <td class="col-date">${{formatDate(game.date)}}</td>
                         <td class="col-time">${{escapeHtml(game.time || 'TBD')}}</td>
-                        <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{formatScore(game.overall_score)}}</span></div></td>
+                        <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{primaryScore(game)}}</span></div></td>
                         <td>
                             ${{badge}}
                             <div class="matchup">
@@ -1719,7 +1736,7 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function renderGameCard(game, isTopPick) {{
-                const cls = getScoreClass(game.overall_score);
+                const cls = primaryScoreClass(game);
                 const eyebrow = isTopPick ? '<div class="games-card-eyebrow">Top pick</div>' : '';
                 const dateStr = formatDate(game.date);
                 const timeStr = escapeHtml(game.time || 'TBD');
@@ -1728,7 +1745,7 @@ _HOMEPAGE_HTML = f"""
                 const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;
                 return `
                     <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
-                        <div class="games-card-score ${{cls}}">${{formatScore(game.overall_score)}}</div>
+                        <div class="games-card-score ${{cls}}">${{primaryScore(game)}}</div>
                         <div class="games-card-stack">
                             ${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}
                             ${{eyebrow}}
