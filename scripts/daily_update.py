@@ -205,6 +205,7 @@ def populate_excitement_for_recent_completions(
         game.excitement_last_attempt_at = now
         try:
             wp = fetch_live_win_probability(game.espn_id, timeout=timeout)
+            status = wp.get("status")
             plays = wp.get("plays") or []
             score = compute_excitement(plays, final=True)
         except (ESPNAPIError, ESPNNotFoundError) as e:
@@ -217,6 +218,15 @@ def populate_excitement_for_recent_completions(
             logger.warning(
                 f"Failed to compute excitement for game {game.id} (espn_id={game.espn_id}): {e} "
                 "— leaving excitement_index NULL for retry"
+            )
+            continue
+        # Gate on ESPN's own "final" signal. The DB winner_id can be set before
+        # ESPN has finalized the PBP feed; persisting a partial payload would
+        # never be retried because the retry query filters on NULL.
+        if status != GameStatus.FINAL:
+            logger.warning(
+                f"Game {game.id} (espn_id={game.espn_id}) has ESPN status "
+                f"{status!r}, not {GameStatus.FINAL} — leaving NULL for retry"
             )
             continue
         if score is None:

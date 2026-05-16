@@ -472,6 +472,61 @@ def test_get_completed_games_missing_excitement_respects_limit(tmp_path, monkeyp
         schema._session_factory = None
 
 
+def test_populate_excitement_leaves_null_on_non_final_status(tmp_path, monkeypatch):
+    """An ESPN payload with status != STATUS_FINAL must NOT be persisted,
+    even when it has enough plays to compute a score. The DB's winner_id
+    can be set before ESPN finalizes PBP; persisting an in-progress
+    score would never be retried because the retry filter is NULL-only."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="early",
+            )
+        )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        monkeypatch.setattr(
+            daily_update,
+            "fetch_live_win_probability",
+            lambda espn_id, timeout=10: {
+                "status": "STATUS_IN_PROGRESS",
+                "plays": [
+                    {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                    {"period": 4, "clock": "5:00", "home_pct": 0.7},
+                ],
+            },
+        )
+        daily_update.populate_excitement_for_recent_completions(session)
+        game = session.query(Game).filter(Game.espn_id == "early").one()
+        # Score is NOT persisted — partial payload, would never be refreshed.
+        assert game.excitement_index is None
+        # last_attempt_at IS set so the rotation logic eventually retries.
+        assert game.excitement_last_attempt_at is not None
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_populate_excitement_rotates_through_failing_backlog(tmp_path, monkeypatch):
     """A cluster of permanently-failing newest rows must not starve older
     NULL rows forever. After a run, those rows' last_attempt_at is set, so
@@ -524,10 +579,11 @@ def test_populate_excitement_rotates_through_failing_backlog(tmp_path, monkeypat
             if espn_id.startswith("fail-"):
                 raise ESPNAPIError("permanent failure")
             return {
+                "status": "STATUS_FINAL",
                 "plays": [
                     {"period": 1, "clock": "10:00", "home_pct": 0.5},
                     {"period": 4, "clock": "0:00", "home_pct": 0.9},
-                ]
+                ],
             }
 
         monkeypatch.setattr(daily_update, "fetch_live_win_probability", fake_fetch)
@@ -839,10 +895,11 @@ def test_populate_excitement_leaves_null_on_espn_failure(tmp_path, monkeypatch):
             if espn_id == "FAIL":
                 raise ESPNAPIError("simulated outage")
             return {
+                "status": "STATUS_FINAL",
                 "plays": [
                     {"period": 1, "clock": "10:00", "home_pct": 0.5},
                     {"period": 4, "clock": "0:00", "home_pct": 0.7},
-                ]
+                ],
             }
 
         import scripts.daily_update as daily_update
