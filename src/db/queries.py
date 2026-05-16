@@ -288,24 +288,45 @@ def get_completed_rankings(
     """DailyRanking rows for completed games in `season_year`, sorted by
     excitement_index descending (ties broken by date descending).
 
-    Joins `daily_rankings` to `games` on (date, team_a_id, team_b_id). Games
-    with winner_id IS NULL (not finished) or excitement_index IS NULL
-    (not yet computed) are excluded.
+    Sources from `Game` (not `DailyRanking`) so a completed game that
+    somehow lacks a ranking row — e.g. a missed daily-update day —
+    still appears in the archive. Missing rankings are filled with a
+    transient `DailyRanking` carrying None for the scored fields.
+    Games with `winner_id IS NULL` or `excitement_index IS NULL` are
+    excluded.
     """
-    return (
-        session.query(DailyRanking)
-        .join(
-            Game,
-            (Game.date == DailyRanking.date)
-            & (Game.team_a_id == DailyRanking.team_a_id)
-            & (Game.team_b_id == DailyRanking.team_b_id),
-        )
-        .filter(DailyRanking.date.like(f"{season_year}-%"))
+    games = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
         .filter(Game.excitement_index.isnot(None))
-        .order_by(Game.excitement_index.desc(), DailyRanking.date.desc())
+        .order_by(Game.excitement_index.desc(), Game.date.desc())
         .all()
     )
+    if not games:
+        return []
+    rankings_by_key = {
+        (r.date, r.team_a_id, r.team_b_id): r
+        for r in session.query(DailyRanking)
+        .filter(DailyRanking.date.like(f"{season_year}-%"))
+        .all()
+    }
+    result: list[DailyRanking] = []
+    for g in games:
+        ranking = rankings_by_key.get((g.date, g.team_a_id, g.team_b_id))
+        if ranking is None:
+            ranking = DailyRanking(
+                date=g.date,
+                team_a_id=g.team_a_id,
+                team_b_id=g.team_b_id,
+                quality_score=None,
+                importance_score=None,
+                overall_score=None,
+                broadcaster=g.broadcaster or "",
+                win_prob_a=None,
+            )
+        result.append(ranking)
+    return result
 
 
 def get_rankings_by_broadcaster(

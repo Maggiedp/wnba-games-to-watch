@@ -170,8 +170,10 @@ def populate_excitement_for_recent_completions(session) -> None:
     """For 2026 games that completed but have no excitement_index, fetch
     play-by-play from ESPN and compute and store the final excitement score.
 
-    Failures (ESPN unreachable, missing PBP, parse error) are logged and the
-    game is stored as 0.0 — one bad game must not block the rest of the job.
+    Transient failures (ESPN unreachable, missing PBP, parse error) leave the
+    row's excitement_index as NULL so the next run retries it. A persisted
+    0.0 would be indistinguishable from a true blowout score and would never
+    be retried since the retry query filters on NULL.
     """
     games = get_completed_games_missing_excitement(session, season_year=2026)
     if not games:
@@ -186,14 +188,16 @@ def populate_excitement_for_recent_completions(session) -> None:
             score = compute_excitement(plays)
         except (ESPNAPIError, ESPNNotFoundError) as e:
             logger.warning(
-                f"Could not fetch PBP for game {game.id} (espn_id={game.espn_id}): {e}"
+                f"Could not fetch PBP for game {game.id} (espn_id={game.espn_id}): {e} "
+                "— leaving excitement_index NULL for retry"
             )
-            score = 0.0
+            continue
         except Exception as e:
             logger.warning(
-                f"Failed to compute excitement for game {game.id} (espn_id={game.espn_id}): {e}"
+                f"Failed to compute excitement for game {game.id} (espn_id={game.espn_id}): {e} "
+                "— leaving excitement_index NULL for retry"
             )
-            score = 0.0
+            continue
         game.excitement_index = score
         stored += 1
     session.commit()

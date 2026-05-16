@@ -596,3 +596,149 @@ def test_get_completed_rankings_sorts_by_excitement(tmp_path, monkeypatch):
         session.close()
         schema._engine = None
         schema._session_factory = None
+
+
+def test_populate_excitement_leaves_null_on_espn_failure(tmp_path, monkeypatch):
+    """ESPN/parse failures must leave excitement_index NULL so the next run
+    retries — never persist a sentinel 0.0 (indistinguishable from a true
+    blowout score, and excluded from retry by the NULL filter)."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.data.espn_api import ESPNAPIError
+        from src.db.schema import Game
+
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="FAIL",
+            )
+        )
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-21",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=90,
+                final_score_b=80,
+                espn_id="OK",
+            )
+        )
+        session.commit()
+
+        def fake_fetch(espn_id):
+            if espn_id == "FAIL":
+                raise ESPNAPIError("simulated outage")
+            return {
+                "plays": [
+                    {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                    {"period": 4, "clock": "0:00", "home_pct": 0.7},
+                ]
+            }
+
+        import scripts.daily_update as daily_update
+
+        monkeypatch.setattr(daily_update, "fetch_live_win_probability", fake_fetch)
+        daily_update.populate_excitement_for_recent_completions(session)
+
+        fail_game = session.query(Game).filter(Game.espn_id == "FAIL").one()
+        ok_game = session.query(Game).filter(Game.espn_id == "OK").one()
+        assert fail_game.excitement_index is None  # retryable next run
+        assert ok_game.excitement_index is not None and ok_game.excitement_index > 0
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
+def test_get_completed_rankings_includes_games_without_daily_ranking(
+    tmp_path, monkeypatch
+):
+    """Completed games without a matching DailyRanking row still appear,
+    with None scores. Guards against silent omission when daily_update
+    misses a day."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import get_completed_rankings, upsert_daily_ranking
+        from src.db.schema import Game
+
+        # Game WITH ranking.
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=75,
+                espn_id="X",
+                excitement_index=3.0,
+            )
+        )
+        upsert_daily_ranking(
+            session,
+            date="2026-05-20",
+            team_a_id=1,
+            team_b_id=2,
+            quality_score=50.0,
+            importance_score=None,
+            overall_score=50.0,
+            broadcaster="ION",
+        )
+        # Game WITHOUT ranking (simulates a missed daily-update day).
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-21",
+                time="",
+                broadcaster="ESPN",
+                winner_id=1,
+                final_score_a=90,
+                final_score_b=85,
+                espn_id="Y",
+                excitement_index=7.0,
+            )
+        )
+        session.commit()
+
+        rankings = get_completed_rankings(session, season_year=2026)
+        # Both games appear, sorted by excitement desc.
+        dates_in_order = [r.date for r in rankings]
+        assert dates_in_order == ["2026-05-21", "2026-05-20"]
+        # The synthesized ranking has None scores.
+        orphan = next(r for r in rankings if r.date == "2026-05-21")
+        assert orphan.quality_score is None
+        assert orphan.overall_score is None
+        assert orphan.broadcaster == "ESPN"
+        # The real ranking has real scores.
+        real = next(r for r in rankings if r.date == "2026-05-20")
+        assert real.quality_score == 50.0
+        assert real.overall_score == 50.0
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None

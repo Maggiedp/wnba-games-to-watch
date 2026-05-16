@@ -27,11 +27,12 @@ class GameResponse(BaseModel):
     team_b_abbr: str = ""
     team_a_logo: str = ""
     team_b_logo: str = ""
-    quality_score: float
-    # None for non-regular-season games (not simulated).
+    # quality_score / overall_score are None when a completed game has no
+    # DailyRanking row (e.g. a missed daily-update day backfilled later).
+    quality_score: float | None = None
     importance_score: float | None = None
-    overall_score: float
-    broadcaster: str
+    overall_score: float | None = None
+    broadcaster: str = ""
     team_a_playoff_prob: float | None = None
     team_b_playoff_prob: float | None = None
     win_prob_a: float | None = None
@@ -629,6 +630,7 @@ _HOMEPAGE_HTML = f"""
             .score-num.high, .games-card-score.high {{ color: var(--orange); }}
             .score-num.medium, .games-card-score.medium {{ color: var(--orange-deep); }}
             .score-num.low, .games-card-score.low {{ color: var(--text-subtle); }}
+            .score-num.empty, .games-card-score.empty {{ color: var(--text-subtle); opacity: 0.5; }}
             .matchup {{
                 font-weight: 600;
                 color: var(--navy);
@@ -1527,7 +1529,7 @@ _HOMEPAGE_HTML = f"""
                             </div>
                         </div>
                         <div class="featured-score">
-                            <div class="featured-score-num">${{game.overall_score.toFixed(0)}}</div>
+                            <div class="featured-score-num">${{formatScore(game.overall_score)}}</div>
                             <div class="featured-score-label">Overall · /100</div>
                         </div>
                     </article>
@@ -1599,7 +1601,12 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function getScoreClass(score) {{
+                if (score == null) return 'empty';
                 return score >= 40 ? 'high' : score >= 25 ? 'medium' : 'low';
+            }}
+
+            function formatScore(score) {{
+                return score == null ? '—' : score.toFixed(0);
             }}
 
             function winProbText(game) {{
@@ -1688,7 +1695,7 @@ _HOMEPAGE_HTML = f"""
                     <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <td class="col-date">${{formatDate(game.date)}}</td>
                         <td class="col-time">${{escapeHtml(game.time || 'TBD')}}</td>
-                        <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{game.overall_score.toFixed(0)}}</span></div></td>
+                        <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{formatScore(game.overall_score)}}</span></div></td>
                         <td>
                             ${{badge}}
                             <div class="matchup">
@@ -1721,7 +1728,7 @@ _HOMEPAGE_HTML = f"""
                 const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;
                 return `
                     <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
-                        <div class="games-card-score ${{cls}}">${{game.overall_score.toFixed(0)}}</div>
+                        <div class="games-card-score ${{cls}}">${{formatScore(game.overall_score)}}</div>
                         <div class="games-card-stack">
                             ${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}
                             ${{eyebrow}}
