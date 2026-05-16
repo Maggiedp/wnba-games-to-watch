@@ -1234,7 +1234,6 @@ _HOMEPAGE_HTML = f"""
         <script>
             let allGames = [];
             let allCompleted = [];
-            let completedExpanded = false;
             let selectedNetworks = new Set();
             let sortBy = 'date';
 
@@ -1413,7 +1412,7 @@ _HOMEPAGE_HTML = f"""
 
                 if (games.length === 0) {{
                     renderEmpty();
-                    if (completedExpanded) renderCompleted();
+                    if (isCompletedExpanded()) renderCompleted();
                     return;
                 }}
 
@@ -1424,7 +1423,7 @@ _HOMEPAGE_HTML = f"""
                     rest.sort((a, b) => a.date.localeCompare(b.date) || timeToMinutes(a.time) - timeToMinutes(b.time));
                 }}
                 renderGames(rest, featured);
-                if (completedExpanded) renderCompleted();
+                if (isCompletedExpanded()) renderCompleted();
             }}
 
             async function loadCompleted() {{
@@ -1443,51 +1442,51 @@ _HOMEPAGE_HTML = f"""
                 const content = document.getElementById('completed-content');
                 const countEl = document.getElementById('completed-toggle-count');
                 if (!btn || !content || !countEl) return;
-                if (!allCompleted || allCompleted.length === 0) {{
-                    btn.hidden = true;
-                    return;
-                }}
+                if (!allCompleted.length) return;
                 btn.hidden = false;
                 countEl.textContent = '(' + allCompleted.length + ')';
                 btn.addEventListener('click', () => {{
-                    completedExpanded = !completedExpanded;
-                    btn.setAttribute('aria-expanded', String(completedExpanded));
-                    content.hidden = !completedExpanded;
+                    const next = btn.getAttribute('aria-expanded') !== 'true';
+                    btn.setAttribute('aria-expanded', String(next));
+                    content.hidden = !next;
                     btn.querySelector('.completed-toggle-text').textContent =
-                        completedExpanded ? 'Hide completed games' : 'Show completed games';
-                    if (completedExpanded) renderCompleted();
+                        next ? 'Hide completed games' : 'Show completed games';
+                    if (next) renderCompleted();
                 }});
             }}
 
-            function completedMatchesScope(game) {{
-                if (selectedNetworks.size > 0 && !selectedNetworks.has(game.broadcaster)) return false;
-                const team = document.getElementById('team-filter').value;
-                if (team && game.team_a !== team && game.team_b !== team) return false;
-                return true;
+            function isCompletedExpanded() {{
+                const btn = document.getElementById('completed-toggle');
+                return !!btn && btn.getAttribute('aria-expanded') === 'true';
+            }}
+
+            function applyExcitementClass(eyebrow, label) {{
+                eyebrow.textContent = label || '';
+                eyebrow.className = 'excitement-eyebrow'
+                    + (label === 'Thriller' ? ' thriller' : label === 'Close game' ? ' close' : '');
+            }}
+
+            function excitementLabelFor(score) {{
+                if (score == null) return '';
+                if (score >= EXCITEMENT_THRILLER) return 'Thriller';
+                if (score >= EXCITEMENT_CLOSE) return 'Close game';
+                return '';
             }}
 
             function renderCompleted() {{
                 const container = document.getElementById('completed-games-container');
                 if (!container) return;
-                const filtered = allCompleted.filter(completedMatchesScope);
+                const team = document.getElementById('team-filter').value;
+                const filtered = allCompleted.filter(g => {{
+                    if (selectedNetworks.size > 0 && !selectedNetworks.has(g.broadcaster)) return false;
+                    if (team && g.team_a !== team && g.team_b !== team) return false;
+                    return true;
+                }});
                 renderGames(filtered, null, 'completed-games-container');
-                paintStoredExcitement(container, filtered);
-            }}
-
-            function paintStoredExcitement(container, games) {{
-                games.forEach(g => {{
-                    if (!g.espn_id || g.excitement_index == null) return;
-                    const row = container.querySelector(`[data-espn-id="${{g.espn_id}}"]`);
-                    if (!row) return;
-                    const eyebrow = row.querySelector('.excitement-eyebrow');
-                    if (!eyebrow) return;
-                    if (g.excitement_index >= EXCITEMENT_THRILLER) {{
-                        eyebrow.textContent = 'Thriller';
-                        eyebrow.className = 'excitement-eyebrow thriller';
-                    }} else if (g.excitement_index >= EXCITEMENT_CLOSE) {{
-                        eyebrow.textContent = 'Close game';
-                        eyebrow.className = 'excitement-eyebrow close';
-                    }}
+                filtered.forEach(g => {{
+                    if (!g.espn_id) return;
+                    const eyebrow = container.querySelector(`[data-espn-id="${{g.espn_id}}"] .excitement-eyebrow`);
+                    if (eyebrow) applyExcitementClass(eyebrow, excitementLabelFor(g.excitement_index));
                 }});
             }}
 
@@ -1634,8 +1633,6 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function renderScoreLine(game) {{
-                // Completed games show the final score; everything else falls back
-                // to the projected win probability text.
                 if (game.final_score_a != null && game.final_score_b != null) {{
                     return renderFinalScore(game);
                 }}
@@ -1845,14 +1842,7 @@ _HOMEPAGE_HTML = f"""
                 const excitementLabel = computeExcitement(plays);
                 document.querySelectorAll(`[data-espn-id="${{espnId}}"]`).forEach(row => {{
                     const eyebrow = row.querySelector('.excitement-eyebrow');
-                    if (!eyebrow) return;
-                    if (excitementLabel) {{
-                        eyebrow.textContent = excitementLabel;
-                        eyebrow.className = 'excitement-eyebrow ' + (excitementLabel === 'Thriller' ? 'thriller' : 'close');
-                    }} else {{
-                        eyebrow.textContent = '';
-                        eyebrow.className = 'excitement-eyebrow';
-                    }}
+                    if (eyebrow) applyExcitementClass(eyebrow, excitementLabel);
                 }});
             }}
 

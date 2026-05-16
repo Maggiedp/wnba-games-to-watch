@@ -321,21 +321,11 @@ def get_rankings_by_broadcaster(
                       sorted by excitement desc.
     """
     if mode == "completed":
-        return (
-            session.query(DailyRanking)
-            .join(
-                Game,
-                (Game.date == DailyRanking.date)
-                & (Game.team_a_id == DailyRanking.team_a_id)
-                & (Game.team_b_id == DailyRanking.team_b_id),
-            )
-            .filter(DailyRanking.date.like("2026-%"))
-            .filter(DailyRanking.broadcaster == broadcaster)
-            .filter(Game.winner_id.isnot(None))
-            .filter(Game.excitement_index.isnot(None))
-            .order_by(Game.excitement_index.desc(), DailyRanking.date.desc())
-            .all()
-        )
+        return [
+            r
+            for r in get_completed_rankings(session, season_year=2026)
+            if r.broadcaster == broadcaster
+        ]
     return (
         session.query(DailyRanking)
         .filter(DailyRanking.date >= start_date)
