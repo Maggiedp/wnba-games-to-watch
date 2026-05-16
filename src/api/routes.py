@@ -1965,10 +1965,7 @@ _HOMEPAGE_HTML = f"""
                 const last = plays[plays.length - 1];
                 const p = last.home_pct;
                 const future = 2 * p * (1 - p) * (elapsedSeconds(last) / REGULATION_SECS);
-                const score = past + EXCITEMENT_FUTURE_WEIGHT * future;
-                if (score >= EXCITEMENT_THRILLER) return 'Thriller';
-                if (score >= EXCITEMENT_CLOSE) return 'Close game';
-                return null;
+                return excitementLabelFor(past + EXCITEMENT_FUTURE_WEIGHT * future);
             }}
 
             function setSortBy(mode) {{

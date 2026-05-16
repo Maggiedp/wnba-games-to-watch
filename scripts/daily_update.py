@@ -273,18 +273,11 @@ def refresh_recent_excitement_scores(
     rechecked = 0
     updated = 0
     for game in games:
-        # Stamp BEFORE the network call so the rotation works even on
-        # failure — without this, a cap + permanent failures at the head
-        # would starve the tail. Reuses the same column the backfill
-        # writes; the semantic is "last ESPN touch for this row."
+        # Stamp before the network call — same column as backfill, same rotation logic.
         game.excitement_last_attempt_at = now
         try:
             wp = fetch_live_win_probability(game.espn_id, timeout=timeout)
             status = wp.get("status")
-            # compute_excitement indexes home_pct directly; a malformed
-            # entry (e.g. home_pct=None) can raise from inside the formula.
-            # Catching here keeps one bad payload from aborting the whole
-            # refresh queue.
             score = compute_excitement(wp.get("plays") or [], final=True)
         except (ESPNAPIError, ESPNNotFoundError) as e:
             logger.warning(

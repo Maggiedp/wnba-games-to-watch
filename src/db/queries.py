@@ -1,7 +1,7 @@
 """Database query helpers for WNBA Games to Watch."""
 
 from dataclasses import dataclass
-from datetime import datetime  # noqa: F401 — used in get_games_for_excitement_refresh type hint
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -401,17 +401,17 @@ def get_completed_rankings(
     ).all()
     if not games:
         return []
+    # Only look up DailyRanking for the matched games (small set when a
+    # broadcaster filter narrows the query), not the whole season.
+    game_dates = {g.date for g in games}
+    game_keys = {(g.date, g.team_a_id, g.team_b_id) for g in games}
     rankings_by_key = {
         (r.date, r.team_a_id, r.team_b_id): r
         for r in session.query(DailyRanking)
-        .filter(DailyRanking.date.like(f"{season_year}-%"))
+        .filter(DailyRanking.date.in_(game_dates))
         .all()
+        if (r.date, r.team_a_id, r.team_b_id) in game_keys
     }
-    # Note on broadcaster: callers consuming this list should source the
-    # broadcaster from the Game row (via GameFields), not from the
-    # DailyRanking. DailyRanking.broadcaster freezes at pre-game scoring
-    # time; Game.broadcaster is refreshed every daily run and reflects
-    # late corrections. `format_games_response` handles this.
     result: list[DailyRanking] = []
     for g in games:
         ranking = rankings_by_key.get((g.date, g.team_a_id, g.team_b_id))
@@ -439,8 +439,8 @@ def get_rankings_by_broadcaster(
     """Rankings filtered by broadcaster.
 
     mode="upcoming" (default): date >= start_date, sorted by date asc.
-    mode="completed": 2026 completed games with excitement_index set,
-                      sorted by excitement desc.
+    mode="completed": 2026 completed games sorted by excitement desc.
+                      `start_date` is ignored.
     """
     if mode == "completed":
         return get_completed_rankings(
