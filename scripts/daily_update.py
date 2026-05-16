@@ -160,6 +160,7 @@ def fetch_and_store_games(session) -> list[dict]:
             final_score_a=game.get("final_score_a"),
             final_score_b=game.get("final_score_b"),
             espn_id=game.get("event_id"),
+            is_complete=bool(winner_team),
         )
         stored += 1
 

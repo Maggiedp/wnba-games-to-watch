@@ -287,6 +287,69 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
     assert gf.espn_id is None
 
 
+def test_upsert_game_clears_completion_when_un_finalized(tmp_path, monkeypatch):
+    """If ESPN un-finalizes a previously-stored game (postponed, protested,
+    or a data correction), upsert_game with is_complete=False must clear
+    the stored winner, final scores, and the entire excitement cache so
+    the archive doesn't keep showing the stale result."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import upsert_game
+        from src.db.schema import Game
+
+        now = datetime.now()
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="7:00 PM ET",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="x",
+                excitement_index=5.0,
+                excitement_computed_at=now,
+                excitement_last_attempt_at=now,
+            )
+        )
+        session.commit()
+
+        # ESPN now reports the game as non-final (postponed, etc.).
+        upsert_game(
+            session,
+            team_a_id=1,
+            team_b_id=2,
+            date="2026-05-20",
+            time="7:00 PM ET",
+            broadcaster="ION",
+            winner_id=None,
+            final_score_a=None,
+            final_score_b=None,
+            espn_id="x",
+            is_complete=False,
+        )
+        g = session.query(Game).filter(Game.date == "2026-05-20").one()
+        assert g.winner_id is None
+        assert g.final_score_a is None and g.final_score_b is None
+        assert g.excitement_index is None
+        assert g.excitement_computed_at is None
+        assert g.excitement_last_attempt_at is None
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_upsert_game_invalidates_excitement_on_source_change(tmp_path, monkeypatch):
     """If ESPN corrects a completed game (changed espn_id, winner, or
     final score), the stored excitement_index must be cleared so the

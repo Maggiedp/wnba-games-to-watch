@@ -66,8 +66,17 @@ def upsert_game(
     final_score_b: int | None = None,
     espn_id: str | None = None,
     excitement_index: float | None = None,
+    is_complete: bool | None = None,
 ) -> Game:
-    """Upsert a game (insert if not exists, update result if it has been played)."""
+    """Upsert a game (insert if not exists, update result if it has been played).
+
+    `is_complete` is an explicit completion flag from the caller. Pass True
+    to mark a game final (in which case winner_id + final scores must be
+    set), False to clear a previously-stored completion (handles the rare
+    case where ESPN un-finalizes a game — postponed, protested, or a data
+    correction). None (default) means "don't touch completion fields" —
+    used by legacy/partial-update callers.
+    """
     game = (
         session.query(Game)
         .filter(
@@ -91,10 +100,18 @@ def upsert_game(
             or _changed(game.final_score_a, final_score_a)
             or _changed(game.final_score_b, final_score_b)
         )
+        # ESPN says this game is no longer final (postponed, protested, data
+        # correction). Clear stored completion + cached excitement so the
+        # archive doesn't keep showing the stale result.
+        un_finalized = is_complete is False and game.winner_id is not None
         if winner_id is not None:
             game.winner_id = winner_id
             game.final_score_a = final_score_a
             game.final_score_b = final_score_b
+        elif un_finalized:
+            game.winner_id = None
+            game.final_score_a = None
+            game.final_score_b = None
         if broadcaster:
             game.broadcaster = broadcaster
         if time:
@@ -103,7 +120,7 @@ def upsert_game(
             game.espn_id = espn_id
         if excitement_index is not None:
             game.excitement_index = excitement_index
-        elif invalidate_excitement:
+        elif invalidate_excitement or un_finalized:
             game.excitement_index = None
             game.excitement_computed_at = None
             game.excitement_last_attempt_at = None
