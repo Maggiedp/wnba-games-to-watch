@@ -84,10 +84,14 @@ def test_compute_excitement_thriller_late_swing():
     assert score > 1.0
 
 
-def test_compute_excitement_empty_returns_zero():
-    """Fewer than 2 plays → 0.0 (don't crash, store a deterministic value)."""
-    assert compute_excitement([]) == 0.0
-    assert compute_excitement([{"period": 1, "clock": "10:00", "home_pct": 0.5}]) == 0.0
+def test_compute_excitement_empty_returns_none():
+    """Fewer than 2 plays → None ("no signal") so callers can leave the
+    column NULL and retry. 0.0 would be a real-looking score and would
+    never be retried."""
+    assert compute_excitement([]) is None
+    assert (
+        compute_excitement([{"period": 1, "clock": "10:00", "home_pct": 0.5}]) is None
+    )
 
 
 def test_compute_excitement_finished_game_future_collapses():

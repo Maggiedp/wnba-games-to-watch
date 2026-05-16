@@ -198,6 +198,12 @@ def populate_excitement_for_recent_completions(session) -> None:
                 "— leaving excitement_index NULL for retry"
             )
             continue
+        if score is None:
+            logger.warning(
+                f"ESPN returned insufficient play data for game {game.id} "
+                f"(espn_id={game.espn_id}) — leaving excitement_index NULL for retry"
+            )
+            continue
         game.excitement_index = score
         stored += 1
     session.commit()

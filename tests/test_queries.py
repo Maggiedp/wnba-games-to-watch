@@ -598,6 +598,52 @@ def test_get_completed_rankings_sorts_by_excitement(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
+def test_populate_excitement_leaves_null_on_empty_plays(tmp_path, monkeypatch):
+    """An ESPN response with an empty/insufficient plays array must NOT
+    persist as 0.0 — it must stay NULL so the next run retries. Otherwise
+    a transient empty payload becomes a permanent fake-blowout score."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="EMPTY",
+            )
+        )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        monkeypatch.setattr(
+            daily_update,
+            "fetch_live_win_probability",
+            lambda espn_id: {"plays": []},
+        )
+        daily_update.populate_excitement_for_recent_completions(session)
+
+        game = session.query(Game).filter(Game.espn_id == "EMPTY").one()
+        assert game.excitement_index is None
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_populate_excitement_leaves_null_on_espn_failure(tmp_path, monkeypatch):
     """ESPN/parse failures must leave excitement_index NULL so the next run
     retries — never persist a sentinel 0.0 (indistinguishable from a true

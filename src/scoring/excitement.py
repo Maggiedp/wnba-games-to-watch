@@ -47,13 +47,16 @@ def elapsed_seconds(play: dict) -> float:
     return prior + elapsed_in_period
 
 
-def compute_excitement(plays: list[dict]) -> float:
-    """Return the raw excitement score for a completed game.
+def compute_excitement(plays: list[dict]) -> float | None:
+    """Return the raw excitement score for a completed game, or None if
+    there are fewer than 2 plays.
 
-    Returns 0.0 if there are fewer than 2 plays (insufficient data).
+    None signals "no usable data" so callers leave `excitement_index` NULL
+    and retry on the next run. A persisted 0.0 would be indistinguishable
+    from a real blowout score and would never be retried.
     """
     if not plays or len(plays) < 2:
-        return 0.0
+        return None
     past = 0.0
     for i in range(1, len(plays)):
         d_wp = abs(plays[i]["home_pct"] - plays[i - 1]["home_pct"])
