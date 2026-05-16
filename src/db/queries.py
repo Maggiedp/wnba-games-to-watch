@@ -75,6 +75,18 @@ def upsert_game(
         .first()
     )
     if game:
+        # If any source-of-truth field for excitement changes (espn_id,
+        # winner_id, final scores), invalidate the cached excitement so
+        # the backfill recomputes from the corrected PBP. Without this,
+        # ESPN correcting a finalized game would leave the archive sorted
+        # on stale data forever — beyond the bounded refresh window the
+        # value would otherwise be locked.
+        invalidate_excitement = game.excitement_index is not None and (
+            (espn_id and espn_id != game.espn_id)
+            or (winner_id is not None and winner_id != game.winner_id)
+            or (final_score_a is not None and final_score_a != game.final_score_a)
+            or (final_score_b is not None and final_score_b != game.final_score_b)
+        )
         if winner_id is not None:
             game.winner_id = winner_id
             game.final_score_a = final_score_a
@@ -87,6 +99,10 @@ def upsert_game(
             game.espn_id = espn_id
         if excitement_index is not None:
             game.excitement_index = excitement_index
+        elif invalidate_excitement:
+            game.excitement_index = None
+            game.excitement_computed_at = None
+            game.excitement_last_attempt_at = None
         session.commit()
         return game
 
