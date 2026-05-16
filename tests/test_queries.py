@@ -592,6 +592,89 @@ def test_get_completed_games_missing_excitement_respects_limit(tmp_path, monkeyp
         schema._session_factory = None
 
 
+def test_refresh_rotates_when_cap_smaller_than_eligible_set(tmp_path, monkeypatch):
+    """When more rows share the same `excitement_computed_at` than the
+    per-run cap allows — the typical post-backfill state — successive
+    runs must rotate through the tail instead of pinning to the head.
+    Without the `excitement_last_attempt_at` ordering, all subsequent
+    runs would re-select the same first-N rows until they aged out."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime, timedelta
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        # 4 rows, all stamped with the same `computed_at` an hour ago —
+        # mimics post-backfill state where many games share a timestamp.
+        same_stamp = datetime.now() - timedelta(hours=1)
+        for i in range(4):
+            session.add(
+                Game(
+                    team_a_id=1,
+                    team_b_id=2,
+                    date=f"2026-05-{20 + i:02d}",
+                    time="",
+                    broadcaster="ION",
+                    winner_id=1,
+                    final_score_a=80,
+                    final_score_b=70,
+                    espn_id=f"g{i}",
+                    excitement_index=4.0,
+                    excitement_computed_at=same_stamp,
+                )
+            )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        def fake_fetch(espn_id, timeout=10):
+            return {
+                "status": "STATUS_FINAL",
+                "plays": [
+                    {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                    {"period": 4, "clock": "0:00", "home_pct": 0.6},
+                ],
+            }
+
+        monkeypatch.setattr(daily_update, "fetch_live_win_probability", fake_fetch)
+
+        # Run 1 with cap=2: hits two rows, stamps their last_attempt_at.
+        daily_update.refresh_recent_excitement_scores(session, window_days=2, limit=2)
+        session.expire_all()
+        round1_touched = {
+            g.espn_id
+            for g in session.query(Game).filter(
+                Game.excitement_last_attempt_at.isnot(None)
+            )
+        }
+        assert len(round1_touched) == 2
+
+        # Run 2 with cap=2: the two never-touched rows take precedence.
+        daily_update.refresh_recent_excitement_scores(session, window_days=2, limit=2)
+        session.expire_all()
+        all_touched = {
+            g.espn_id
+            for g in session.query(Game).filter(
+                Game.excitement_last_attempt_at.isnot(None)
+            )
+        }
+        assert all_touched == {"g0", "g1", "g2", "g3"}
+        # The tail rows that didn't get a turn in run 1 are exactly the
+        # ones run 2 picked up.
+        round2_only = all_touched - round1_touched
+        assert len(round2_only) == 2
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_refresh_one_bad_payload_does_not_abort_queue(tmp_path, monkeypatch):
     """A malformed ESPN payload (e.g. home_pct=None raising inside
     compute_excitement) must not abort the refresh loop. Otherwise one

@@ -277,8 +277,12 @@ def get_games_for_excitement_refresh(
     handling late ESPN corrections to a STATUS_FINAL game.
 
     `cutoff` is a datetime; rows with `excitement_computed_at >= cutoff`
-    are eligible. Ordered by `excitement_computed_at ASC` so rows about
-    to roll out of the window get a final chance before they're locked.
+    are eligible. Order: least-recently-touched first (NULL
+    `excitement_last_attempt_at` first, then ASC), so when more eligible
+    rows share the same `excitement_computed_at` than the per-run cap
+    allows — e.g. right after the one-shot backfill stamps many rows
+    with the same `now` — the queue rotates through the full set
+    instead of repeatedly hitting the same head until rows age out.
     """
     q = (
         session.query(Game)
@@ -287,7 +291,11 @@ def get_games_for_excitement_refresh(
         .filter(Game.excitement_index.isnot(None))
         .filter(Game.excitement_computed_at.isnot(None))
         .filter(Game.excitement_computed_at >= cutoff)
-        .order_by(Game.excitement_computed_at.asc())
+        .order_by(
+            Game.excitement_last_attempt_at.isnot(None),
+            Game.excitement_last_attempt_at.asc(),
+            Game.excitement_computed_at.asc(),
+        )
     )
     if limit is not None:
         q = q.limit(limit)

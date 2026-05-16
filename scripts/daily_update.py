@@ -269,9 +269,15 @@ def refresh_recent_excitement_scores(
         logger.info("No recent games eligible for excitement refresh")
         return
     logger.info(f"Refreshing excitement for {len(games)} recent games")
+    now = datetime.now()
     rechecked = 0
     updated = 0
     for game in games:
+        # Stamp BEFORE the network call so the rotation works even on
+        # failure — without this, a cap + permanent failures at the head
+        # would starve the tail. Reuses the same column the backfill
+        # writes; the semantic is "last ESPN touch for this row."
+        game.excitement_last_attempt_at = now
         try:
             wp = fetch_live_win_probability(game.espn_id, timeout=timeout)
             status = wp.get("status")
