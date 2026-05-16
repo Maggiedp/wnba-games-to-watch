@@ -168,6 +168,10 @@ def fetch_and_store_games(session) -> list[dict]:
 
 DAILY_EXCITEMENT_RETRY_CAP = 50
 BACKFILL_ESPN_TIMEOUT_S = 5
+# How long after first compute we keep re-checking ESPN in case the PBP
+# was refined post-final, plus the per-run cap for that refresh work.
+EXCITEMENT_REFRESH_WINDOW_DAYS = 2
+EXCITEMENT_REFRESH_CAP = 25
 
 
 def populate_excitement_for_recent_completions(
@@ -236,9 +240,68 @@ def populate_excitement_for_recent_completions(
             )
             continue
         game.excitement_index = score
+        game.excitement_computed_at = now
         stored += 1
     session.commit()
     logger.info(f"Stored excitement_index for {stored} games")
+
+
+def refresh_recent_excitement_scores(
+    session,
+    window_days: int = EXCITEMENT_REFRESH_WINDOW_DAYS,
+    limit: int | None = EXCITEMENT_REFRESH_CAP,
+    timeout: int = BACKFILL_ESPN_TIMEOUT_S,
+) -> None:
+    """Re-fetch already-scored games within a bounded freshness window so
+    late ESPN PBP refinements can correct an early STATUS_FINAL compute.
+
+    Without this, the first FINAL response becomes the eternal sort key
+    even if ESPN later adds/fixes plays. After `window_days` past compute
+    time the value is treated as locked.
+    """
+    from datetime import timedelta
+
+    from src.db.queries import get_games_for_excitement_refresh
+
+    cutoff = datetime.now() - timedelta(days=window_days)
+    games = get_games_for_excitement_refresh(
+        session, cutoff=cutoff, season_year=2026, limit=limit
+    )
+    if not games:
+        logger.info("No recent games eligible for excitement refresh")
+        return
+    logger.info(f"Refreshing excitement for {len(games)} recent games")
+    now = datetime.now()
+    refreshed = 0
+    for game in games:
+        try:
+            wp = fetch_live_win_probability(game.espn_id, timeout=timeout)
+        except (ESPNAPIError, ESPNNotFoundError) as e:
+            logger.warning(
+                f"Refresh fetch failed for game {game.id} (espn_id={game.espn_id}): {e}"
+            )
+            continue
+        except Exception as e:
+            logger.warning(
+                f"Refresh fetch errored for game {game.id} (espn_id={game.espn_id}): {e}"
+            )
+            continue
+        if wp.get("status") != GameStatus.FINAL:
+            # The game un-finalized? Skip — don't downgrade a stored score.
+            continue
+        score = compute_excitement(wp.get("plays") or [], final=True)
+        if score is None:
+            continue
+        if score != game.excitement_index:
+            logger.info(
+                f"Refreshing excitement for game {game.id} (espn_id={game.espn_id}): "
+                f"{game.excitement_index} -> {score}"
+            )
+            game.excitement_index = score
+        game.excitement_computed_at = now
+        refreshed += 1
+    session.commit()
+    logger.info(f"Re-checked excitement for {refreshed} games")
 
 
 def compute_elo_ratings() -> dict[str, float]:
@@ -504,6 +567,10 @@ def main() -> int:
                 populate_excitement_for_recent_completions(session)
             except Exception as e:
                 logger.warning(f"Excitement backfill failed (non-fatal): {e}")
+            try:
+                refresh_recent_excitement_scores(session)
+            except Exception as e:
+                logger.warning(f"Excitement refresh failed (non-fatal): {e}")
             logger.info("=== Daily update job completed successfully ===")
             return 0
         finally:

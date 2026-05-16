@@ -241,6 +241,34 @@ def get_completed_games_missing_excitement(
     return q.all()
 
 
+def get_games_for_excitement_refresh(
+    session: Session,
+    cutoff,
+    season_year: int = 2026,
+    limit: int | None = None,
+) -> list[Game]:
+    """Games whose excitement_index was computed recently enough that ESPN
+    may still revise the underlying PBP — bounded freshness window for
+    handling late ESPN corrections to a STATUS_FINAL game.
+
+    `cutoff` is a datetime; rows with `excitement_computed_at >= cutoff`
+    are eligible. Ordered by `excitement_computed_at ASC` so rows about
+    to roll out of the window get a final chance before they're locked.
+    """
+    q = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(Game.excitement_index.isnot(None))
+        .filter(Game.excitement_computed_at.isnot(None))
+        .filter(Game.excitement_computed_at >= cutoff)
+        .order_by(Game.excitement_computed_at.asc())
+    )
+    if limit is not None:
+        q = q.limit(limit)
+    return q.all()
+
+
 def update_game_result(
     session: Session,
     game_id: int,

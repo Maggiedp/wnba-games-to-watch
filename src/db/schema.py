@@ -49,6 +49,12 @@ class Game(Base):
     # NULL = never attempted. Ordering retries by this timestamp prevents
     # a permanently-failing head from starving older NULL rows under the cap.
     excitement_last_attempt_at = Column(DateTime, nullable=True)
+    # When the currently-stored excitement_index was actually computed (only
+    # set on a successful STATUS_FINAL persist). Drives a short freshness
+    # window in which the daily job re-fetches and overwrites, in case ESPN
+    # refined the PBP after our first final read. NULL once locked beyond
+    # the window, or if no score has been stored.
+    excitement_computed_at = Column(DateTime, nullable=True)
     broadcaster = Column(String(50), default="")
     espn_id = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=func.now())
@@ -130,6 +136,7 @@ def init_db():
                 "ALTER TABLE daily_rankings ADD COLUMN win_prob_a FLOAT",
                 "ALTER TABLE games ADD COLUMN excitement_index FLOAT",
                 "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
+                "ALTER TABLE games ADD COLUMN excitement_computed_at DATETIME",
             ]:
                 try:
                     conn.execute(text(stmt))
@@ -193,6 +200,12 @@ def init_db():
                 text(
                     "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
                     "excitement_last_attempt_at TIMESTAMP"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
+                    "excitement_computed_at TIMESTAMP"
                 )
             )
             conn.commit()

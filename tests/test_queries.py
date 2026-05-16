@@ -472,6 +472,83 @@ def test_get_completed_games_missing_excitement_respects_limit(tmp_path, monkeyp
         schema._session_factory = None
 
 
+def test_refresh_updates_score_after_late_espn_correction(tmp_path, monkeypatch):
+    """A persisted STATUS_FINAL excitement_index must still be refreshable
+    inside a bounded window. ESPN sometimes refines PBP after first
+    finalizing a game; refresh_recent_excitement_scores re-fetches and
+    overwrites when the recompute disagrees with the stored value."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="evolving",
+            )
+        )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        # First daily run: ESPN's initial FINAL payload has minimal plays.
+        first_payload = {
+            "status": "STATUS_FINAL",
+            "plays": [
+                {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                {"period": 4, "clock": "0:00", "home_pct": 0.55},
+            ],
+        }
+        monkeypatch.setattr(
+            daily_update,
+            "fetch_live_win_probability",
+            lambda espn_id, timeout=10: first_payload,
+        )
+        daily_update.populate_excitement_for_recent_completions(session)
+        game = session.query(Game).filter(Game.espn_id == "evolving").one()
+        first_score = game.excitement_index
+        first_computed_at = game.excitement_computed_at
+        assert first_score is not None
+        assert first_computed_at is not None
+
+        # Second daily run: ESPN has added late plays — bigger past movement.
+        second_payload = {
+            "status": "STATUS_FINAL",
+            "plays": [
+                {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                {"period": 4, "clock": "0:30", "home_pct": 0.7},
+                {"period": 4, "clock": "0:00", "home_pct": 0.05},
+            ],
+        }
+        monkeypatch.setattr(
+            daily_update,
+            "fetch_live_win_probability",
+            lambda espn_id, timeout=10: second_payload,
+        )
+        daily_update.refresh_recent_excitement_scores(session)
+        session.expire_all()
+        game = session.query(Game).filter(Game.espn_id == "evolving").one()
+        assert game.excitement_index != first_score
+        assert game.excitement_index > first_score  # bigger past swing wins
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_populate_excitement_leaves_null_on_non_final_status(tmp_path, monkeypatch):
     """An ESPN payload with status != STATUS_FINAL must NOT be persisted,
     even when it has enough plays to compute a score. The DB's winner_id
