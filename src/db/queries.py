@@ -132,12 +132,23 @@ def upsert_game(
             game.espn_id = espn_id
         # If we matched by espn_id, the row's date/teams may differ
         # (reschedule, or ESPN correcting the matchup itself).
+        old_key = (game.date, game.team_a_id, game.team_b_id)
         if date and game.date != date:
             game.date = date
         if game.team_a_id != team_a_id:
             game.team_a_id = team_a_id
         if game.team_b_id != team_b_id:
             game.team_b_id = team_b_id
+        new_key = (game.date, game.team_a_id, game.team_b_id)
+        if new_key != old_key:
+            # Old DailyRanking row is now orphaned — get_upcoming_rankings
+            # returns rankings independently of Game, so leaving it would
+            # render as a phantom upcoming matchup with no live data.
+            session.query(DailyRanking).filter(
+                DailyRanking.date == old_key[0],
+                DailyRanking.team_a_id == old_key[1],
+                DailyRanking.team_b_id == old_key[2],
+            ).delete()
         if excitement_index is not None:
             game.excitement_index = excitement_index
         elif invalidate_excitement or un_finalized:

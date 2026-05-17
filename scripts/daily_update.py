@@ -149,6 +149,16 @@ def fetch_and_store_games(session) -> list[dict]:
             logger.warning(f"Unknown team(s): {team_a!r}, {team_b!r} — skipping")
             continue
         winner_team = game.get("winner_team")
+        status = game.get("status")
+        # Only an explicit un-finalize status downgrades a stored final.
+        # STATUS_UNKNOWN and other unrecognized statuses are no-ops to
+        # avoid wiping valid completed games on a transient ESPN glitch.
+        if winner_team:
+            is_complete: bool | None = True
+        elif status in UN_FINALIZE_STATUSES:
+            is_complete = False
+        else:
+            is_complete = None
         upsert_game(
             session,
             team_a_id=team_a_id,
@@ -160,7 +170,7 @@ def fetch_and_store_games(session) -> list[dict]:
             final_score_a=game.get("final_score_a"),
             final_score_b=game.get("final_score_b"),
             espn_id=game.get("event_id"),
-            is_complete=bool(winner_team),
+            is_complete=is_complete,
         )
         stored += 1
 

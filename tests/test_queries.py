@@ -287,6 +287,135 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
     assert gf.espn_id is None
 
 
+def test_upsert_game_deletes_orphan_daily_ranking_on_reschedule(tmp_path, monkeypatch):
+    """When upsert_game moves an existing row to a new (date, teams) key
+    via espn_id matching, the old DailyRanking at the previous key must
+    be deleted. Otherwise get_upcoming_rankings keeps rendering it as a
+    phantom upcoming matchup with no corresponding Game."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import upsert_daily_ranking, upsert_game
+        from src.db.schema import DailyRanking, Game
+
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="7:00 PM ET",
+                broadcaster="ION",
+                espn_id="evt",
+            )
+        )
+        upsert_daily_ranking(
+            session,
+            date="2026-05-20",
+            team_a_id=1,
+            team_b_id=2,
+            quality_score=50.0,
+            importance_score=None,
+            overall_score=50.0,
+            broadcaster="ION",
+        )
+        session.commit()
+
+        # ESPN reschedules to a new date.
+        upsert_game(
+            session,
+            team_a_id=1,
+            team_b_id=2,
+            date="2026-05-25",
+            time="8:00 PM ET",
+            broadcaster="ION",
+            espn_id="evt",
+        )
+
+        # The orphan ranking at the OLD date must be deleted.
+        orphan = (
+            session.query(DailyRanking).filter(DailyRanking.date == "2026-05-20").all()
+        )
+        assert orphan == []
+        # Game itself is at the new date.
+        assert session.query(Game).filter(Game.espn_id == "evt").one().date == (
+            "2026-05-25"
+        )
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
+def test_fetch_and_store_unknown_status_preserves_stored_final(tmp_path, monkeypatch):
+    """The daily schedule path must not destructively clear a stored final
+    when ESPN returns STATUS_UNKNOWN (parser fallback for a malformed/
+    partial response). Same rule as the refresh path: only the explicit
+    un-finalize set downgrades."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import upsert_game
+        from src.db.schema import Game
+
+        # Seed a completed game.
+        now = datetime.now()
+        upsert_game(
+            session,
+            team_a_id=1,
+            team_b_id=2,
+            date="2026-05-20",
+            time="7:00 PM ET",
+            broadcaster="ION",
+            winner_id=1,
+            final_score_a=80,
+            final_score_b=70,
+            espn_id="ev1",
+            is_complete=True,
+        )
+        # Manually attach the excitement cache (would normally come from
+        # the backfill path).
+        g = session.query(Game).filter(Game.espn_id == "ev1").one()
+        g.excitement_index = 5.0
+        g.excitement_computed_at = now
+        session.commit()
+
+        # Simulate a STATUS_UNKNOWN parse — caller passes is_complete=None.
+        upsert_game(
+            session,
+            team_a_id=1,
+            team_b_id=2,
+            date="2026-05-20",
+            time="7:00 PM ET",
+            broadcaster="ION",
+            winner_id=None,
+            final_score_a=None,
+            final_score_b=None,
+            espn_id="ev1",
+            is_complete=None,
+        )
+        g = session.query(Game).filter(Game.espn_id == "ev1").one()
+        # Completion preserved — UNKNOWN is treated as transient.
+        assert g.winner_id == 1
+        assert g.final_score_a == 80 and g.final_score_b == 70
+        assert g.excitement_index == 5.0
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_upsert_game_corrects_team_ids_when_matched_by_espn_id(tmp_path, monkeypatch):
     """If ESPN corrects an event's participating teams (data fix on the
     same event_id), the existing row's team_a_id / team_b_id must update
