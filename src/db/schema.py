@@ -144,13 +144,33 @@ def init_db():
                 "ALTER TABLE games ADD COLUMN excitement_index FLOAT",
                 "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
                 "ALTER TABLE games ADD COLUMN excitement_computed_at DATETIME",
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_espn_id ON games (espn_id)",
             ]:
                 try:
                     conn.execute(text(stmt))
                     conn.commit()
                 except Exception:
                     pass  # column already exists
+            # Dedupe before the unique index: pre-existing duplicate
+            # espn_id rows from older overlapping inserts would make
+            # CREATE UNIQUE INDEX fail. Keep MAX(id) per espn_id (most
+            # recent insert tends to have the most complete data), drop
+            # the rest. Fail loudly on the index creation itself — don't
+            # swallow it like the column-adds, or we'd silently lose the
+            # uniqueness guarantee the upsert retry relies on.
+            conn.execute(
+                text(
+                    "DELETE FROM games WHERE espn_id IS NOT NULL "
+                    "AND id NOT IN (SELECT MAX(id) FROM games "
+                    "WHERE espn_id IS NOT NULL GROUP BY espn_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_espn_id "
+                    "ON games (espn_id)"
+                )
+            )
+            conn.commit()
 
     # PostgreSQL: supports ALTER COLUMN TYPE, DO blocks, and IF NOT EXISTS.
     if engine.dialect.name == "postgresql":
@@ -214,6 +234,16 @@ def init_db():
                 text(
                     "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
                     "excitement_computed_at TIMESTAMP"
+                )
+            )
+            # Dedupe before the unique index: a pre-existing duplicate
+            # espn_id row would make CREATE UNIQUE INDEX fail at deploy.
+            # Keep MAX(id) per espn_id (most recent insert), drop the rest.
+            conn.execute(
+                text(
+                    "DELETE FROM games WHERE espn_id IS NOT NULL "
+                    "AND id NOT IN (SELECT MAX(id) FROM games "
+                    "WHERE espn_id IS NOT NULL GROUP BY espn_id)"
                 )
             )
             conn.execute(

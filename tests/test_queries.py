@@ -287,6 +287,81 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
     assert gf.espn_id is None
 
 
+def test_init_db_dedupes_existing_duplicate_espn_ids(tmp_path, monkeypatch):
+    """A pre-existing duplicate espn_id (from older overlapping inserts
+    before the unique index existed) must be deduped by init_db before
+    the index creation runs. Otherwise CREATE UNIQUE INDEX would fail at
+    deploy and the app would refuse to start."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from sqlalchemy import text
+
+    from src.db import schema
+
+    # First init creates the schema and the index. Reset state.
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+
+    # Bypass the unique index to simulate the pre-migration state:
+    # delete it, then seed two rows with the same espn_id.
+    engine = schema.get_engine()
+    with engine.connect() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS uq_game_espn_id"))
+        conn.execute(
+            text(
+                "INSERT INTO games (id, team_a_id, team_b_id, date, time, "
+                "broadcaster, espn_id) VALUES "
+                "(101, 1, 2, '2026-05-20', '', '', 'dup')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO games (id, team_a_id, team_b_id, date, time, "
+                "broadcaster, espn_id, winner_id, final_score_a, final_score_b) "
+                "VALUES (102, 1, 2, '2026-05-21', '', '', 'dup', 1, 88, 82)"
+            )
+        )
+        conn.commit()
+
+    # Re-run init_db — must dedupe and successfully re-create the index.
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        rows = session.query(Game).filter(Game.espn_id == "dup").all()
+        # Survivor is the MAX(id) row (more recent insert, has completion).
+        assert len(rows) == 1
+        assert rows[0].id == 102
+        assert rows[0].winner_id == 1
+
+        # Index now exists; another duplicate INSERT must fail.
+        from sqlalchemy.exc import IntegrityError
+
+        session.add(
+            Game(
+                team_a_id=3,
+                team_b_id=4,
+                date="2026-06-01",
+                time="",
+                broadcaster="",
+                espn_id="dup",
+            )
+        )
+        try:
+            session.commit()
+            assert False, "expected IntegrityError"
+        except IntegrityError:
+            session.rollback()
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_upsert_game_handles_duplicate_espn_id_race(tmp_path, monkeypatch):
     """Concurrent daily-update runs could both miss an existing row and
     both INSERT for the same espn_id. The unique index on espn_id makes
