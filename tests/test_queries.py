@@ -287,6 +287,76 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
     assert gf.espn_id is None
 
 
+def test_init_db_dedupe_keeps_completion_data_over_higher_id(tmp_path, monkeypatch):
+    """When duplicate espn_id rows have asymmetric data — the older row
+    holds the real completion (winner, scores, excitement) and a newer
+    duplicate is empty (e.g. ESPN rescheduled and the old upsert inserted
+    a fresh row at the new date) — the dedupe must keep the row WITH the
+    completion data, not just MAX(id). A blind MAX(id) would discard the
+    actual game state."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime
+
+    from sqlalchemy import text
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    engine = schema.get_engine()
+    with engine.connect() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS uq_game_espn_id"))
+        # Row 101 — older, fully completed.
+        now = datetime.now().isoformat()
+        conn.execute(
+            text(
+                "INSERT INTO games (id, team_a_id, team_b_id, date, time, "
+                "broadcaster, espn_id, winner_id, final_score_a, "
+                "final_score_b, excitement_index, excitement_computed_at) "
+                "VALUES (101, 1, 2, '2026-05-20', '7:00 PM ET', 'ION', "
+                "'evt', 1, 88, 82, 5.4, :now)"
+            ),
+            {"now": now},
+        )
+        # Row 102 — newer (would be MAX(id)), but empty: the row a
+        # pre-this-branch reschedule would have inserted at the new date.
+        conn.execute(
+            text(
+                "INSERT INTO games (id, team_a_id, team_b_id, date, time, "
+                "broadcaster, espn_id) VALUES "
+                "(102, 1, 2, '2026-05-25', '8:00 PM ET', 'ION', 'evt')"
+            )
+        )
+        conn.commit()
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        rows = session.query(Game).filter(Game.espn_id == "evt").all()
+        assert len(rows) == 1
+        g = rows[0]
+        # Survivor is row 101 (had completion data), not row 102 despite
+        # being lower id.
+        assert g.id == 101
+        assert g.winner_id == 1
+        assert g.final_score_a == 88
+        assert g.final_score_b == 82
+        assert g.excitement_index == 5.4
+        # Survivor's own date/teams preserved (the empty newer row's date
+        # would have been wrong post-merge).
+        assert g.date == "2026-05-20"
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_init_db_dedupes_existing_duplicate_espn_ids(tmp_path, monkeypatch):
     """A pre-existing duplicate espn_id (from older overlapping inserts
     before the unique index existed) must be deduped by init_db before

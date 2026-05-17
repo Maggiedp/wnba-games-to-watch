@@ -125,6 +125,100 @@ def get_database_url() -> str:
     return db_url
 
 
+def _dedupe_games_by_espn_id(conn) -> int:
+    """Merge duplicate non-null espn_id rows into a single survivor.
+
+    Realistic scenario this guards against: a pre-this-branch reschedule
+    where ESPN moved an event to a new date. The old upsert_game matched
+    by (date, team_a, team_b), so it inserted a fresh row at the new
+    date — same espn_id, no completion data — while the old completed
+    row sat at the original date. A blind MAX(id) dedupe would keep the
+    newer (empty) row and drop the older (completed) one, silently
+    losing real data.
+
+    Survivor selection prefers rows that already carry completion state
+    (winner_id, then excitement_index, then final_score_a present), and
+    falls back to id DESC. Any non-null field on a doomed row is copied
+    onto the survivor before deletion. Stale DailyRanking rows keyed
+    by the doomed row's (date, team_a, team_b) are also deleted, since
+    they would otherwise become phantoms in the upcoming list.
+
+    Returns the count of rows deleted.
+    """
+    dup_ids = conn.execute(
+        text(
+            "SELECT espn_id FROM games WHERE espn_id IS NOT NULL "
+            "GROUP BY espn_id HAVING COUNT(*) > 1"
+        )
+    ).fetchall()
+    if not dup_ids:
+        return 0
+    deleted = 0
+    merge_fields = (
+        "winner_id",
+        "final_score_a",
+        "final_score_b",
+        "excitement_index",
+        "excitement_computed_at",
+        "excitement_last_attempt_at",
+        "broadcaster",
+        "time",
+    )
+    for (espn_id,) in dup_ids:
+        rows = conn.execute(
+            text(
+                "SELECT id, team_a_id, team_b_id, date, time, broadcaster, "
+                "winner_id, final_score_a, final_score_b, excitement_index, "
+                "excitement_computed_at, excitement_last_attempt_at "
+                "FROM games WHERE espn_id = :espn_id "
+                "ORDER BY "
+                "  CASE WHEN winner_id IS NULL THEN 1 ELSE 0 END, "
+                "  CASE WHEN excitement_index IS NULL THEN 1 ELSE 0 END, "
+                "  CASE WHEN final_score_a IS NULL THEN 1 ELSE 0 END, "
+                "  id DESC"
+            ),
+            {"espn_id": espn_id},
+        ).fetchall()
+        survivor = rows[0]
+        merged: dict = {f: getattr(survivor, f) for f in merge_fields}
+        for r in rows[1:]:
+            for f in merge_fields:
+                if merged[f] is None or merged[f] == "":
+                    rv = getattr(r, f)
+                    if rv is not None and rv != "":
+                        merged[f] = rv
+        conn.execute(
+            text(
+                "UPDATE games SET winner_id = :winner_id, "
+                "final_score_a = :final_score_a, "
+                "final_score_b = :final_score_b, "
+                "excitement_index = :excitement_index, "
+                "excitement_computed_at = :excitement_computed_at, "
+                "excitement_last_attempt_at = :excitement_last_attempt_at, "
+                "broadcaster = :broadcaster, time = :time "
+                "WHERE id = :id"
+            ),
+            {**merged, "id": survivor.id},
+        )
+        for r in rows[1:]:
+            key = (r.date, r.team_a_id, r.team_b_id)
+            survivor_key = (survivor.date, survivor.team_a_id, survivor.team_b_id)
+            if key != survivor_key:
+                conn.execute(
+                    text(
+                        "DELETE FROM daily_rankings WHERE date = :d "
+                        "AND team_a_id = :a AND team_b_id = :b"
+                    ),
+                    {"d": r.date, "a": r.team_a_id, "b": r.team_b_id},
+                )
+            conn.execute(
+                text("DELETE FROM games WHERE id = :id"),
+                {"id": r.id},
+            )
+            deleted += 1
+    return deleted
+
+
 def get_engine():
     global _engine
     if _engine is None:
@@ -150,20 +244,11 @@ def init_db():
                     conn.commit()
                 except Exception:
                     pass  # column already exists
-            # Dedupe before the unique index: pre-existing duplicate
-            # espn_id rows from older overlapping inserts would make
-            # CREATE UNIQUE INDEX fail. Keep MAX(id) per espn_id (most
-            # recent insert tends to have the most complete data), drop
-            # the rest. Fail loudly on the index creation itself — don't
-            # swallow it like the column-adds, or we'd silently lose the
-            # uniqueness guarantee the upsert retry relies on.
-            conn.execute(
-                text(
-                    "DELETE FROM games WHERE espn_id IS NOT NULL "
-                    "AND id NOT IN (SELECT MAX(id) FROM games "
-                    "WHERE espn_id IS NOT NULL GROUP BY espn_id)"
-                )
-            )
+            # Dedupe pre-existing duplicate espn_id rows before creating
+            # the unique index. See _dedupe_games_by_espn_id for the
+            # survivor-selection / merge logic — a blind MAX(id) would
+            # silently drop completed rows that happened to be older.
+            _dedupe_games_by_espn_id(conn)
             conn.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_espn_id "
@@ -236,16 +321,7 @@ def init_db():
                     "excitement_computed_at TIMESTAMP"
                 )
             )
-            # Dedupe before the unique index: a pre-existing duplicate
-            # espn_id row would make CREATE UNIQUE INDEX fail at deploy.
-            # Keep MAX(id) per espn_id (most recent insert), drop the rest.
-            conn.execute(
-                text(
-                    "DELETE FROM games WHERE espn_id IS NOT NULL "
-                    "AND id NOT IN (SELECT MAX(id) FROM games "
-                    "WHERE espn_id IS NOT NULL GROUP BY espn_id)"
-                )
-            )
+            _dedupe_games_by_espn_id(conn)
             conn.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_espn_id "
