@@ -287,6 +287,119 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
     assert gf.espn_id is None
 
 
+def test_upsert_game_handles_duplicate_espn_id_race(tmp_path, monkeypatch):
+    """Concurrent daily-update runs could both miss an existing row and
+    both INSERT for the same espn_id. The unique index on espn_id makes
+    the second INSERT fail with IntegrityError; upsert_game must catch
+    that, rollback, re-query by espn_id, and take the update path so the
+    final state is a single correctly-updated row (not a duplicate + a
+    raised exception)."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import upsert_game
+        from src.db.schema import Game
+
+        # Simulate "another writer already inserted" by writing a row directly.
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="7:00 PM ET",
+                broadcaster="ION",
+                espn_id="raced",
+            )
+        )
+        session.commit()
+
+        # Now call upsert_game with the SAME espn_id but a different date —
+        # without the race-retry logic this would either insert a duplicate
+        # or fail loudly. The retry path matches by espn_id and takes the
+        # update branch, moving the row to the new date.
+        upsert_game(
+            session,
+            team_a_id=1,
+            team_b_id=2,
+            date="2026-05-21",
+            time="8:00 PM ET",
+            broadcaster="ION",
+            winner_id=1,
+            final_score_a=80,
+            final_score_b=70,
+            espn_id="raced",
+            is_complete=True,
+        )
+        rows = session.query(Game).filter(Game.espn_id == "raced").all()
+        assert len(rows) == 1
+        assert rows[0].date == "2026-05-21"
+        assert rows[0].winner_id == 1
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
+def test_unique_index_blocks_duplicate_espn_id_inserts(tmp_path, monkeypatch):
+    """A direct INSERT of two rows with the same espn_id must raise
+    IntegrityError — that's the DB guarantee the race-retry path relies on."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from sqlalchemy.exc import IntegrityError
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="",
+                espn_id="dup",
+            )
+        )
+        session.add(
+            Game(
+                team_a_id=3,
+                team_b_id=4,
+                date="2026-05-21",
+                time="",
+                broadcaster="",
+                espn_id="dup",
+            )
+        )
+        try:
+            session.commit()
+            assert False, "expected IntegrityError on duplicate espn_id"
+        except IntegrityError:
+            session.rollback()
+
+        # Multiple NULL espn_ids are allowed (distinct under SQL UNIQUE).
+        session.add(
+            Game(team_a_id=1, team_b_id=2, date="2026-06-01", time="", broadcaster="")
+        )
+        session.add(
+            Game(team_a_id=3, team_b_id=4, date="2026-06-02", time="", broadcaster="")
+        )
+        session.commit()
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_upsert_game_deletes_orphan_daily_ranking_on_reschedule(tmp_path, monkeypatch):
     """When upsert_game moves an existing row to a new (date, teams) key
     via espn_id matching, the old DailyRanking at the previous key must

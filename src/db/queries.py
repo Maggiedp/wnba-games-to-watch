@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.db.schema import DailyRanking, Game, PlayoffProbability, SeasonConfig, Team
@@ -67,6 +68,7 @@ def upsert_game(
     espn_id: str | None = None,
     excitement_index: float | None = None,
     is_complete: bool | None = None,
+    _retry: bool = False,
 ) -> Game:
     """Upsert a game (insert if not exists, update result if it has been played).
 
@@ -171,7 +173,30 @@ def upsert_game(
         excitement_index=excitement_index,
     )
     session.add(game)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        # Another writer inserted the same espn_id concurrently (overlapping
+        # daily-update runs). Roll back and re-enter — the second pass will
+        # match the row via espn_id and take the update path.
+        session.rollback()
+        if _retry:
+            raise
+        return upsert_game(
+            session,
+            team_a_id=team_a_id,
+            team_b_id=team_b_id,
+            date=date,
+            time=time,
+            broadcaster=broadcaster,
+            winner_id=winner_id,
+            final_score_a=final_score_a,
+            final_score_b=final_score_b,
+            espn_id=espn_id,
+            excitement_index=excitement_index,
+            is_complete=is_complete,
+            _retry=True,
+        )
     return game
 
 

@@ -59,7 +59,14 @@ class Game(Base):
     espn_id = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=func.now())
 
-    __table_args__ = (Index("idx_game_date", "date"),)
+    __table_args__ = (
+        Index("idx_game_date", "date"),
+        # NULLs are distinct in SQLite + Postgres UNIQUE semantics, so this
+        # acts as a partial-unique-on-non-null without dialect-specific args.
+        # Guards against concurrent inserts creating duplicate rows for the
+        # same ESPN event during overlapping daily-update runs.
+        Index("uq_game_espn_id", "espn_id", unique=True),
+    )
 
 
 class DailyRanking(Base):
@@ -137,6 +144,7 @@ def init_db():
                 "ALTER TABLE games ADD COLUMN excitement_index FLOAT",
                 "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
                 "ALTER TABLE games ADD COLUMN excitement_computed_at DATETIME",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_espn_id ON games (espn_id)",
             ]:
                 try:
                     conn.execute(text(stmt))
@@ -206,6 +214,12 @@ def init_db():
                 text(
                     "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
                     "excitement_computed_at TIMESTAMP"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_espn_id "
+                    "ON games (espn_id)"
                 )
             )
             conn.commit()
