@@ -57,6 +57,10 @@ class Game(Base):
     excitement_computed_at = Column(DateTime, nullable=True)
     broadcaster = Column(String(50), default="")
     espn_id = Column(String(20), nullable=True)
+    # ESPN season type: 1=preseason, 2=regular, 3=postseason. NULL on
+    # legacy rows ingested before this column existed; the completed
+    # archive treats NULL as "not preseason" for backward compatibility.
+    season_type = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     __table_args__ = (
@@ -238,6 +242,7 @@ def init_db():
                 "ALTER TABLE games ADD COLUMN excitement_index FLOAT",
                 "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
                 "ALTER TABLE games ADD COLUMN excitement_computed_at DATETIME",
+                "ALTER TABLE games ADD COLUMN season_type INTEGER",
             ]:
                 try:
                     conn.execute(text(stmt))
@@ -320,6 +325,9 @@ def init_db():
                     "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
                     "excitement_computed_at TIMESTAMP"
                 )
+            )
+            conn.execute(
+                text("ALTER TABLE games ADD COLUMN IF NOT EXISTS season_type INTEGER")
             )
             _dedupe_games_by_espn_id(conn)
             conn.execute(

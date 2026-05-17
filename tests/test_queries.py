@@ -865,10 +865,80 @@ def test_refresh_preserves_completion_on_unknown_status(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
-def test_refresh_clears_completion_when_status_un_finalizes(tmp_path, monkeypatch):
-    """If the refresh fetch reports status != FINAL for a previously-scored
-    game, the cached completion (winner, scores, excitement) must be cleared
-    so the archive doesn't keep showing the stale result."""
+def test_completed_archive_excludes_preseason_games(tmp_path, monkeypatch):
+    """Preseason games (season_type=1) must be filtered out of the
+    completed archive — they're exhibitions, not regular-season results.
+    Regular-season (2) and postseason (3) stay. NULL season_type stays
+    included for backward compatibility with rows from before this column."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import (
+            get_completed_games_missing_excitement,
+            get_completed_rankings,
+        )
+        from src.db.schema import Game
+
+        # Preseason (excluded), regular (included), postseason (included),
+        # legacy NULL (included).
+        for date, espn_id, st in [
+            ("2026-05-05", "pre", 1),
+            ("2026-05-20", "reg", 2),
+            ("2026-09-25", "post", 3),
+            ("2026-05-21", "legacy", None),
+        ]:
+            session.add(
+                Game(
+                    team_a_id=1,
+                    team_b_id=2,
+                    date=date,
+                    time="",
+                    broadcaster="ION",
+                    winner_id=1,
+                    final_score_a=80,
+                    final_score_b=70,
+                    espn_id=espn_id,
+                    season_type=st,
+                    excitement_index=4.0,
+                )
+            )
+        session.commit()
+
+        rankings = get_completed_rankings(session, season_year=2026)
+        dates = {r.date for r in rankings}
+        assert dates == {"2026-05-20", "2026-09-25", "2026-05-21"}
+        assert "2026-05-05" not in dates  # preseason excluded
+
+        # Same filter on the backfill-finder. Clear one excitement to make
+        # it eligible, then re-check.
+        session.query(Game).filter(Game.espn_id == "pre").update(
+            {"excitement_index": None}
+        )
+        session.query(Game).filter(Game.espn_id == "reg").update(
+            {"excitement_index": None}
+        )
+        session.commit()
+        missing = get_completed_games_missing_excitement(session, season_year=2026)
+        espn_ids = {g.espn_id for g in missing}
+        assert "pre" not in espn_ids
+        assert "reg" in espn_ids
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
+def test_refresh_does_not_clear_completion_on_non_final_status(tmp_path, monkeypatch):
+    """The refresh path must NOT clear stored completion when the live-WP
+    summary endpoint reports a non-final status. Un-finalization is
+    handled by the schedule ingestion path (fetch_and_store_games); the
+    summary endpoint isn't the source of truth, and a transient blip
+    here would otherwise erase real archive entries."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     from datetime import datetime, timedelta
 
@@ -918,11 +988,12 @@ def test_refresh_clears_completion_when_status_un_finalizes(tmp_path, monkeypatc
         daily_update.refresh_recent_excitement_scores(session, window_days=2)
         session.expire_all()
         g = session.query(Game).filter(Game.espn_id == "reverted").one()
-        assert g.winner_id is None
-        assert g.final_score_a is None and g.final_score_b is None
-        assert g.excitement_index is None
-        assert g.excitement_computed_at is None
-        assert g.excitement_last_attempt_at is None
+        # Refresh path is not authoritative for completion state — all
+        # stored fields stay intact.
+        assert g.winner_id == 1
+        assert g.final_score_a == 80 and g.final_score_b == 70
+        assert g.excitement_index == 5.0
+        assert g.excitement_computed_at is not None
     finally:
         session.close()
         schema._engine = None

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -68,6 +69,7 @@ def upsert_game(
     espn_id: str | None = None,
     excitement_index: float | None = None,
     is_complete: bool | None = None,
+    season_type: int | None = None,
     _retry: bool = False,
 ) -> Game:
     """Upsert a game (insert if not exists, update result if it has been played).
@@ -132,6 +134,8 @@ def upsert_game(
             game.time = time
         if espn_id:
             game.espn_id = espn_id
+        if season_type is not None:
+            game.season_type = season_type
         # If we matched by espn_id, the row's date/teams may differ
         # (reschedule, or ESPN correcting the matchup itself).
         old_key = (game.date, game.team_a_id, game.team_b_id)
@@ -171,6 +175,7 @@ def upsert_game(
         final_score_b=final_score_b,
         espn_id=espn_id,
         excitement_index=excitement_index,
+        season_type=season_type,
     )
     session.add(game)
     try:
@@ -195,6 +200,7 @@ def upsert_game(
             espn_id=espn_id,
             excitement_index=excitement_index,
             is_complete=is_complete,
+            season_type=season_type,
             _retry=True,
         )
     return game
@@ -323,6 +329,9 @@ def get_completed_games_missing_excitement(
         .filter(Game.winner_id.isnot(None))
         .filter(Game.excitement_index.is_(None))
         .filter(Game.espn_id.isnot(None))
+        # Exclude preseason (season_type=1); NULL stays included for
+        # backward compatibility with rows ingested before the column existed.
+        .filter(or_(Game.season_type.is_(None), Game.season_type != 1))
         # `IS NOT NULL` returns 0 for NULL and 1 for set; ASC puts NULL
         # (never-attempted) ahead of any timestamp, portably across SQLite
         # and Postgres. Then by attempt timestamp ASC (oldest first), then
@@ -364,6 +373,7 @@ def get_games_for_excitement_refresh(
         .filter(Game.excitement_index.isnot(None))
         .filter(Game.excitement_computed_at.isnot(None))
         .filter(Game.excitement_computed_at >= cutoff)
+        .filter(or_(Game.season_type.is_(None), Game.season_type != 1))
         .order_by(
             Game.excitement_last_attempt_at.isnot(None),
             Game.excitement_last_attempt_at.asc(),
@@ -462,6 +472,9 @@ def get_completed_rankings(
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
+        # Exclude preseason exhibitions from the user-facing archive;
+        # NULL stays included for legacy rows ingested before this column.
+        .filter(or_(Game.season_type.is_(None), Game.season_type != 1))
     )
     if broadcaster is not None:
         q = q.filter(Game.broadcaster == broadcaster)

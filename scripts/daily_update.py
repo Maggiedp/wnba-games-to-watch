@@ -171,6 +171,7 @@ def fetch_and_store_games(session) -> list[dict]:
             final_score_b=game.get("final_score_b"),
             espn_id=game.get("event_id"),
             is_complete=is_complete,
+            season_type=game.get("season_type"),
         )
         stored += 1
 
@@ -300,24 +301,12 @@ def refresh_recent_excitement_scores(
                 f"Refresh failed for game {game.id} (espn_id={game.espn_id}): {e}"
             )
             continue
-        if status in UN_FINALIZE_STATUSES:
-            # Explicit un-finalization (postponed, canceled, rescheduled,
-            # in-progress, or back to scheduled). Clear cached completion
-            # so the archive doesn't keep showing the stale result.
-            logger.info(
-                f"Game {game.id} (espn_id={game.espn_id}) un-finalized "
-                f"(status={status!r}); clearing stored completion."
-            )
-            game.winner_id = None
-            game.final_score_a = None
-            game.final_score_b = None
-            game.excitement_index = None
-            game.excitement_computed_at = None
-            game.excitement_last_attempt_at = None
-            continue
         if status != GameStatus.FINAL:
-            # STATUS_UNKNOWN or any other unrecognized status — treat as
-            # a transient ESPN glitch, don't downgrade a stored final.
+            # The refresh path only updates excitement — it must not
+            # un-finalize a stored game from the live-WP summary endpoint.
+            # The schedule path (fetch_and_store_games) is the source of
+            # truth for completion state; a transient non-final summary
+            # response here could otherwise erase real archive entries.
             continue
         if score is None:
             continue
