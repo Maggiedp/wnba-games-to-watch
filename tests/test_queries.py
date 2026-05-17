@@ -865,6 +865,54 @@ def test_refresh_preserves_completion_on_unknown_status(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
+def test_get_completed_games_excludes_preseason(tmp_path, monkeypatch):
+    """compute_standings consumes get_completed_games; preseason results
+    leaking in would corrupt wins/losses, head-to-head, Monte Carlo
+    playoff odds, and the importance score for every upcoming game.
+    Only regular-season + postseason + NULL (legacy) rows belong here."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import get_completed_games
+        from src.db.schema import Game
+
+        for date, espn_id, st in [
+            ("2026-05-05", "pre", 1),
+            ("2026-05-20", "reg", 2),
+            ("2026-09-25", "post", 3),
+            ("2026-05-21", "legacy", None),
+        ]:
+            session.add(
+                Game(
+                    team_a_id=1,
+                    team_b_id=2,
+                    date=date,
+                    time="",
+                    broadcaster="ION",
+                    winner_id=1,
+                    final_score_a=80,
+                    final_score_b=70,
+                    espn_id=espn_id,
+                    season_type=st,
+                )
+            )
+        session.commit()
+
+        games = get_completed_games(session, season_year=2026)
+        espn_ids = {g.espn_id for g in games}
+        assert espn_ids == {"reg", "post", "legacy"}
+        assert "pre" not in espn_ids
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_completed_archive_excludes_preseason_games(tmp_path, monkeypatch):
     """Preseason games (season_type=1) must be filtered out of the
     completed archive — they're exhibitions, not regular-season results.

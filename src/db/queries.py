@@ -297,11 +297,19 @@ def get_upcoming_games(session: Session, start_date: str) -> list[Game]:
 
 
 def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]:
-    """Get all completed games for a season."""
+    """Get all completed regular-season + postseason games for a season.
+
+    Preseason (`season_type=1`) is excluded — these are exhibitions and
+    must not feed standings, Monte Carlo, importance scoring, or any
+    other competitive-season computation. NULL `season_type` stays
+    included for backward compatibility with rows ingested before that
+    column existed.
+    """
     return (
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
+        .filter(or_(Game.season_type.is_(None), Game.season_type != 1))
         .order_by(Game.date, Game.time)
         .all()
     )
