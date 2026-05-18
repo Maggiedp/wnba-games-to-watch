@@ -1,11 +1,11 @@
 """API routes and response models for WNBA Games to Watch."""
 
 import logging
-from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from src.data.espn_api import today_et
 from src.db.queries import (
     get_game_fields,
     get_playoff_probabilities,
@@ -70,7 +70,7 @@ def format_games_response(
     fields = get_game_fields(
         session, [(r.date, r.team_a_id, r.team_b_id) for r in rankings]
     )
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = today_et()
     prob_by_team_id = get_playoff_probabilities(session, today)
 
     results = []
