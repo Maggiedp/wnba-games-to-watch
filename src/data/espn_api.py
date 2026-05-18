@@ -254,13 +254,16 @@ def _parse_broadcaster(comp: dict) -> str:
     return Broadcasters.LEAGUE_PASS
 
 
-def fetch_live_win_probability(espn_id: str) -> dict:
+def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
     """Fetch win probability data for a game from ESPN's summary endpoint.
 
     Returns dict with espn_id, status, home_team, away_team, and plays list.
     plays entries: {seq, period, clock, home_pct}. Empty list if no WP data.
+
+    `timeout` lets backfill callers use a shorter window than the
+    live-WP-panel default; one slow game shouldn't stall the daily job.
     """
-    data = _get(f"{SITE_API}/summary", event=espn_id)
+    data = _get(f"{SITE_API}/summary", timeout=timeout, event=espn_id)
 
     competitions = data.get("header", {}).get("competitions", [{}])
     comp = competitions[0] if competitions else {}

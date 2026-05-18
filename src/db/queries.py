@@ -1,8 +1,20 @@
 """Database query helpers for WNBA Games to Watch."""
 
+from dataclasses import dataclass
+from datetime import datetime
+
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.db.schema import DailyRanking, Game, PlayoffProbability, SeasonConfig, Team
+
+# Reused predicate: include regular-season (2) + postseason (3) + legacy
+# NULL season_type rows; exclude only known preseason (1). Used by the
+# user-facing archive queries. `get_completed_games` (which feeds
+# standings) sometimes uses a stricter IN (2, 3) filter — see its
+# docstring for the conditional behavior.
+_NOT_PRESEASON = or_(Game.season_type.is_(None), Game.season_type != 1)
 
 
 def upsert_team(
@@ -62,26 +74,123 @@ def upsert_game(
     final_score_a: int | None = None,
     final_score_b: int | None = None,
     espn_id: str | None = None,
+    excitement_index: float | None = None,
+    is_complete: bool | None = None,
+    season_type: int | None = None,
+    _retry: bool = False,
 ) -> Game:
-    """Upsert a game (insert if not exists, update result if it has been played)."""
-    game = (
-        session.query(Game)
-        .filter(
-            Game.date == date, Game.team_a_id == team_a_id, Game.team_b_id == team_b_id
+    """Upsert a game (insert if not exists, update result if it has been played).
+
+    `is_complete` only acts on False — pass it to clear a previously-
+    stored completion when ESPN un-finalizes a game (postponed,
+    canceled, rescheduled). True and None are equivalent: finalization
+    is driven by `winner_id is not None`, not by the flag.
+    """
+    # Identity preference: espn_id (stable across reschedules) → fall back
+    # to (date, team_a_id, team_b_id) for legacy rows without an espn_id.
+    # Without this, an ESPN reschedule (same event, new date) would leave
+    # the old completed row stale while inserting a fresh row at the new date.
+    game = None
+    if espn_id:
+        game = session.query(Game).filter(Game.espn_id == espn_id).first()
+    if game is None:
+        game = (
+            session.query(Game)
+            .filter(
+                Game.date == date,
+                Game.team_a_id == team_a_id,
+                Game.team_b_id == team_b_id,
+            )
+            .first()
         )
-        .first()
-    )
     if game:
+        # If any source-of-truth field for excitement changes (espn_id,
+        # winner_id, final scores), invalidate the cached excitement so
+        # the backfill recomputes from the corrected PBP. Without this,
+        # ESPN correcting a finalized game would leave the archive sorted
+        # on stale data forever — beyond the bounded refresh window the
+        # value would otherwise be locked.
+        def _changed(old, new) -> bool:
+            return new is not None and new != "" and new != old
+
+        invalidate_excitement = game.excitement_index is not None and (
+            _changed(game.espn_id, espn_id)
+            or _changed(game.winner_id, winner_id)
+            or _changed(game.final_score_a, final_score_a)
+            or _changed(game.final_score_b, final_score_b)
+            or _changed(game.team_a_id, team_a_id)
+            or _changed(game.team_b_id, team_b_id)
+        )
+        # ESPN says this game is no longer final (postponed, protested, data
+        # correction). Clear stored completion + cached excitement so the
+        # archive doesn't keep showing the stale result.
+        un_finalized = is_complete is False and game.winner_id is not None
         if winner_id is not None:
             game.winner_id = winner_id
             game.final_score_a = final_score_a
             game.final_score_b = final_score_b
+        elif un_finalized:
+            game.winner_id = None
+            game.final_score_a = None
+            game.final_score_b = None
         if broadcaster:
             game.broadcaster = broadcaster
         if time:
             game.time = time
         if espn_id:
             game.espn_id = espn_id
+        if season_type is not None:
+            game.season_type = season_type
+        # If we matched by espn_id, the row's date/teams may differ
+        # (reschedule, or ESPN correcting the matchup itself).
+        old_key = (game.date, game.team_a_id, game.team_b_id)
+        if date and game.date != date:
+            game.date = date
+        if game.team_a_id != team_a_id:
+            game.team_a_id = team_a_id
+        if game.team_b_id != team_b_id:
+            game.team_b_id = team_b_id
+        new_key = (game.date, game.team_a_id, game.team_b_id)
+        if new_key != old_key:
+            # The DailyRanking at the old key is for THIS game (this is
+            # the same espn_id, just moved). Re-key it to the new
+            # (date, team_a_id, team_b_id) so the pre-game quality /
+            # importance / overall scores follow the game. Deleting it
+            # would leave a completed-archive entry permanently degraded
+            # with None scores after the move. Fall back to delete only
+            # when something already exists at the new key (the new-key
+            # ranking takes precedence as more current).
+            old_ranking = (
+                session.query(DailyRanking)
+                .filter(
+                    DailyRanking.date == old_key[0],
+                    DailyRanking.team_a_id == old_key[1],
+                    DailyRanking.team_b_id == old_key[2],
+                )
+                .first()
+            )
+            if old_ranking is not None:
+                conflict = (
+                    session.query(DailyRanking)
+                    .filter(
+                        DailyRanking.date == new_key[0],
+                        DailyRanking.team_a_id == new_key[1],
+                        DailyRanking.team_b_id == new_key[2],
+                    )
+                    .first()
+                )
+                if conflict is None:
+                    old_ranking.date = new_key[0]
+                    old_ranking.team_a_id = new_key[1]
+                    old_ranking.team_b_id = new_key[2]
+                else:
+                    session.delete(old_ranking)
+        if excitement_index is not None:
+            game.excitement_index = excitement_index
+        elif invalidate_excitement or un_finalized:
+            game.excitement_index = None
+            game.excitement_computed_at = None
+            game.excitement_last_attempt_at = None
         session.commit()
         return game
 
@@ -95,9 +204,35 @@ def upsert_game(
         final_score_a=final_score_a,
         final_score_b=final_score_b,
         espn_id=espn_id,
+        excitement_index=excitement_index,
+        season_type=season_type,
     )
     session.add(game)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        # Another writer inserted the same espn_id concurrently (overlapping
+        # daily-update runs). Roll back and re-enter — the second pass will
+        # match the row via espn_id and take the update path.
+        session.rollback()
+        if _retry:
+            raise
+        return upsert_game(
+            session,
+            team_a_id=team_a_id,
+            team_b_id=team_b_id,
+            date=date,
+            time=time,
+            broadcaster=broadcaster,
+            winner_id=winner_id,
+            final_score_a=final_score_a,
+            final_score_b=final_score_b,
+            espn_id=espn_id,
+            excitement_index=excitement_index,
+            is_complete=is_complete,
+            season_type=season_type,
+            _retry=True,
+        )
     return game
 
 
@@ -133,10 +268,25 @@ def get_games_by_date(session: Session, date: str) -> list[Game]:
     return session.query(Game).filter(Game.date == date).order_by(Game.time).all()
 
 
+@dataclass(frozen=True)
+class GameFields:
+    """Per-game metadata joined into ranking responses. Broadcaster is
+    sourced here (not from DailyRanking) because Game.broadcaster is
+    refreshed by every daily run and reflects late corrections, while
+    DailyRanking.broadcaster freezes at scoring time."""
+
+    time: str
+    espn_id: str | None
+    final_score_a: int | None
+    final_score_b: int | None
+    excitement_index: float | None
+    broadcaster: str
+
+
 def get_game_fields(
     session: Session, keys: list[tuple[str, int, int]]
-) -> dict[tuple[str, int, int], tuple[str, str | None]]:
-    """Return {(date, team_a_id, team_b_id): (time, espn_id)} for the given keys."""
+) -> dict[tuple[str, int, int], GameFields]:
+    """Return {(date, team_a_id, team_b_id): GameFields} for the given keys."""
     if not keys:
         return {}
     dates = {k[0] for k in keys}
@@ -152,7 +302,14 @@ def get_game_fields(
     )
     wanted = set(keys)
     return {
-        (g.date, g.team_a_id, g.team_b_id): (g.time or "", g.espn_id)
+        (g.date, g.team_a_id, g.team_b_id): GameFields(
+            time=g.time or "",
+            espn_id=g.espn_id,
+            final_score_a=g.final_score_a,
+            final_score_b=g.final_score_b,
+            excitement_index=g.excitement_index,
+            broadcaster=g.broadcaster or "",
+        )
         for g in games
         if (g.date, g.team_a_id, g.team_b_id) in wanted
     }
@@ -170,14 +327,113 @@ def get_upcoming_games(session: Session, start_date: str) -> list[Game]:
 
 
 def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]:
-    """Get all completed games for a season."""
-    return (
+    """Completed regular-season + postseason games for a season.
+
+    Filter is conditional on backfill state:
+
+    * If any 2026 row still has `season_type IS NULL`, we're mid-backfill
+      (or backfill failed). Use the looser `IS NULL OR != 1` filter so
+      legacy regular-season games stay in standings — losing them would
+      corrupt wins/losses worse than a stray legacy preseason row would.
+    * Once all rows have `season_type` populated, switch to the strict
+      `IN (2, 3)` filter — fail-closed so a partial ESPN backfill that
+      leaves a row NULL can't sneak a preseason game in.
+
+    Archive queries (`get_completed_rankings` etc.) always use the
+    looser filter — they're user-facing display, so prefer inclusivity.
+    """
+    null_count = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.season_type.is_(None))
+        .count()
+    )
+    base = (
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
-        .order_by(Game.date, Game.time)
-        .all()
     )
+    if null_count == 0:
+        base = base.filter(Game.season_type.in_([2, 3]))
+    else:
+        base = base.filter(_NOT_PRESEASON)
+    return base.order_by(Game.date, Game.time).all()
+
+
+def get_completed_games_missing_excitement(
+    session: Session, season_year: int = 2026, limit: int | None = None
+) -> list[Game]:
+    """Completed games for `season_year` that still need excitement_index computed.
+
+    A game is "completed" when winner_id is set. An espn_id is required because
+    the computation needs ESPN play-by-play; games without one can't be backfilled.
+
+    Order: least-recently-attempted first (NULL `excitement_last_attempt_at`
+    counts as "never attempted" and comes first), then newer dates within
+    each attempt bucket. Without this, a 50-cap + newest-first ordering would
+    let a cluster of permanently-failing newest games starve older NULL rows
+    indefinitely — the same head would be retried every run.
+
+    Pass `limit` to bound retry work per run.
+    """
+    q = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(Game.excitement_index.is_(None))
+        .filter(Game.espn_id.isnot(None))
+        .filter(_NOT_PRESEASON)
+        # `IS NOT NULL` returns 0 for NULL and 1 for set; ASC puts NULL
+        # (never-attempted) ahead of any timestamp, portably across SQLite
+        # and Postgres. Then by attempt timestamp ASC (oldest first), then
+        # by date DESC so the most user-visible rows are surfaced first
+        # within each bucket.
+        .order_by(
+            Game.excitement_last_attempt_at.isnot(None),
+            Game.excitement_last_attempt_at.asc(),
+            Game.date.desc(),
+        )
+    )
+    if limit is not None:
+        q = q.limit(limit)
+    return q.all()
+
+
+def get_games_for_excitement_refresh(
+    session: Session,
+    cutoff: datetime,
+    season_year: int = 2026,
+    limit: int | None = None,
+) -> list[Game]:
+    """Games whose excitement_index was computed recently enough that ESPN
+    may still revise the underlying PBP — bounded freshness window for
+    handling late ESPN corrections to a STATUS_FINAL game.
+
+    `cutoff` is a datetime; rows with `excitement_computed_at >= cutoff`
+    are eligible. Order: least-recently-touched first (NULL
+    `excitement_last_attempt_at` first, then ASC), so when more eligible
+    rows share the same `excitement_computed_at` than the per-run cap
+    allows — e.g. right after the one-shot backfill stamps many rows
+    with the same `now` — the queue rotates through the full set
+    instead of repeatedly hitting the same head until rows age out.
+    """
+    q = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(Game.excitement_index.isnot(None))
+        .filter(Game.excitement_computed_at.isnot(None))
+        .filter(Game.excitement_computed_at >= cutoff)
+        .filter(_NOT_PRESEASON)
+        .order_by(
+            Game.excitement_last_attempt_at.isnot(None),
+            Game.excitement_last_attempt_at.asc(),
+            Game.excitement_computed_at.asc(),
+        )
+    )
+    if limit is not None:
+        q = q.limit(limit)
+    return q.all()
 
 
 def update_game_result(
@@ -240,9 +496,91 @@ def get_upcoming_rankings(session: Session, start_date: str) -> list[DailyRankin
     )
 
 
-def get_rankings_by_broadcaster(
-    session: Session, start_date: str, broadcaster: str
+def get_completed_rankings(
+    session: Session,
+    season_year: int = 2026,
+    broadcaster: str | None = None,
 ) -> list[DailyRanking]:
+    """DailyRanking rows for completed games in `season_year`, sorted by
+    excitement_index descending (NULLs last, ties broken by date descending).
+
+    Sources from `Game` (not `DailyRanking`) so a completed game that
+    somehow lacks a ranking row — e.g. a missed daily-update day —
+    still appears in the archive. Missing rankings are filled with a
+    transient `DailyRanking` carrying None for the scored fields.
+
+    Games with `winner_id IS NULL` are excluded. Games with NULL
+    excitement_index are *included* and sorted last, so a persistent
+    ESPN PBP outage doesn't silently delete real completed games from
+    the archive. NULL remains the retry signal in
+    `get_completed_games_missing_excitement`.
+
+    `broadcaster` (optional) filters at the `Game.broadcaster` level —
+    the source of truth, refreshed every daily run — so late ESPN
+    broadcaster corrections take effect immediately.
+    """
+    q = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(_NOT_PRESEASON)
+    )
+    if broadcaster is not None:
+        q = q.filter(Game.broadcaster == broadcaster)
+    # `excitement_index IS NULL` evaluates to 0/1 (SQLite) or false/true
+    # (Postgres); ASC orders non-null first, NULL last, portably.
+    games = q.order_by(
+        Game.excitement_index.is_(None),
+        Game.excitement_index.desc(),
+        Game.date.desc(),
+    ).all()
+    if not games:
+        return []
+    # Only look up DailyRanking for the matched games (small set when a
+    # broadcaster filter narrows the query), not the whole season.
+    game_dates = {g.date for g in games}
+    game_keys = {(g.date, g.team_a_id, g.team_b_id) for g in games}
+    rankings_by_key = {
+        (r.date, r.team_a_id, r.team_b_id): r
+        for r in session.query(DailyRanking)
+        .filter(DailyRanking.date.in_(game_dates))
+        .all()
+        if (r.date, r.team_a_id, r.team_b_id) in game_keys
+    }
+    result: list[DailyRanking] = []
+    for g in games:
+        ranking = rankings_by_key.get((g.date, g.team_a_id, g.team_b_id))
+        if ranking is None:
+            ranking = DailyRanking(
+                date=g.date,
+                team_a_id=g.team_a_id,
+                team_b_id=g.team_b_id,
+                quality_score=None,
+                importance_score=None,
+                overall_score=None,
+                broadcaster=g.broadcaster or "",
+                win_prob_a=None,
+            )
+        result.append(ranking)
+    return result
+
+
+def get_rankings_by_broadcaster(
+    session: Session,
+    start_date: str,
+    broadcaster: str,
+    mode: str = "upcoming",
+) -> list[DailyRanking]:
+    """Rankings filtered by broadcaster.
+
+    mode="upcoming" (default): date >= start_date, sorted by date asc.
+    mode="completed": 2026 completed games sorted by excitement desc.
+                      `start_date` is ignored.
+    """
+    if mode == "completed":
+        return get_completed_rankings(
+            session, season_year=2026, broadcaster=broadcaster
+        )
     return (
         session.query(DailyRanking)
         .filter(DailyRanking.date >= start_date)

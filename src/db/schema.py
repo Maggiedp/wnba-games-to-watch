@@ -44,11 +44,33 @@ class Game(Base):
     winner_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
     final_score_a = Column(Integer, nullable=True)
     final_score_b = Column(Integer, nullable=True)
+    excitement_index = Column(Float, nullable=True)
+    # Last time the backfill loop tried to compute excitement for this game.
+    # NULL = never attempted. Ordering retries by this timestamp prevents
+    # a permanently-failing head from starving older NULL rows under the cap.
+    excitement_last_attempt_at = Column(DateTime, nullable=True)
+    # When the currently-stored excitement_index was actually computed (only
+    # set on a successful STATUS_FINAL persist). Drives a short freshness
+    # window in which the daily job re-fetches and overwrites, in case ESPN
+    # refined the PBP after our first final read. NULL once locked beyond
+    # the window, or if no score has been stored.
+    excitement_computed_at = Column(DateTime, nullable=True)
     broadcaster = Column(String(50), default="")
     espn_id = Column(String(20), nullable=True)
+    # ESPN season type: 1=preseason, 2=regular, 3=postseason. NULL on
+    # legacy rows ingested before this column existed; the completed
+    # archive treats NULL as "not preseason" for backward compatibility.
+    season_type = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
-    __table_args__ = (Index("idx_game_date", "date"),)
+    __table_args__ = (
+        Index("idx_game_date", "date"),
+        # NULLs are distinct in SQLite + Postgres UNIQUE semantics, so this
+        # acts as a partial-unique-on-non-null without dialect-specific args.
+        # Guards against concurrent inserts creating duplicate rows for the
+        # same ESPN event during overlapping daily-update runs.
+        Index("uq_game_espn_id", "espn_id", unique=True),
+    )
 
 
 class DailyRanking(Base):
@@ -107,6 +129,124 @@ def get_database_url() -> str:
     return db_url
 
 
+def _dedupe_games_by_espn_id(conn) -> int:
+    """Merge duplicate non-null espn_id rows into a single survivor.
+
+    Realistic scenario: a pre-this-branch reschedule where ESPN moved
+    an event. The old upsert_game matched by (date, team_a, team_b), so
+    it inserted a fresh row at the new date — same espn_id — while the
+    old row sat at the original date.
+
+    The NEWER row (max id) is authoritative for *schedule identity*
+    (date, teams, season_type) — it represents the corrected event.
+    Completion fields (winner_id, scores, excitement_*) are only kept
+    from the survivor itself; we don't merge stale completion in from
+    older rows, because if the most recent upsert is non-final that
+    IS the truth (the game un-finalized on reschedule). If the survivor
+    IS final and missing nullable completion fields, we backfill from
+    older rows so we don't lose excitement_index that was computed
+    before the reschedule.
+
+    DailyRanking rows keyed by a doomed row's (date, team_a, team_b)
+    are re-keyed to the survivor's key when no ranking already exists
+    there, so the pre-game quality / importance / overall scores
+    follow the game. They're deleted only when the survivor key
+    already has a ranking (the more-current row takes precedence).
+    """
+    dup_ids = conn.execute(
+        text(
+            "SELECT espn_id FROM games WHERE espn_id IS NOT NULL "
+            "GROUP BY espn_id HAVING COUNT(*) > 1"
+        )
+    ).fetchall()
+    if not dup_ids:
+        return 0
+    deleted = 0
+    nullable_completion_fields = (
+        "excitement_index",
+        "excitement_computed_at",
+        "excitement_last_attempt_at",
+    )
+    for (espn_id,) in dup_ids:
+        rows = conn.execute(
+            text(
+                "SELECT id, team_a_id, team_b_id, date, time, broadcaster, "
+                "winner_id, final_score_a, final_score_b, excitement_index, "
+                "excitement_computed_at, excitement_last_attempt_at "
+                "FROM games WHERE espn_id = :espn_id ORDER BY id DESC"
+            ),
+            {"espn_id": espn_id},
+        ).fetchall()
+        survivor = rows[0]  # authoritative schedule identity
+        survivor_is_final = survivor.winner_id is not None
+        # Only merge completion-adjacent fields from older rows if the
+        # survivor still represents a final game; otherwise the schedule
+        # has un-finalized and stale completion must be discarded.
+        if survivor_is_final:
+            merged = {f: getattr(survivor, f) for f in nullable_completion_fields}
+            for r in rows[1:]:
+                for f in nullable_completion_fields:
+                    if merged[f] is None and getattr(r, f) is not None:
+                        merged[f] = getattr(r, f)
+            if any(
+                merged[f] != getattr(survivor, f) for f in nullable_completion_fields
+            ):
+                conn.execute(
+                    text(
+                        "UPDATE games SET "
+                        "excitement_index = :excitement_index, "
+                        "excitement_computed_at = :excitement_computed_at, "
+                        "excitement_last_attempt_at = :excitement_last_attempt_at "
+                        "WHERE id = :id"
+                    ),
+                    {**merged, "id": survivor.id},
+                )
+
+        # Re-key (or delete) doomed rows' DailyRankings, then drop the row.
+        survivor_key = (survivor.date, survivor.team_a_id, survivor.team_b_id)
+        for r in rows[1:]:
+            r_key = (r.date, r.team_a_id, r.team_b_id)
+            if r_key != survivor_key:
+                target_exists = conn.execute(
+                    text(
+                        "SELECT 1 FROM daily_rankings WHERE date = :d "
+                        "AND team_a_id = :a AND team_b_id = :b"
+                    ),
+                    {"d": survivor_key[0], "a": survivor_key[1], "b": survivor_key[2]},
+                ).fetchone()
+                if target_exists:
+                    conn.execute(
+                        text(
+                            "DELETE FROM daily_rankings WHERE date = :d "
+                            "AND team_a_id = :a AND team_b_id = :b"
+                        ),
+                        {"d": r_key[0], "a": r_key[1], "b": r_key[2]},
+                    )
+                else:
+                    conn.execute(
+                        text(
+                            "UPDATE daily_rankings SET date = :nd, "
+                            "team_a_id = :na, team_b_id = :nb "
+                            "WHERE date = :od AND team_a_id = :oa "
+                            "AND team_b_id = :ob"
+                        ),
+                        {
+                            "nd": survivor_key[0],
+                            "na": survivor_key[1],
+                            "nb": survivor_key[2],
+                            "od": r_key[0],
+                            "oa": r_key[1],
+                            "ob": r_key[2],
+                        },
+                    )
+            conn.execute(
+                text("DELETE FROM games WHERE id = :id"),
+                {"id": r.id},
+            )
+            deleted += 1
+    return deleted
+
+
 def get_engine():
     global _engine
     if _engine is None:
@@ -123,12 +263,28 @@ def init_db():
             for stmt in [
                 "ALTER TABLE games ADD COLUMN espn_id VARCHAR(20)",
                 "ALTER TABLE daily_rankings ADD COLUMN win_prob_a FLOAT",
+                "ALTER TABLE games ADD COLUMN excitement_index FLOAT",
+                "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
+                "ALTER TABLE games ADD COLUMN excitement_computed_at DATETIME",
+                "ALTER TABLE games ADD COLUMN season_type INTEGER",
             ]:
                 try:
                     conn.execute(text(stmt))
                     conn.commit()
                 except Exception:
                     pass  # column already exists
+            # Dedupe pre-existing duplicate espn_id rows before creating
+            # the unique index. See _dedupe_games_by_espn_id for the
+            # survivor-selection / merge logic — a blind MAX(id) would
+            # silently drop completed rows that happened to be older.
+            _dedupe_games_by_espn_id(conn)
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_espn_id "
+                    "ON games (espn_id)"
+                )
+            )
+            conn.commit()
 
     # PostgreSQL: supports ALTER COLUMN TYPE, DO blocks, and IF NOT EXISTS.
     if engine.dialect.name == "postgresql":
@@ -176,6 +332,33 @@ def init_db():
             )
             conn.execute(
                 text("ALTER TABLE games ADD COLUMN IF NOT EXISTS espn_id VARCHAR(20)")
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE games ADD COLUMN IF NOT EXISTS excitement_index FLOAT"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
+                    "excitement_last_attempt_at TIMESTAMP"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
+                    "excitement_computed_at TIMESTAMP"
+                )
+            )
+            conn.execute(
+                text("ALTER TABLE games ADD COLUMN IF NOT EXISTS season_type INTEGER")
+            )
+            _dedupe_games_by_espn_id(conn)
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_espn_id "
+                    "ON games (espn_id)"
+                )
             )
             conn.commit()
     return engine

@@ -292,3 +292,352 @@ def test_format_games_response_game_status_none_when_no_dict(session, team_ids):
     )
     result = format_games_response([ranking], session)
     assert result[0].game_status is None
+
+
+def test_completed_endpoint_returns_excitement_sorted_games(tmp_path, monkeypatch):
+    """GET /api/games/completed returns 2026 completed games sorted by excitement desc."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    from src.db.queries import upsert_daily_ranking, upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    team_a_id = session.query(schema.Team).filter_by(name="Aces").one().id
+    team_b_id = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    for date, excitement in [
+        ("2026-05-20", 3.0),
+        ("2026-05-21", 7.0),
+        ("2026-05-22", 5.0),
+    ]:
+        session.add(
+            Game(
+                team_a_id=team_a_id,
+                team_b_id=team_b_id,
+                date=date,
+                time="",
+                broadcaster="ION",
+                winner_id=team_a_id,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id=f"e{date}",
+                excitement_index=excitement,
+            )
+        )
+        upsert_daily_ranking(
+            session,
+            date=date,
+            team_a_id=team_a_id,
+            team_b_id=team_b_id,
+            quality_score=50.0,
+            importance_score=None,
+            overall_score=50.0,
+            broadcaster="ION",
+        )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/completed")
+    assert resp.status_code == 200
+    rows = resp.json()
+    dates_in_order = [r["date"] for r in rows]
+    assert dates_in_order == ["2026-05-21", "2026-05-22", "2026-05-20"]
+    assert rows[0]["excitement_index"] == 7.0
+    assert rows[0]["final_score_a"] == 80
+    assert rows[0]["final_score_b"] == 70
+    schema._engine = None
+    schema._session_factory = None
+
+
+def test_completed_endpoint_includes_null_excitement_sorted_last(tmp_path, monkeypatch):
+    """A completed game with NULL excitement_index (ESPN PBP missing or
+    transiently unavailable) must still appear in the archive, sorted
+    after games that have a score. Otherwise an ESPN outage silently
+    deletes real completed games from the user-visible list."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    from src.db.queries import upsert_daily_ranking, upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(schema.Team).filter_by(name="Aces").one().id
+    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    # Two scored games + one NULL-excitement.
+    for date, exc in [("2026-05-20", 4.0), ("2026-05-21", 6.0), ("2026-05-22", None)]:
+        game_kwargs = dict(
+            team_a_id=a,
+            team_b_id=b,
+            date=date,
+            time="",
+            broadcaster="ION",
+            winner_id=a,
+            final_score_a=80,
+            final_score_b=70,
+            espn_id=f"e{date}",
+        )
+        if exc is not None:
+            game_kwargs["excitement_index"] = exc
+        session.add(Game(**game_kwargs))
+        upsert_daily_ranking(
+            session,
+            date=date,
+            team_a_id=a,
+            team_b_id=b,
+            quality_score=50.0,
+            importance_score=None,
+            overall_score=50.0,
+            broadcaster="ION",
+        )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    rows = client.get("/api/games/completed").json()
+    dates_in_order = [r["date"] for r in rows]
+    assert dates_in_order == ["2026-05-21", "2026-05-20", "2026-05-22"]
+    null_row = next(r for r in rows if r["date"] == "2026-05-22")
+    assert null_row["excitement_index"] is None
+    assert null_row["final_score_a"] == 80
+    schema._engine = None
+    schema._session_factory = None
+
+
+def test_completed_endpoint_uses_game_broadcaster_over_stale_ranking(
+    tmp_path, monkeypatch
+):
+    """Late broadcaster corrections must reach the archive. `Game.broadcaster`
+    is refreshed by every daily run; `DailyRanking.broadcaster` froze at
+    pre-game scoring time. The archive must serve the Game value so the
+    list and the filter agree with reality after a network change."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    from src.db.queries import upsert_daily_ranking, upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(schema.Team).filter_by(name="Aces").one().id
+    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    # Game (source of truth) shows the corrected broadcaster; DailyRanking
+    # has the stale pre-game value.
+    session.add(
+        Game(
+            team_a_id=a,
+            team_b_id=b,
+            date="2026-05-20",
+            time="",
+            broadcaster="NBA TV",
+            winner_id=a,
+            final_score_a=80,
+            final_score_b=70,
+            espn_id="corr",
+            excitement_index=5.0,
+        )
+    )
+    upsert_daily_ranking(
+        session,
+        date="2026-05-20",
+        team_a_id=a,
+        team_b_id=b,
+        quality_score=50.0,
+        importance_score=None,
+        overall_score=50.0,
+        broadcaster="ION",
+    )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/completed")
+    rows = resp.json()
+    assert len(rows) == 1 and rows[0]["broadcaster"] == "NBA TV"
+    # Filter by the corrected broadcaster: game appears.
+    resp_correct = client.get("/api/games/filter?mode=completed&broadcaster=NBA%20TV")
+    assert [r["date"] for r in resp_correct.json()] == ["2026-05-20"]
+    # Filter by the stale value: game does NOT appear.
+    resp_stale = client.get("/api/games/filter?mode=completed&broadcaster=ION")
+    assert resp_stale.json() == []
+    # Stored DailyRanking row is unchanged (we expunged, not persisted).
+    fresh_session = schema.get_session()
+    try:
+        from src.db.schema import DailyRanking
+
+        stored = fresh_session.query(DailyRanking).one()
+        assert stored.broadcaster == "ION"
+    finally:
+        fresh_session.close()
+    schema._engine = None
+    schema._session_factory = None
+
+
+def test_completed_endpoint_includes_orphan_games_without_ranking(
+    tmp_path, monkeypatch
+):
+    """A completed game with excitement_index but no DailyRanking row must
+    still appear in /api/games/completed (with None scored fields), so the
+    archive doesn't silently hide games on a missed daily-update day."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    from src.db.queries import upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(schema.Team).filter_by(name="Aces").one().id
+    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    # Orphan: completed + has excitement, no DailyRanking row.
+    session.add(
+        Game(
+            team_a_id=a,
+            team_b_id=b,
+            date="2026-05-20",
+            time="",
+            broadcaster="ESPN",
+            winner_id=a,
+            final_score_a=85,
+            final_score_b=82,
+            espn_id="orphan",
+            excitement_index=6.4,
+        )
+    )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/completed")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["date"] == "2026-05-20"
+    assert row["excitement_index"] == 6.4
+    assert row["final_score_a"] == 85 and row["final_score_b"] == 82
+    # Pre-game ranking fields are None because no DailyRanking exists.
+    assert row["quality_score"] is None
+    assert row["overall_score"] is None
+    schema._engine = None
+    schema._session_factory = None
+
+
+def test_filter_endpoint_mode_completed(tmp_path, monkeypatch):
+    """/api/games/filter?mode=completed&broadcaster=ION restricts to completed ION games."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    from src.db.queries import upsert_daily_ranking, upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(schema.Team).filter_by(name="Aces").one().id
+    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    # Completed ION game — past date, would be excluded by date >= today filter.
+    session.add(
+        Game(
+            team_a_id=a,
+            team_b_id=b,
+            date="2026-05-10",
+            time="",
+            broadcaster="ION",
+            winner_id=a,
+            final_score_a=80,
+            final_score_b=70,
+            espn_id="x1",
+            excitement_index=5.0,
+        )
+    )
+    upsert_daily_ranking(
+        session,
+        date="2026-05-10",
+        team_a_id=a,
+        team_b_id=b,
+        quality_score=50.0,
+        importance_score=None,
+        overall_score=50.0,
+        broadcaster="ION",
+    )
+    # Completed but wrong broadcaster — also past.
+    session.add(
+        Game(
+            team_a_id=a,
+            team_b_id=b,
+            date="2026-05-11",
+            time="",
+            broadcaster="ESPN",
+            winner_id=a,
+            final_score_a=80,
+            final_score_b=70,
+            espn_id="x2",
+            excitement_index=8.0,
+        )
+    )
+    upsert_daily_ranking(
+        session,
+        date="2026-05-11",
+        team_a_id=a,
+        team_b_id=b,
+        quality_score=50.0,
+        importance_score=None,
+        overall_score=50.0,
+        broadcaster="ESPN",
+    )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/filter?mode=completed&broadcaster=ION")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert [r["date"] for r in rows] == ["2026-05-10"]
+    schema._engine = None
+    schema._session_factory = None

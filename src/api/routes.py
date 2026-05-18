@@ -27,11 +27,12 @@ class GameResponse(BaseModel):
     team_b_abbr: str = ""
     team_a_logo: str = ""
     team_b_logo: str = ""
-    quality_score: float
-    # None for non-regular-season games (not simulated).
+    # quality_score / overall_score are None when a completed game has no
+    # DailyRanking row (e.g. a missed daily-update day backfilled later).
+    quality_score: float | None = None
     importance_score: float | None = None
-    overall_score: float
-    broadcaster: str
+    overall_score: float | None = None
+    broadcaster: str = ""
     team_a_playoff_prob: float | None = None
     team_b_playoff_prob: float | None = None
     win_prob_a: float | None = None
@@ -39,6 +40,9 @@ class GameResponse(BaseModel):
     game_status: str | None = (
         None  # STATUS_SCHEDULED | STATUS_IN_PROGRESS | STATUS_FINAL
     )
+    final_score_a: int | None = None
+    final_score_b: int | None = None
+    excitement_index: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -81,7 +85,15 @@ def format_games_response(
             continue
 
         key = (ranking.date, ranking.team_a_id, ranking.team_b_id)
-        time_val, espn_id = fields.get(key, ("", None))
+        gf = fields.get(key)
+        time_val = gf.time if gf else ""
+        espn_id = gf.espn_id if gf else None
+        final_score_a = gf.final_score_a if gf else None
+        final_score_b = gf.final_score_b if gf else None
+        excitement_index = gf.excitement_index if gf else None
+        # Game.broadcaster (via gf) wins over DailyRanking.broadcaster — the
+        # former reflects the latest ESPN data, the latter froze at scoring.
+        broadcaster = gf.broadcaster if gf else ranking.broadcaster
         game_status = (
             game_status_by_espn_id.get(espn_id)
             if game_status_by_espn_id and espn_id
@@ -101,12 +113,15 @@ def format_games_response(
                 quality_score=ranking.quality_score,
                 importance_score=ranking.importance_score,
                 overall_score=ranking.overall_score,
-                broadcaster=ranking.broadcaster,
+                broadcaster=broadcaster,
                 team_a_playoff_prob=prob_by_team_id.get(ranking.team_a_id),
                 team_b_playoff_prob=prob_by_team_id.get(ranking.team_b_id),
                 win_prob_a=ranking.win_prob_a,
                 espn_id=espn_id,
                 game_status=game_status,
+                final_score_a=final_score_a,
+                final_score_b=final_score_b,
+                excitement_index=excitement_index,
             )
         )
 
@@ -310,6 +325,35 @@ _HOMEPAGE_HTML = f"""
             }}
             .team-prob {{ margin-top: 1px; }}
             .win-prob {{ margin-top: 3px; width: 100%; }}
+            .final-score {{
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                font-family: 'Albert Sans', system-ui, sans-serif;
+                font-size: 14px;
+                color: var(--navy);
+                margin-top: 4px;
+            }}
+            .final-team {{
+                color: var(--navy-3);
+            }}
+            .final-team.win {{
+                color: var(--navy);
+                font-weight: 600;
+            }}
+            .final-sep {{
+                color: var(--navy-3);
+            }}
+            .final-tag {{
+                margin-left: 4px;
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                color: var(--navy-3);
+                background: rgba(13, 27, 42, 0.06);
+                padding: 1px 6px;
+                border-radius: 3px;
+            }}
 
             /* ---------- Controls ---------- */
             .controls {{
@@ -589,6 +633,7 @@ _HOMEPAGE_HTML = f"""
             .score-num.high, .games-card-score.high {{ color: var(--orange); }}
             .score-num.medium, .games-card-score.medium {{ color: var(--orange-deep); }}
             .score-num.low, .games-card-score.low {{ color: var(--text-subtle); }}
+            .score-num.empty, .games-card-score.empty {{ color: var(--text-subtle); opacity: 0.5; }}
             .matchup {{
                 font-weight: 600;
                 color: var(--navy);
@@ -784,6 +829,55 @@ _HOMEPAGE_HTML = f"""
             }}
 
             /* ---------- Footer ---------- */
+            #completed-section {{
+                margin-top: 48px;
+                border-top: 1px solid rgba(13, 27, 42, 0.08);
+                padding-top: 24px;
+            }}
+            .completed-toggle {{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                margin: 0 auto;
+                padding: 10px 20px;
+                background: transparent;
+                border: 1px solid rgba(13, 27, 42, 0.2);
+                border-radius: 999px;
+                font-family: 'Albert Sans', system-ui, sans-serif;
+                font-size: 14px;
+                font-weight: 500;
+                color: var(--navy);
+                cursor: pointer;
+            }}
+            .completed-toggle:hover {{
+                background: rgba(13, 27, 42, 0.04);
+            }}
+            .completed-toggle:focus-visible {{
+                outline: 2px solid var(--orange);
+                outline-offset: 2px;
+            }}
+            .completed-toggle-count {{
+                color: var(--navy-3);
+            }}
+            .completed-toggle-chevron {{
+                transition: transform 0.15s ease;
+            }}
+            .completed-toggle[aria-expanded="true"] .completed-toggle-chevron {{
+                transform: rotate(180deg);
+            }}
+            .completed-heading {{
+                font-family: 'Fraunces', Georgia, serif;
+                font-weight: 600;
+                font-size: 22px;
+                color: var(--navy);
+                margin: 24px 0 16px;
+            }}
+            .completed-heading-sub {{
+                font-weight: 500;
+                font-style: italic;
+                color: var(--navy-3);
+            }}
             .footer {{
                 text-align: center;
                 padding: 28px 16px;
@@ -1085,6 +1179,21 @@ _HOMEPAGE_HTML = f"""
         <main class="content">
             <div id="featured-container"></div>
             <div id="games-container"></div>
+            <section id="completed-section" aria-labelledby="completed-heading">
+                <button type="button" id="completed-toggle"
+                        class="completed-toggle" aria-expanded="false"
+                        aria-controls="completed-content" hidden>
+                    <span class="completed-toggle-text">Show completed games</span>
+                    <span class="completed-toggle-count" id="completed-toggle-count"></span>
+                    <span class="completed-toggle-chevron" aria-hidden="true">&#9662;</span>
+                </button>
+                <div id="completed-content" hidden>
+                    <h2 id="completed-heading" class="completed-heading">
+                        Completed games <span class="completed-heading-sub">&middot; Sorted by excitement</span>
+                    </h2>
+                    <div id="completed-games-container"></div>
+                </div>
+            </section>
         </main>
 
         <footer class="footer">
@@ -1129,6 +1238,7 @@ _HOMEPAGE_HTML = f"""
 
         <script>
             let allGames = [];
+            let allCompleted = [];
             let selectedNetworks = new Set();
             let sortBy = 'date';
 
@@ -1204,6 +1314,7 @@ _HOMEPAGE_HTML = f"""
                     allGames = await response.json();
                     populateFilters();
                     applyFilters();
+                    loadCompleted();
                 }} catch (error) {{
                     document.getElementById('featured-container').innerHTML = '';
                     document.getElementById('games-container').innerHTML =
@@ -1244,12 +1355,20 @@ _HOMEPAGE_HTML = f"""
                 section.style.display = '';
             }}
 
+            // Idempotent: sources options from the union of upcoming and
+            // completed games and is called after each list loads, so a
+            // team/broadcaster that only appears in the archive is still
+            // selectable. Preserves prior selections across re-runs.
             function populateFilters() {{
-                const networks = [...new Set(allGames.map(g => g.broadcaster).filter(Boolean))].sort();
+                const lists = [allGames, allCompleted];
+                const networks = [...new Set(
+                    lists.flatMap(list => list.map(g => g.broadcaster).filter(Boolean))
+                )].sort();
                 const pillGroup = document.getElementById('network-pills');
-                pillGroup.innerHTML = networks.map(n =>
-                    `<button class="pill" data-network="${{escapeHtml(n)}}" type="button" aria-pressed="false">${{escapeHtml(NETWORK_LABELS[n] || n)}}</button>`
-                ).join('');
+                pillGroup.innerHTML = networks.map(n => {{
+                    const pressed = selectedNetworks.has(n) ? 'true' : 'false';
+                    return `<button class="pill" data-network="${{escapeHtml(n)}}" type="button" aria-pressed="${{pressed}}">${{escapeHtml(NETWORK_LABELS[n] || n)}}</button>`;
+                }}).join('');
                 pillGroup.querySelectorAll('.pill').forEach(btn => {{
                     btn.addEventListener('click', () => {{
                         const net = btn.dataset.network;
@@ -1264,14 +1383,25 @@ _HOMEPAGE_HTML = f"""
                     }});
                 }});
 
-                const teams = [...new Set(allGames.flatMap(g => [g.team_a, g.team_b]))].sort();
+                const teams = [...new Set(
+                    lists.flatMap(list => list.flatMap(g => [g.team_a, g.team_b]))
+                )].sort();
                 const teamSelect = document.getElementById('team-filter');
-                teams.forEach(t => {{
-                    const opt = document.createElement('option');
-                    opt.value = t;
-                    opt.textContent = t;
-                    teamSelect.appendChild(opt);
-                }});
+                const currentTeam = teamSelect.value;
+                teamSelect.innerHTML = '<option value="">All</option>' + teams.map(t =>
+                    `<option value="${{escapeHtml(t)}}">${{escapeHtml(t)}}</option>`
+                ).join('');
+                if (currentTeam && teams.includes(currentTeam)) {{
+                    teamSelect.value = currentTeam;
+                }}
+            }}
+
+            // Shared by `applyFilters` (upcoming list) and `renderCompleted`
+            // (archive). Reads selectedNetworks from module scope.
+            function matchesScope(game, team) {{
+                if (selectedNetworks.size > 0 && !selectedNetworks.has(game.broadcaster)) return false;
+                if (team && game.team_a !== team && game.team_b !== team) return false;
+                return true;
             }}
 
             function applyFilters() {{
@@ -1279,18 +1409,13 @@ _HOMEPAGE_HTML = f"""
                 const fromDate = document.getElementById('from-date').value;
                 const toDate = document.getElementById('to-date').value;
                 const team = document.getElementById('team-filter').value;
-
-                const matchesScope = (game) => {{
-                    if (selectedNetworks.size > 0 && !selectedNetworks.has(game.broadcaster)) return false;
-                    if (team && game.team_a !== team && game.team_b !== team) return false;
-                    return true;
-                }};
+                const inScope = (g) => matchesScope(g, team);
 
                 // Top pick is fixed to the next 7 days regardless of the user's date range.
                 const today = addDaysISO(0);
                 const weekOut = addDaysISO(7);
                 const featuredCandidates = allGames.filter(g =>
-                    matchesScope(g) && g.date >= today && g.date <= weekOut
+                    inScope(g) && g.date >= today && g.date <= weekOut
                 );
                 const featured = featuredCandidates.length === 0
                     ? null
@@ -1298,7 +1423,7 @@ _HOMEPAGE_HTML = f"""
                 renderFeatured(featured);
 
                 const games = allGames.filter(game => {{
-                    if (!matchesScope(game)) return false;
+                    if (!inScope(game)) return false;
                     if (fromDate && game.date < fromDate) return false;
                     if (toDate && game.date > toDate) return false;
                     return true;
@@ -1306,6 +1431,7 @@ _HOMEPAGE_HTML = f"""
 
                 if (games.length === 0) {{
                     renderEmpty();
+                    if (isCompletedExpanded()) renderCompleted();
                     return;
                 }}
 
@@ -1316,6 +1442,72 @@ _HOMEPAGE_HTML = f"""
                     rest.sort((a, b) => a.date.localeCompare(b.date) || timeToMinutes(a.time) - timeToMinutes(b.time));
                 }}
                 renderGames(rest, featured);
+                if (isCompletedExpanded()) renderCompleted();
+            }}
+
+            async function loadCompleted() {{
+                try {{
+                    const resp = await fetch('/api/games/completed');
+                    if (!resp.ok) return;
+                    allCompleted = await resp.json();
+                    // Re-populate so completed-only broadcasters/teams are
+                    // selectable in the pills and dropdown.
+                    populateFilters();
+                    setupCompletedToggle();
+                }} catch (e) {{
+                    console.error('Failed to load completed games', e);
+                }}
+            }}
+
+            function setupCompletedToggle() {{
+                const btn = document.getElementById('completed-toggle');
+                const content = document.getElementById('completed-content');
+                const countEl = document.getElementById('completed-toggle-count');
+                if (!btn || !content || !countEl) return;
+                if (!allCompleted.length) return;
+                btn.hidden = false;
+                countEl.textContent = '(' + allCompleted.length + ')';
+                if (btn.dataset.toggleReady) return;
+                btn.dataset.toggleReady = '1';
+                btn.addEventListener('click', () => {{
+                    const next = btn.getAttribute('aria-expanded') !== 'true';
+                    btn.setAttribute('aria-expanded', String(next));
+                    content.hidden = !next;
+                    btn.querySelector('.completed-toggle-text').textContent =
+                        next ? 'Hide completed games' : 'Show completed games';
+                    if (next) renderCompleted();
+                }});
+            }}
+
+            function isCompletedExpanded() {{
+                const btn = document.getElementById('completed-toggle');
+                return !!btn && btn.getAttribute('aria-expanded') === 'true';
+            }}
+
+            function applyExcitementClass(eyebrow, label) {{
+                eyebrow.textContent = label || '';
+                eyebrow.className = 'excitement-eyebrow'
+                    + (label === 'Thriller' ? ' thriller' : label === 'Close game' ? ' close' : '');
+            }}
+
+            function excitementLabelFor(score) {{
+                if (score == null) return '';
+                if (score >= EXCITEMENT_THRILLER) return 'Thriller';
+                if (score >= EXCITEMENT_CLOSE) return 'Close game';
+                return '';
+            }}
+
+            function renderCompleted() {{
+                const container = document.getElementById('completed-games-container');
+                if (!container) return;
+                const team = document.getElementById('team-filter').value;
+                const filtered = allCompleted.filter(g => matchesScope(g, team));
+                renderGames(filtered, null, 'completed-games-container');
+                filtered.forEach(g => {{
+                    if (!g.espn_id) return;
+                    const eyebrow = container.querySelector(`[data-espn-id="${{g.espn_id}}"] .excitement-eyebrow`);
+                    if (eyebrow) applyExcitementClass(eyebrow, excitementLabelFor(g.excitement_index));
+                }});
             }}
 
             function renderFeatured(game) {{
@@ -1355,7 +1547,7 @@ _HOMEPAGE_HTML = f"""
                             </div>
                         </div>
                         <div class="featured-score">
-                            <div class="featured-score-num">${{game.overall_score.toFixed(0)}}</div>
+                            <div class="featured-score-num">${{formatScore(game.overall_score)}}</div>
                             <div class="featured-score-label">Overall · /100</div>
                         </div>
                     </article>
@@ -1372,8 +1564,8 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
-            function renderGames(games, featured) {{
-                const container = document.getElementById('games-container');
+            function renderGames(games, featured, containerId) {{
+                const container = document.getElementById(containerId || 'games-container');
                 if (games.length === 0) {{ container.innerHTML = ''; return; }}
                 container.innerHTML = `
                     <table class="games-table">
@@ -1427,7 +1619,27 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function getScoreClass(score) {{
+                if (score == null) return 'empty';
                 return score >= 40 ? 'high' : score >= 25 ? 'medium' : 'low';
+            }}
+
+            function formatScore(score) {{
+                return score == null ? '—' : score.toFixed(0);
+            }}
+
+            // Show excitement_index so the visible Score matches the archive's sort key.
+            function primaryScore(game) {{
+                if (game.excitement_index != null) return game.excitement_index.toFixed(1);
+                return formatScore(game.overall_score);
+            }}
+
+            function primaryScoreClass(game) {{
+                if (game.excitement_index != null) {{
+                    if (game.excitement_index >= EXCITEMENT_THRILLER) return 'high';
+                    if (game.excitement_index >= EXCITEMENT_CLOSE) return 'medium';
+                    return 'low';
+                }}
+                return getScoreClass(game.overall_score);
             }}
 
             function winProbText(game) {{
@@ -1442,6 +1654,29 @@ _HOMEPAGE_HTML = f"""
             function renderWinProb(game) {{
                 const text = winProbText(game);
                 return text ? `<div class="win-prob">${{text}}</div>` : '';
+            }}
+
+            function renderFinalScore(game) {{
+                if (game.final_score_a == null || game.final_score_b == null) return '';
+                const a = escapeHtml(game.team_a_abbr || game.team_a);
+                const b = escapeHtml(game.team_b_abbr || game.team_b);
+                const winA = game.final_score_a > game.final_score_b;
+                const winB = game.final_score_b > game.final_score_a;
+                const aCls = winA ? 'final-team win' : 'final-team';
+                const bCls = winB ? 'final-team win' : 'final-team';
+                return `<div class="final-score" aria-label="Final score">
+                    <span class="${{aCls}}">${{a}} ${{game.final_score_a}}</span>
+                    <span class="final-sep">·</span>
+                    <span class="${{bCls}}">${{b}} ${{game.final_score_b}}</span>
+                    <span class="final-tag">Final</span>
+                </div>`;
+            }}
+
+            function renderScoreLine(game) {{
+                if (game.final_score_a != null && game.final_score_b != null) {{
+                    return renderFinalScore(game);
+                }}
+                return renderWinProb(game);
             }}
 
             function renderMiniBar(label, score, kind) {{
@@ -1486,14 +1721,14 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function renderGameRow(game, isTopPick) {{
-                const cls = getScoreClass(game.overall_score);
+                const cls = primaryScoreClass(game);
                 const impTitle = game.importance_score == null ? 'Not simulated' : '';
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
                     <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <td class="col-date">${{formatDate(game.date)}}</td>
                         <td class="col-time">${{escapeHtml(game.time || 'TBD')}}</td>
-                        <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{game.overall_score.toFixed(0)}}</span></div></td>
+                        <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{primaryScore(game)}}</span></div></td>
                         <td>
                             ${{badge}}
                             <div class="matchup">
@@ -1506,7 +1741,7 @@ _HOMEPAGE_HTML = f"""
                                     ${{renderTeam(game.team_b, game.team_b_logo)}}
                                     ${{game.team_b_playoff_prob != null ? `<div class="team-prob">${{Math.round(game.team_b_playoff_prob * 100)}}% playoff odds</div>` : ''}}
                                 </div>
-                                ${{renderWinProb(game)}}
+                                ${{renderScoreLine(game)}}
                             </div>
                         </td>
                         <td class="hide-mobile">${{renderMiniBarCompact(game.quality_score, 'quality')}}</td>
@@ -1517,7 +1752,7 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function renderGameCard(game, isTopPick) {{
-                const cls = getScoreClass(game.overall_score);
+                const cls = primaryScoreClass(game);
                 const eyebrow = isTopPick ? '<div class="games-card-eyebrow">Top pick</div>' : '';
                 const dateStr = formatDate(game.date);
                 const timeStr = escapeHtml(game.time || 'TBD');
@@ -1526,7 +1761,7 @@ _HOMEPAGE_HTML = f"""
                 const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;
                 return `
                     <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
-                        <div class="games-card-score ${{cls}}">${{game.overall_score.toFixed(0)}}</div>
+                        <div class="games-card-score ${{cls}}">${{primaryScore(game)}}</div>
                         <div class="games-card-stack">
                             ${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}
                             ${{eyebrow}}
@@ -1542,7 +1777,7 @@ _HOMEPAGE_HTML = f"""
                                 </div>
                             </div>
                             <div class="games-card-meta">${{meta}}</div>
-                            ${{renderWinProb(game)}}
+                            ${{renderScoreLine(game)}}
                             ${{renderMiniBar('Quality', game.quality_score, 'quality')}}
                             ${{renderMiniBar('Importance', game.importance_score, 'importance')}}
                         </div>
@@ -1647,14 +1882,7 @@ _HOMEPAGE_HTML = f"""
                 const excitementLabel = computeExcitement(plays);
                 document.querySelectorAll(`[data-espn-id="${{espnId}}"]`).forEach(row => {{
                     const eyebrow = row.querySelector('.excitement-eyebrow');
-                    if (!eyebrow) return;
-                    if (excitementLabel) {{
-                        eyebrow.textContent = excitementLabel;
-                        eyebrow.className = 'excitement-eyebrow ' + (excitementLabel === 'Thriller' ? 'thriller' : 'close');
-                    }} else {{
-                        eyebrow.textContent = '';
-                        eyebrow.className = 'excitement-eyebrow';
-                    }}
+                    if (eyebrow) applyExcitementClass(eyebrow, excitementLabel);
                 }});
             }}
 
@@ -1751,10 +1979,7 @@ _HOMEPAGE_HTML = f"""
                 const last = plays[plays.length - 1];
                 const p = last.home_pct;
                 const future = 2 * p * (1 - p) * (elapsedSeconds(last) / REGULATION_SECS);
-                const score = past + EXCITEMENT_FUTURE_WEIGHT * future;
-                if (score >= EXCITEMENT_THRILLER) return 'Thriller';
-                if (score >= EXCITEMENT_CLOSE) return 'Close game';
-                return null;
+                return excitementLabelFor(past + EXCITEMENT_FUTURE_WEIGHT * future);
             }}
 
             function setSortBy(mode) {{
@@ -1825,15 +2050,18 @@ _HOMEPAGE_HTML = f"""
                 }});
                 document.addEventListener('keydown', handleModalKeydown);
 
-                document.getElementById('games-container').addEventListener('click', (e) => {{
+                const handleEspnRowClick = (e) => {{
                     const target = e.target.closest('[data-espn-id]');
                     if (!target || !target.dataset.espnId) return;
                     const espnId = target.dataset.espnId;
                     if (openEspnId === espnId) {{ collapsePanel(); return; }}
-                    const game = allGames.find(g => g.espn_id === espnId);
+                    const game = allGames.find(g => g.espn_id === espnId)
+                        || allCompleted.find(g => g.espn_id === espnId);
                     if (!game) return;
                     expandPanel(espnId, game);
-                }});
+                }};
+                document.getElementById('games-container').addEventListener('click', handleEspnRowClick);
+                document.getElementById('completed-games-container').addEventListener('click', handleEspnRowClick);
             }});
         </script>
     </body>

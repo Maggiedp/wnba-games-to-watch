@@ -4,12 +4,15 @@
 import logging
 import random
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
-from src.constants import GameStatus
+from src.constants import UN_FINALIZE_STATUSES, GameStatus
 from src.data.espn_api import (
+    ESPNAPIError,
+    ESPNNotFoundError,
     fetch_bpi_ratings,
     fetch_games_for_range,
+    fetch_live_win_probability,
     fetch_schedule_and_results,
     fetch_team_details,
 )
@@ -20,6 +23,8 @@ from src.data.wnba_schedule import (
 from src.db.queries import (
     get_all_teams,
     get_completed_games,
+    get_completed_games_missing_excitement,
+    get_games_for_excitement_refresh,
     get_importance_max_swing,
     get_team_by_id,
     get_team_by_name,
@@ -36,6 +41,7 @@ from src.scoring.elo import (
     expected_win_prob,
     replay_games,
 )
+from src.scoring.excitement import compute_excitement
 from src.scoring.importance import normalize_importance_score
 from src.scoring.monte_carlo import (
     compute_importance_from_matrix,
@@ -143,6 +149,16 @@ def fetch_and_store_games(session) -> list[dict]:
             logger.warning(f"Unknown team(s): {team_a!r}, {team_b!r} — skipping")
             continue
         winner_team = game.get("winner_team")
+        status = game.get("status")
+        # Only an explicit un-finalize status downgrades a stored final.
+        # STATUS_UNKNOWN and other unrecognized statuses are no-ops to
+        # avoid wiping valid completed games on a transient ESPN glitch.
+        if winner_team:
+            is_complete: bool | None = True
+        elif status in UN_FINALIZE_STATUSES:
+            is_complete = False
+        else:
+            is_complete = None
         upsert_game(
             session,
             team_a_id=team_a_id,
@@ -154,11 +170,209 @@ def fetch_and_store_games(session) -> list[dict]:
             final_score_a=game.get("final_score_a"),
             final_score_b=game.get("final_score_b"),
             espn_id=game.get("event_id"),
+            is_complete=is_complete,
+            season_type=game.get("season_type"),
         )
         stored += 1
 
     logger.info(f"Upserted {stored} games")
     return games
+
+
+def backfill_missing_season_types(session) -> None:
+    """One-shot guard for rows ingested before the season_type column
+    existed. The schedule refresh only fetches yesterday-onward, so
+    pre-deploy games (notably preseason) would otherwise keep NULL
+    season_type forever and continue feeding standings via the
+    NULL-tolerant filter in get_completed_games.
+
+    Idempotent: a fast COUNT short-circuits after the first run leaves
+    no NULL rows for the current season.
+    """
+    from src.db.schema import Game
+
+    # Count is over-inclusive on purpose: includes upcoming games with
+    # NULL season_type too. Daily ingest populates season_type for new
+    # rows, so this only stays non-zero while legacy rows remain — and
+    # while it's non-zero, get_completed_games stays in degrade-gracefully
+    # mode (NULL-tolerant). Both flips together once the legacy set drains.
+    null_count = (
+        session.query(Game)
+        .filter(Game.date.like("2026-%"))
+        .filter(Game.season_type.is_(None))
+        .filter(Game.espn_id.isnot(None))
+        .count()
+    )
+    if null_count == 0:
+        return
+    logger.info(f"Backfilling season_type for {null_count} legacy rows")
+    parsed = fetch_games_for_range(date(2026, 4, 1), date(2026, 9, 30))
+    by_espn_id = {
+        g["event_id"]: g.get("season_type")
+        for g in parsed
+        if g.get("event_id") and g.get("season_type") is not None
+    }
+    updated = 0
+    for game in (
+        session.query(Game)
+        .filter(Game.date.like("2026-%"))
+        .filter(Game.season_type.is_(None))
+        .filter(Game.espn_id.isnot(None))
+        .all()
+    ):
+        st = by_espn_id.get(game.espn_id)
+        if st is not None:
+            game.season_type = st
+            updated += 1
+    session.commit()
+    logger.info(f"Backfilled season_type for {updated} games")
+
+
+DAILY_EXCITEMENT_RETRY_CAP = 50
+BACKFILL_ESPN_TIMEOUT_S = 5
+# How long after first compute we keep re-checking ESPN in case the PBP
+# was refined post-final, plus the per-run cap for that refresh work.
+EXCITEMENT_REFRESH_WINDOW_DAYS = 2
+EXCITEMENT_REFRESH_CAP = 25
+
+
+def populate_excitement_for_recent_completions(
+    session,
+    limit: int | None = DAILY_EXCITEMENT_RETRY_CAP,
+    timeout: int = BACKFILL_ESPN_TIMEOUT_S,
+) -> None:
+    """For 2026 games that completed but have no excitement_index, fetch
+    play-by-play from ESPN and compute and store the final excitement score.
+
+    Transient failures (ESPN unreachable, missing PBP, parse error) leave the
+    row's excitement_index as NULL so the next run retries it. A persisted
+    0.0 would be indistinguishable from a true blowout score and would never
+    be retried since the retry query filters on NULL.
+
+    `limit` caps retries per run (least-recently-attempted first, so
+    permanently-failing games rotate to the back instead of starving
+    the rest of the queue). Pass `limit=None` from the one-shot
+    backfill script to process everything.
+    `timeout` is per ESPN call; the default is shorter than the live-WP
+    panel default since one slow game shouldn't hold up the daily run.
+    """
+    games = get_completed_games_missing_excitement(
+        session, season_year=2026, limit=limit
+    )
+    if not games:
+        logger.info("No completed games need excitement backfill")
+        return
+    logger.info(f"Computing excitement_index for {len(games)} completed games")
+    now = datetime.now()
+    stored = 0
+    for game in games:
+        # Stamp the attempt timestamp BEFORE the network call so a failure
+        # path still records that we tried — this is what keeps the retry
+        # queue rotating instead of pinning to a permanently-failing head.
+        game.excitement_last_attempt_at = now
+        try:
+            wp = fetch_live_win_probability(game.espn_id, timeout=timeout)
+            status = wp.get("status")
+            plays = wp.get("plays") or []
+            score = compute_excitement(plays, final=True)
+        except (ESPNAPIError, ESPNNotFoundError) as e:
+            logger.warning(
+                f"Could not fetch PBP for game {game.id} (espn_id={game.espn_id}): {e} "
+                "— leaving excitement_index NULL for retry"
+            )
+            continue
+        except Exception as e:
+            logger.warning(
+                f"Failed to compute excitement for game {game.id} (espn_id={game.espn_id}): {e} "
+                "— leaving excitement_index NULL for retry"
+            )
+            continue
+        # Gate on ESPN's own "final" signal. The DB winner_id can be set before
+        # ESPN has finalized the PBP feed; persisting a partial payload would
+        # never be retried because the retry query filters on NULL.
+        if status != GameStatus.FINAL:
+            logger.warning(
+                f"Game {game.id} (espn_id={game.espn_id}) has ESPN status "
+                f"{status!r}, not {GameStatus.FINAL} — leaving NULL for retry"
+            )
+            continue
+        if score is None:
+            logger.warning(
+                f"ESPN returned insufficient play data for game {game.id} "
+                f"(espn_id={game.espn_id}) — leaving excitement_index NULL for retry"
+            )
+            continue
+        game.excitement_index = score
+        game.excitement_computed_at = now
+        stored += 1
+    session.commit()
+    logger.info(f"Stored excitement_index for {stored} games")
+
+
+def refresh_recent_excitement_scores(
+    session,
+    window_days: int = EXCITEMENT_REFRESH_WINDOW_DAYS,
+    limit: int | None = EXCITEMENT_REFRESH_CAP,
+    timeout: int = BACKFILL_ESPN_TIMEOUT_S,
+) -> None:
+    """Re-fetch already-scored games within a bounded freshness window so
+    late ESPN PBP refinements can correct an early STATUS_FINAL compute.
+
+    Without this, the first FINAL response becomes the eternal sort key
+    even if ESPN later adds/fixes plays. After `window_days` past compute
+    time the value is treated as locked.
+    """
+
+    cutoff = datetime.now() - timedelta(days=window_days)
+    games = get_games_for_excitement_refresh(
+        session, cutoff=cutoff, season_year=2026, limit=limit
+    )
+    if not games:
+        logger.info("No recent games eligible for excitement refresh")
+        return
+    logger.info(f"Refreshing excitement for {len(games)} recent games")
+    now = datetime.now()
+    rechecked = 0
+    updated = 0
+    for game in games:
+        # Stamp before the network call — same column as backfill, same rotation logic.
+        game.excitement_last_attempt_at = now
+        try:
+            wp = fetch_live_win_probability(game.espn_id, timeout=timeout)
+            status = wp.get("status")
+            score = compute_excitement(wp.get("plays") or [], final=True)
+        except (ESPNAPIError, ESPNNotFoundError) as e:
+            logger.warning(
+                f"Refresh fetch failed for game {game.id} (espn_id={game.espn_id}): {e}"
+            )
+            continue
+        except Exception as e:
+            logger.warning(
+                f"Refresh failed for game {game.id} (espn_id={game.espn_id}): {e}"
+            )
+            continue
+        if status != GameStatus.FINAL:
+            # The refresh path only updates excitement — it must not
+            # un-finalize a stored game from the live-WP summary endpoint.
+            # The schedule path (fetch_and_store_games) is the source of
+            # truth for completion state; a transient non-final summary
+            # response here could otherwise erase real archive entries.
+            continue
+        if score is None:
+            continue
+        if score != game.excitement_index:
+            logger.info(
+                f"Refreshing excitement for game {game.id} (espn_id={game.espn_id}): "
+                f"{game.excitement_index} -> {score}"
+            )
+            game.excitement_index = score
+            updated += 1
+        # Leave `excitement_computed_at` immutable — it anchors the freshness
+        # window. Updating it on refresh would turn the bounded window into
+        # a sliding one, keeping rows eligible forever.
+        rechecked += 1
+    session.commit()
+    logger.info(f"Re-checked {rechecked} games; updated {updated}")
 
 
 def compute_elo_ratings() -> dict[str, float]:
@@ -412,12 +626,33 @@ def main() -> int:
         try:
             fetch_and_store_bpi_ratings(session)
             games = fetch_and_store_games(session)
+            # Must run BEFORE compute_standings — that path consumes
+            # get_completed_games, which excludes preseason but tolerates
+            # NULL season_type. Legacy NULL rows could otherwise feed
+            # preseason wins/losses into standings until backfilled.
+            # Non-fatal: an ESPN outage here mustn't block the user-visible
+            # ranking computation. Worst case is standings see a stale
+            # preseason game for one more day until ESPN recovers.
+            try:
+                backfill_missing_season_types(session)
+            except Exception as e:
+                logger.warning(f"season_type backfill failed (non-fatal): {e}")
             elo_ratings = compute_elo_ratings()
             standings = compute_standings(session, elo_ratings)
             scored, playoff_probs = compute_daily_scores(session, games, standings)
             store_daily_rankings(session, scored)
             today = datetime.now().strftime("%Y-%m-%d")
             store_playoff_probabilities(session, playoff_probs, today)
+            # Archive backfill runs LAST and bounded — a slow/failing ESPN
+            # PBP API must not delay the user-visible ranking computation.
+            try:
+                populate_excitement_for_recent_completions(session)
+            except Exception as e:
+                logger.warning(f"Excitement backfill failed (non-fatal): {e}")
+            try:
+                refresh_recent_excitement_scores(session)
+            except Exception as e:
+                logger.warning(f"Excitement refresh failed (non-fatal): {e}")
             logger.info("=== Daily update job completed successfully ===")
             return 0
         finally:
