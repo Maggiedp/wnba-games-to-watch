@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import os
-from datetime import datetime
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -15,6 +14,7 @@ from src.data.espn_api import (
     ESPNNotFoundError,
     fetch_live_win_probability,
     fetch_today_game_statuses,
+    today_et,
 )
 from src.db.queries import (
     get_completed_rankings,
@@ -46,7 +46,7 @@ async def homepage():
 
 @app.get("/api/games/today", response_model=list[GameResponse])
 def get_today_games():
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = today_et()
     session = get_session()
     try:
         rankings = get_daily_rankings(session, today)
@@ -64,7 +64,7 @@ def get_today_games():
 
 @app.get("/api/games/upcoming", response_model=list[GameResponse])
 async def get_upcoming_games_endpoint(days: int = Query(7, ge=1, le=30)):  # noqa: ARG001
-    start_date = datetime.now().strftime("%Y-%m-%d")
+    start_date = today_et()
     session = get_session()
     try:
         rankings = get_upcoming_rankings(session, start_date)
@@ -86,7 +86,7 @@ async def get_completed_games_endpoint():
 
 @app.get("/api/games/filter", response_model=list[GameResponse])
 async def get_games_by_broadcaster(broadcaster: str, mode: str = "upcoming"):
-    start_date = datetime.now().strftime("%Y-%m-%d")
+    start_date = today_et()
     session = get_session()
     try:
         rankings = get_rankings_by_broadcaster(
@@ -116,7 +116,7 @@ def get_live_win_probability(espn_id: str = Query(...)):
 async def get_playoff_odds(date: str = Query(default=None)):
     """Return per-team playoff probabilities, sorted highest-first."""
     if date is None:
-        date = datetime.now().strftime("%Y-%m-%d")
+        date = today_et()
     session = get_session()
     try:
         prob_by_id = get_playoff_probabilities(session, date)

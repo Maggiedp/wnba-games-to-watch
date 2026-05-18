@@ -160,3 +160,11 @@ def test_get_raises_not_found_error_on_espn_404():
     with patch("requests.get", return_value=mock_response):
         with pytest.raises(ESPNNotFoundError):
             _get("http://example.com/api")
+
+
+def test_today_et_returns_et_date_after_utc_midnight_rollover():
+    import src.data.espn_api as m
+    from tests.conftest import frozen_datetime_class, utc
+
+    with patch.object(m, "datetime", frozen_datetime_class(utc(2026, 5, 19, 3, 30))):
+        assert m.today_et() == "2026-05-18"

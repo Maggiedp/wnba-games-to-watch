@@ -27,6 +27,16 @@ _ET = ZoneInfo("America/New_York")
 _SEASON_END = date(2026, 9, 30)
 
 
+def today_et() -> str:
+    """Return today's date in America/New_York as 'YYYY-MM-DD'.
+
+    Why: Game.date is stored in ET (schedule fetcher parses ESPN times via _ET).
+    Cloud Run uses UTC, so datetime.now() rolls to tomorrow after 8 PM ET and
+    filters out tonight's still-upcoming games.
+    """
+    return datetime.now(_ET).strftime("%Y-%m-%d")
+
+
 class ESPNAPIError(Exception):
     pass
 

@@ -5,6 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.api.routes import format_games_response
+from src.data.espn_api import today_et
 from src.db.queries import (
     upsert_daily_ranking,
     upsert_game,
@@ -85,12 +86,47 @@ def test_format_games_response_empty_time_when_no_game_row(session, team_ids):
     assert resp.time == ""
 
 
-def test_format_games_response_includes_playoff_probs(session, team_ids):
-    """format_games_response joins today's playoff odds onto each game response."""
-    from datetime import datetime
+def test_format_games_response_playoff_join_survives_utc_rollover(session, team_ids):
+    """Writer and reader must resolve to the same ET date across the UTC rollover."""
+    from unittest.mock import patch
+    import src.data.espn_api as et_mod
+    from tests.conftest import frozen_datetime_class, utc
 
     a_id, b_id = team_ids
-    today = datetime.now().strftime("%Y-%m-%d")
+    with patch.object(
+        et_mod, "datetime", frozen_datetime_class(utc(2026, 5, 19, 3, 30))
+    ):
+        today = today_et()
+        assert today == "2026-05-18"
+        upsert_game(
+            session, team_a_id=a_id, team_b_id=b_id, date=today, time="", broadcaster=""
+        )
+        upsert_daily_ranking(
+            session,
+            date=today,
+            team_a_id=a_id,
+            team_b_id=b_id,
+            quality_score=50.0,
+            importance_score=40.0,
+            overall_score=46.0,
+            broadcaster="",
+        )
+        upsert_playoff_probability(session, date=today, team_id=a_id, probability=0.81)
+        upsert_playoff_probability(session, date=today, team_id=b_id, probability=0.19)
+
+        from src.db.queries import get_daily_rankings
+
+        rankings = get_daily_rankings(session, today)
+        [resp] = format_games_response(rankings, session)
+
+    assert resp.team_a_playoff_prob == pytest.approx(0.81)
+    assert resp.team_b_playoff_prob == pytest.approx(0.19)
+
+
+def test_format_games_response_includes_playoff_probs(session, team_ids):
+    """format_games_response joins today's playoff odds onto each game response."""
+    a_id, b_id = team_ids
+    today = today_et()
 
     upsert_game(
         session,
@@ -124,10 +160,8 @@ def test_format_games_response_includes_playoff_probs(session, team_ids):
 
 def test_format_games_response_playoff_probs_none_when_missing(session, team_ids):
     """playoff probs are None when no odds have been stored for the date."""
-    from datetime import datetime
-
     a_id, b_id = team_ids
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = today_et()
 
     upsert_game(
         session, team_a_id=a_id, team_b_id=b_id, date=today, time="", broadcaster=""
@@ -154,10 +188,8 @@ def test_format_games_response_playoff_probs_none_when_missing(session, team_ids
 
 def test_format_games_response_passes_win_prob(session, team_ids):
     """win_prob_a from DailyRanking flows through to GameResponse."""
-    from datetime import datetime
-
     a_id, b_id = team_ids
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = today_et()
 
     upsert_game(
         session, team_a_id=a_id, team_b_id=b_id, date=today, time="", broadcaster=""
@@ -184,10 +216,8 @@ def test_format_games_response_passes_win_prob(session, team_ids):
 
 def test_format_games_response_win_prob_none_when_missing(session, team_ids):
     """win_prob_a is None in response when not stored."""
-    from datetime import datetime
-
     a_id, b_id = team_ids
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = today_et()
 
     upsert_game(
         session, team_a_id=a_id, team_b_id=b_id, date=today, time="", broadcaster=""

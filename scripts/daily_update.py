@@ -15,6 +15,7 @@ from src.data.espn_api import (
     fetch_live_win_probability,
     fetch_schedule_and_results,
     fetch_team_details,
+    today_et,
 )
 from src.data.wnba_schedule import (
     enhance_games_with_broadcasters,
@@ -133,7 +134,7 @@ def fetch_and_store_games(session) -> list[dict]:
         return []
 
     logger.info("Fetching broadcaster info from WNBA.com...")
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = today_et()
     broadcasters = fetch_wnba_schedule_broadcasters(today)
     games = enhance_games_with_broadcasters(games, broadcasters)
 
@@ -383,7 +384,7 @@ def compute_elo_ratings() -> dict[str, float]:
     without any prior games (expansion teams, or any team pre-opening-day)
     will appear at INITIAL_RATING when looked up later.
     """
-    yesterday = date.today() - date.resolution
+    yesterday = date.fromisoformat(today_et()) - date.resolution
     logger.info(f"Fetching Elo history: {_ELO_HISTORY_START} through {yesterday}...")
     all_games = fetch_games_for_range(_ELO_HISTORY_START, yesterday)
     completed = [
@@ -458,7 +459,7 @@ def compute_daily_scores(
     splitting that run's outcome matrix — no additional simulations needed.
     Playoff probabilities (one per team) are the aggregate of the same run.
     """
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = today_et()
 
     upcoming_games = [
         g
@@ -641,7 +642,7 @@ def main() -> int:
             standings = compute_standings(session, elo_ratings)
             scored, playoff_probs = compute_daily_scores(session, games, standings)
             store_daily_rankings(session, scored)
-            today = datetime.now().strftime("%Y-%m-%d")
+            today = today_et()
             store_playoff_probabilities(session, playoff_probs, today)
             # Archive backfill runs LAST and bounded — a slow/failing ESPN
             # PBP API must not delay the user-visible ranking computation.
