@@ -1169,7 +1169,7 @@ _HOMEPAGE_HTML = f"""
                         <span class="filter-label">Sort</span>
                         <div class="sort-toggle" role="group" aria-label="Sort games">
                             <button class="sort-btn" id="sort-date" type="button" aria-pressed="true">Date</button>
-                            <button class="sort-btn" id="sort-score" type="button" aria-pressed="false">Score</button>
+                            <button class="sort-btn" id="sort-score" type="button" aria-pressed="false">Overall</button>
                         </div>
                     </div>
                 </div>
@@ -1441,7 +1441,7 @@ _HOMEPAGE_HTML = f"""
                 }} else {{
                     rest.sort((a, b) => a.date.localeCompare(b.date) || timeToMinutes(a.time) - timeToMinutes(b.time));
                 }}
-                renderGames(rest, featured);
+                renderGames(rest, featured, 'games-container', 'Overall');
                 if (isCompletedExpanded()) renderCompleted();
             }}
 
@@ -1502,7 +1502,7 @@ _HOMEPAGE_HTML = f"""
                 if (!container) return;
                 const team = document.getElementById('team-filter').value;
                 const filtered = allCompleted.filter(g => matchesScope(g, team));
-                renderGames(filtered, null, 'completed-games-container');
+                renderGames(filtered, null, 'completed-games-container', 'Excitement');
                 filtered.forEach(g => {{
                     if (!g.espn_id) return;
                     const eyebrow = container.querySelector(`[data-espn-id="${{g.espn_id}}"] .excitement-eyebrow`);
@@ -1564,7 +1564,7 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
-            function renderGames(games, featured, containerId) {{
+            function renderGames(games, featured, containerId, scoreHeader) {{
                 const container = document.getElementById(containerId || 'games-container');
                 if (games.length === 0) {{ container.innerHTML = ''; return; }}
                 container.innerHTML = `
@@ -1573,7 +1573,7 @@ _HOMEPAGE_HTML = f"""
                             <tr>
                                 <th>Date</th>
                                 <th>Time</th>
-                                <th>Score</th>
+                                <th>${{scoreHeader}}</th>
                                 <th>Matchup</th>
                                 <th class="hide-mobile">Quality</th>
                                 <th class="hide-mobile">Importance</th>
