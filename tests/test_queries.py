@@ -545,11 +545,98 @@ def test_unique_index_blocks_duplicate_espn_id_inserts(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
-def test_upsert_game_deletes_orphan_daily_ranking_on_reschedule(tmp_path, monkeypatch):
+def test_completed_archive_keeps_scores_after_rekey(tmp_path, monkeypatch):
+    """A completed game corrected after final (moved by espn_id) must
+    keep its pre-game quality / importance / overall scores in the
+    archive. Without the DailyRanking re-key, the completed-archive
+    endpoint would synthesize a None-scored ranking — permanent
+    degradation with no automatic rebuild path."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    from src.db.queries import upsert_daily_ranking, upsert_game, upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(schema.Team).filter_by(name="Aces").one().id
+    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    # Final game with a fully-stored ranking.
+    session.add(
+        Game(
+            team_a_id=a,
+            team_b_id=b,
+            date="2026-05-20",
+            time="7:00 PM ET",
+            broadcaster="ION",
+            winner_id=a,
+            final_score_a=80,
+            final_score_b=70,
+            espn_id="evt",
+            excitement_index=5.0,
+        )
+    )
+    upsert_daily_ranking(
+        session,
+        date="2026-05-20",
+        team_a_id=a,
+        team_b_id=b,
+        quality_score=72.0,
+        importance_score=45.0,
+        overall_score=61.2,
+        broadcaster="ION",
+    )
+    session.commit()
+
+    # ESPN corrects the date for the same event_id (a late reschedule
+    # in the data feed after the game was already played).
+    upsert_game(
+        session,
+        team_a_id=a,
+        team_b_id=b,
+        date="2026-05-21",
+        time="7:00 PM ET",
+        broadcaster="ION",
+        winner_id=a,
+        final_score_a=80,
+        final_score_b=70,
+        espn_id="evt",
+        is_complete=True,
+    )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/completed")
+    rows = resp.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["date"] == "2026-05-21"
+    # The pre-game ranking scores survived the re-key — not None.
+    assert row["quality_score"] == 72.0
+    assert row["importance_score"] == 45.0
+    assert row["overall_score"] == 61.2
+    assert row["excitement_index"] == 5.0
+    schema._engine = None
+    schema._session_factory = None
+
+
+def test_upsert_game_rekeys_daily_ranking_on_reschedule(tmp_path, monkeypatch):
     """When upsert_game moves an existing row to a new (date, teams) key
-    via espn_id matching, the old DailyRanking at the previous key must
-    be deleted. Otherwise get_upcoming_rankings keeps rendering it as a
-    phantom upcoming matchup with no corresponding Game."""
+    via espn_id matching, the DailyRanking at the old key must be
+    re-keyed to follow the game — not deleted. The pre-game ranking
+    data IS the only source of quality / importance / overall scores
+    for the completed archive; losing it would degrade the archive
+    entry permanently."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     from src.db import schema
 
@@ -594,15 +681,23 @@ def test_upsert_game_deletes_orphan_daily_ranking_on_reschedule(tmp_path, monkey
             espn_id="evt",
         )
 
-        # The orphan ranking at the OLD date must be deleted.
-        orphan = (
-            session.query(DailyRanking).filter(DailyRanking.date == "2026-05-20").all()
-        )
-        assert orphan == []
-        # Game itself is at the new date.
+        # Game moved to the new date.
         assert session.query(Game).filter(Game.espn_id == "evt").one().date == (
             "2026-05-25"
         )
+        # The DailyRanking moved with it: nothing at the old date,
+        # exactly the original row at the new date with scores intact.
+        assert (
+            session.query(DailyRanking)
+            .filter(DailyRanking.date == "2026-05-20")
+            .count()
+            == 0
+        )
+        moved = (
+            session.query(DailyRanking).filter(DailyRanking.date == "2026-05-25").one()
+        )
+        assert moved.quality_score == 50.0
+        assert moved.overall_score == 50.0
     finally:
         session.close()
         schema._engine = None
