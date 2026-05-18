@@ -322,19 +322,21 @@ def get_upcoming_games(session: Session, start_date: str) -> list[Game]:
 
 
 def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]:
-    """Get all completed regular-season + postseason games for a season.
+    """Completed regular-season + postseason games for a season.
 
-    Preseason (`season_type=1`) is excluded — these are exhibitions and
-    must not feed standings, Monte Carlo, importance scoring, or any
-    other competitive-season computation. NULL `season_type` stays
-    included for backward compatibility with rows ingested before that
-    column existed.
+    `season_type IN (2, 3)` is required — NULL is *excluded* here even
+    though the archive queries tolerate it. The reason: this query feeds
+    standings + Monte Carlo + importance scoring, and a partial /
+    degraded ESPN backfill response can leave legacy preseason rows
+    NULL. The NULL-tolerant filter would silently count those as
+    competitive results. The archive is user-facing display so it
+    keeps the looser filter; standings must be exact.
     """
     return (
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
-        .filter(or_(Game.season_type.is_(None), Game.season_type != 1))
+        .filter(Game.season_type.in_([2, 3]))
         .order_by(Game.date, Game.time)
         .all()
     )
