@@ -152,8 +152,6 @@ def _dedupe_games_by_espn_id(conn) -> int:
     there, so the pre-game quality / importance / overall scores
     follow the game. They're deleted only when the survivor key
     already has a ranking (the more-current row takes precedence).
-
-    Returns the count of rows deleted.
     """
     dup_ids = conn.execute(
         text(

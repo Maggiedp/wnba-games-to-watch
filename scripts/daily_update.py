@@ -191,6 +191,11 @@ def backfill_missing_season_types(session) -> None:
     """
     from src.db.schema import Game
 
+    # Count is over-inclusive on purpose: includes upcoming games with
+    # NULL season_type too. Daily ingest populates season_type for new
+    # rows, so this only stays non-zero while legacy rows remain — and
+    # while it's non-zero, get_completed_games stays in degrade-gracefully
+    # mode (NULL-tolerant). Both flips together once the legacy set drains.
     null_count = (
         session.query(Game)
         .filter(Game.date.like("2026-%"))
@@ -244,9 +249,10 @@ def populate_excitement_for_recent_completions(
     0.0 would be indistinguishable from a true blowout score and would never
     be retried since the retry query filters on NULL.
 
-    `limit` caps retries per run (newest games first) so a backlog of
-    permanently-failing PBP responses can't stall the daily job. Pass
-    `limit=None` from the one-shot backfill script to process everything.
+    `limit` caps retries per run (least-recently-attempted first, so
+    permanently-failing games rotate to the back instead of starving
+    the rest of the queue). Pass `limit=None` from the one-shot
+    backfill script to process everything.
     `timeout` is per ESPN call; the default is shorter than the live-WP
     panel default since one slow game shouldn't hold up the daily run.
     """

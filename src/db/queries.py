@@ -9,6 +9,13 @@ from sqlalchemy.orm import Session
 
 from src.db.schema import DailyRanking, Game, PlayoffProbability, SeasonConfig, Team
 
+# Reused predicate: include regular-season (2) + postseason (3) + legacy
+# NULL season_type rows; exclude only known preseason (1). Used by the
+# user-facing archive queries. `get_completed_games` (which feeds
+# standings) sometimes uses a stricter IN (2, 3) filter — see its
+# docstring for the conditional behavior.
+_NOT_PRESEASON = or_(Game.season_type.is_(None), Game.season_type != 1)
+
 
 def upsert_team(
     session: Session,
@@ -74,12 +81,10 @@ def upsert_game(
 ) -> Game:
     """Upsert a game (insert if not exists, update result if it has been played).
 
-    `is_complete` is an explicit completion flag from the caller. Pass True
-    to mark a game final (in which case winner_id + final scores must be
-    set), False to clear a previously-stored completion (handles the rare
-    case where ESPN un-finalizes a game — postponed, protested, or a data
-    correction). None (default) means "don't touch completion fields" —
-    used by legacy/partial-update callers.
+    `is_complete` only acts on False — pass it to clear a previously-
+    stored completion when ESPN un-finalizes a game (postponed,
+    canceled, rescheduled). True and None are equivalent: finalization
+    is driven by `winner_id is not None`, not by the flag.
     """
     # Identity preference: espn_id (stable across reschedules) → fall back
     # to (date, team_a_id, team_b_id) for legacy rows without an espn_id.
@@ -351,7 +356,7 @@ def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]
     if null_count == 0:
         base = base.filter(Game.season_type.in_([2, 3]))
     else:
-        base = base.filter(or_(Game.season_type.is_(None), Game.season_type != 1))
+        base = base.filter(_NOT_PRESEASON)
     return base.order_by(Game.date, Game.time).all()
 
 
@@ -377,9 +382,7 @@ def get_completed_games_missing_excitement(
         .filter(Game.winner_id.isnot(None))
         .filter(Game.excitement_index.is_(None))
         .filter(Game.espn_id.isnot(None))
-        # Exclude preseason (season_type=1); NULL stays included for
-        # backward compatibility with rows ingested before the column existed.
-        .filter(or_(Game.season_type.is_(None), Game.season_type != 1))
+        .filter(_NOT_PRESEASON)
         # `IS NOT NULL` returns 0 for NULL and 1 for set; ASC puts NULL
         # (never-attempted) ahead of any timestamp, portably across SQLite
         # and Postgres. Then by attempt timestamp ASC (oldest first), then
@@ -421,7 +424,7 @@ def get_games_for_excitement_refresh(
         .filter(Game.excitement_index.isnot(None))
         .filter(Game.excitement_computed_at.isnot(None))
         .filter(Game.excitement_computed_at >= cutoff)
-        .filter(or_(Game.season_type.is_(None), Game.season_type != 1))
+        .filter(_NOT_PRESEASON)
         .order_by(
             Game.excitement_last_attempt_at.isnot(None),
             Game.excitement_last_attempt_at.asc(),
@@ -520,9 +523,7 @@ def get_completed_rankings(
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
-        # Exclude preseason exhibitions from the user-facing archive;
-        # NULL stays included for legacy rows ingested before this column.
-        .filter(or_(Game.season_type.is_(None), Game.season_type != 1))
+        .filter(_NOT_PRESEASON)
     )
     if broadcaster is not None:
         q = q.filter(Game.broadcaster == broadcaster)

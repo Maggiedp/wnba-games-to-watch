@@ -38,21 +38,11 @@ class GameStatus:
     RESCHEDULED = "STATUS_RESCHEDULED"
 
 
-# Terminal statuses that explicitly mean a previously-final game is no
-# longer final. ONLY these clear stored completion state:
-#   POSTPONED   — game deferred to a future date.
-#   CANCELED    — game won't happen.
-#   RESCHEDULED — moved to a new date.
-#
-# STATUS_SCHEDULED and STATUS_IN_PROGRESS are deliberately NOT in this
-# set even though they're "non-final" — for an already-stored final, a
-# stale or partially rolled-back ESPN payload reporting scheduled /
-# in-progress is more likely a transient glitch than a real un-final.
-# Erasing real completion state on those would lose archive entries on
-# every ESPN cache hiccup.
-#
-# STATUS_UNKNOWN is also excluded — that's the parser fallback for
-# malformed responses.
+# Terminal statuses that clear stored completion. STATUS_SCHEDULED,
+# STATUS_IN_PROGRESS, and STATUS_UNKNOWN are deliberately excluded —
+# for an already-stored final, those are more likely a transient ESPN
+# glitch than a real un-finalization, and erasing real completion
+# state on every cache hiccup would lose archive entries.
 UN_FINALIZE_STATUSES = frozenset(
     {
         GameStatus.POSTPONED,
