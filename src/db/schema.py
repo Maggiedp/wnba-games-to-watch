@@ -132,20 +132,26 @@ def get_database_url() -> str:
 def _dedupe_games_by_espn_id(conn) -> int:
     """Merge duplicate non-null espn_id rows into a single survivor.
 
-    Realistic scenario this guards against: a pre-this-branch reschedule
-    where ESPN moved an event to a new date. The old upsert_game matched
-    by (date, team_a, team_b), so it inserted a fresh row at the new
-    date — same espn_id, no completion data — while the old completed
-    row sat at the original date. A blind MAX(id) dedupe would keep the
-    newer (empty) row and drop the older (completed) one, silently
-    losing real data.
+    Realistic scenario: a pre-this-branch reschedule where ESPN moved
+    an event. The old upsert_game matched by (date, team_a, team_b), so
+    it inserted a fresh row at the new date — same espn_id — while the
+    old row sat at the original date.
 
-    Survivor selection prefers rows that already carry completion state
-    (winner_id, then excitement_index, then final_score_a present), and
-    falls back to id DESC. Any non-null field on a doomed row is copied
-    onto the survivor before deletion. Stale DailyRanking rows keyed
-    by the doomed row's (date, team_a, team_b) are also deleted, since
-    they would otherwise become phantoms in the upcoming list.
+    The NEWER row (max id) is authoritative for *schedule identity*
+    (date, teams, season_type) — it represents the corrected event.
+    Completion fields (winner_id, scores, excitement_*) are only kept
+    from the survivor itself; we don't merge stale completion in from
+    older rows, because if the most recent upsert is non-final that
+    IS the truth (the game un-finalized on reschedule). If the survivor
+    IS final and missing nullable completion fields, we backfill from
+    older rows so we don't lose excitement_index that was computed
+    before the reschedule.
+
+    DailyRanking rows keyed by a doomed row's (date, team_a, team_b)
+    are re-keyed to the survivor's key when no ranking already exists
+    there, so the pre-game quality / importance / overall scores
+    follow the game. They're deleted only when the survivor key
+    already has a ranking (the more-current row takes precedence).
 
     Returns the count of rows deleted.
     """
@@ -158,15 +164,10 @@ def _dedupe_games_by_espn_id(conn) -> int:
     if not dup_ids:
         return 0
     deleted = 0
-    merge_fields = (
-        "winner_id",
-        "final_score_a",
-        "final_score_b",
+    nullable_completion_fields = (
         "excitement_index",
         "excitement_computed_at",
         "excitement_last_attempt_at",
-        "broadcaster",
-        "time",
     )
     for (espn_id,) in dup_ids:
         rows = conn.execute(
@@ -174,47 +175,72 @@ def _dedupe_games_by_espn_id(conn) -> int:
                 "SELECT id, team_a_id, team_b_id, date, time, broadcaster, "
                 "winner_id, final_score_a, final_score_b, excitement_index, "
                 "excitement_computed_at, excitement_last_attempt_at "
-                "FROM games WHERE espn_id = :espn_id "
-                "ORDER BY "
-                "  CASE WHEN winner_id IS NULL THEN 1 ELSE 0 END, "
-                "  CASE WHEN excitement_index IS NULL THEN 1 ELSE 0 END, "
-                "  CASE WHEN final_score_a IS NULL THEN 1 ELSE 0 END, "
-                "  id DESC"
+                "FROM games WHERE espn_id = :espn_id ORDER BY id DESC"
             ),
             {"espn_id": espn_id},
         ).fetchall()
-        survivor = rows[0]
-        merged: dict = {f: getattr(survivor, f) for f in merge_fields}
-        for r in rows[1:]:
-            for f in merge_fields:
-                if merged[f] is None or merged[f] == "":
-                    rv = getattr(r, f)
-                    if rv is not None and rv != "":
-                        merged[f] = rv
-        conn.execute(
-            text(
-                "UPDATE games SET winner_id = :winner_id, "
-                "final_score_a = :final_score_a, "
-                "final_score_b = :final_score_b, "
-                "excitement_index = :excitement_index, "
-                "excitement_computed_at = :excitement_computed_at, "
-                "excitement_last_attempt_at = :excitement_last_attempt_at, "
-                "broadcaster = :broadcaster, time = :time "
-                "WHERE id = :id"
-            ),
-            {**merged, "id": survivor.id},
-        )
-        for r in rows[1:]:
-            key = (r.date, r.team_a_id, r.team_b_id)
-            survivor_key = (survivor.date, survivor.team_a_id, survivor.team_b_id)
-            if key != survivor_key:
+        survivor = rows[0]  # authoritative schedule identity
+        survivor_is_final = survivor.winner_id is not None
+        # Only merge completion-adjacent fields from older rows if the
+        # survivor still represents a final game; otherwise the schedule
+        # has un-finalized and stale completion must be discarded.
+        if survivor_is_final:
+            merged = {f: getattr(survivor, f) for f in nullable_completion_fields}
+            for r in rows[1:]:
+                for f in nullable_completion_fields:
+                    if merged[f] is None and getattr(r, f) is not None:
+                        merged[f] = getattr(r, f)
+            if any(
+                merged[f] != getattr(survivor, f) for f in nullable_completion_fields
+            ):
                 conn.execute(
                     text(
-                        "DELETE FROM daily_rankings WHERE date = :d "
+                        "UPDATE games SET "
+                        "excitement_index = :excitement_index, "
+                        "excitement_computed_at = :excitement_computed_at, "
+                        "excitement_last_attempt_at = :excitement_last_attempt_at "
+                        "WHERE id = :id"
+                    ),
+                    {**merged, "id": survivor.id},
+                )
+
+        # Re-key (or delete) doomed rows' DailyRankings, then drop the row.
+        survivor_key = (survivor.date, survivor.team_a_id, survivor.team_b_id)
+        for r in rows[1:]:
+            r_key = (r.date, r.team_a_id, r.team_b_id)
+            if r_key != survivor_key:
+                target_exists = conn.execute(
+                    text(
+                        "SELECT 1 FROM daily_rankings WHERE date = :d "
                         "AND team_a_id = :a AND team_b_id = :b"
                     ),
-                    {"d": r.date, "a": r.team_a_id, "b": r.team_b_id},
-                )
+                    {"d": survivor_key[0], "a": survivor_key[1], "b": survivor_key[2]},
+                ).fetchone()
+                if target_exists:
+                    conn.execute(
+                        text(
+                            "DELETE FROM daily_rankings WHERE date = :d "
+                            "AND team_a_id = :a AND team_b_id = :b"
+                        ),
+                        {"d": r_key[0], "a": r_key[1], "b": r_key[2]},
+                    )
+                else:
+                    conn.execute(
+                        text(
+                            "UPDATE daily_rankings SET date = :nd, "
+                            "team_a_id = :na, team_b_id = :nb "
+                            "WHERE date = :od AND team_a_id = :oa "
+                            "AND team_b_id = :ob"
+                        ),
+                        {
+                            "nd": survivor_key[0],
+                            "na": survivor_key[1],
+                            "nb": survivor_key[2],
+                            "od": r_key[0],
+                            "oa": r_key[1],
+                            "ob": r_key[2],
+                        },
+                    )
             conn.execute(
                 text("DELETE FROM games WHERE id = :id"),
                 {"id": r.id},

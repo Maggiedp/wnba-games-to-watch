@@ -287,13 +287,14 @@ def test_get_game_fields_returns_none_espn_id_for_missing(session, team_ids):
     assert gf.espn_id is None
 
 
-def test_init_db_dedupe_keeps_completion_data_over_higher_id(tmp_path, monkeypatch):
-    """When duplicate espn_id rows have asymmetric data — the older row
-    holds the real completion (winner, scores, excitement) and a newer
-    duplicate is empty (e.g. ESPN rescheduled and the old upsert inserted
-    a fresh row at the new date) — the dedupe must keep the row WITH the
-    completion data, not just MAX(id). A blind MAX(id) would discard the
-    actual game state."""
+def test_init_db_dedupe_un_finalize_reschedule_keeps_newer_state(tmp_path, monkeypatch):
+    """The realistic duplicate scenario: ESPN un-finalized + rescheduled
+    a game. The older row reflects the original (now-stale) final at the
+    original date; the newer row reflects the corrected schedule with
+    no completion data (game hasn't been replayed yet). The dedupe must
+    keep the newer row's schedule identity AND cleared completion —
+    keeping the older row would leave the archive sorting a non-game on
+    the wrong date as if it were a real result."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     from datetime import datetime
 
@@ -307,7 +308,7 @@ def test_init_db_dedupe_keeps_completion_data_over_higher_id(tmp_path, monkeypat
     engine = schema.get_engine()
     with engine.connect() as conn:
         conn.execute(text("DROP INDEX IF EXISTS uq_game_espn_id"))
-        # Row 101 — older, fully completed.
+        # Row 101 — older, stale completed result at the original date.
         now = datetime.now().isoformat()
         conn.execute(
             text(
@@ -319,8 +320,8 @@ def test_init_db_dedupe_keeps_completion_data_over_higher_id(tmp_path, monkeypat
             ),
             {"now": now},
         )
-        # Row 102 — newer (would be MAX(id)), but empty: the row a
-        # pre-this-branch reschedule would have inserted at the new date.
+        # Row 102 — newer, the corrected reschedule. Empty because the
+        # game hasn't been replayed at the new date yet.
         conn.execute(
             text(
                 "INSERT INTO games (id, team_a_id, team_b_id, date, time, "
@@ -341,16 +342,80 @@ def test_init_db_dedupe_keeps_completion_data_over_higher_id(tmp_path, monkeypat
         rows = session.query(Game).filter(Game.espn_id == "evt").all()
         assert len(rows) == 1
         g = rows[0]
-        # Survivor is row 101 (had completion data), not row 102 despite
-        # being lower id.
-        assert g.id == 101
-        assert g.winner_id == 1
-        assert g.final_score_a == 88
-        assert g.final_score_b == 82
+        # Survivor is row 102 (MAX(id), corrected schedule identity).
+        assert g.id == 102
+        assert g.date == "2026-05-25"
+        # Stale completion is dropped — survivor was non-final.
+        assert g.winner_id is None
+        assert g.final_score_a is None
+        assert g.final_score_b is None
+        assert g.excitement_index is None
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
+def test_init_db_dedupe_preserves_excitement_when_survivor_is_final(
+    tmp_path, monkeypatch
+):
+    """When duplicates exist and the SURVIVOR (max id) is already final,
+    nullable completion-cache fields (excitement_index, computed_at,
+    last_attempt_at) get merged in from older rows where the survivor
+    has NULL. This avoids losing an excitement_index that was computed
+    against the older row before the duplicate was created."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime
+
+    from sqlalchemy import text
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    engine = schema.get_engine()
+    with engine.connect() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS uq_game_espn_id"))
+        now = datetime.now().isoformat()
+        # Older row has excitement_index computed.
+        conn.execute(
+            text(
+                "INSERT INTO games (id, team_a_id, team_b_id, date, time, "
+                "broadcaster, espn_id, winner_id, final_score_a, "
+                "final_score_b, excitement_index, excitement_computed_at) "
+                "VALUES (101, 1, 2, '2026-05-20', '7:00 PM ET', 'ION', "
+                "'evt', 1, 88, 82, 5.4, :now)"
+            ),
+            {"now": now},
+        )
+        # Newer row is also final but missing excitement (recomputed
+        # fresh by a re-ingest path that didn't carry the cache).
+        conn.execute(
+            text(
+                "INSERT INTO games (id, team_a_id, team_b_id, date, time, "
+                "broadcaster, espn_id, winner_id, final_score_a, "
+                "final_score_b) VALUES "
+                "(102, 1, 2, '2026-05-20', '7:00 PM ET', 'ION', "
+                "'evt', 1, 88, 82)"
+            )
+        )
+        conn.commit()
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+
+    session = schema.get_session()
+    try:
+        from src.db.schema import Game
+
+        g = session.query(Game).filter(Game.espn_id == "evt").one()
+        assert g.id == 102  # newer row wins
+        assert g.winner_id == 1  # survivor's own completion preserved
+        # Excitement merged in from row 101 since survivor was final
+        # and had NULL excitement.
         assert g.excitement_index == 5.4
-        # Survivor's own date/teams preserved (the empty newer row's date
-        # would have been wrong post-merge).
-        assert g.date == "2026-05-20"
     finally:
         session.close()
         schema._engine = None
