@@ -1789,6 +1789,14 @@ _HOMEPAGE_HTML = f"""
             let openEspnId = null;
             let pollInterval = null;
 
+            // ESPN reports STATUS_HALFTIME between halves and STATUS_END_PERIOD
+            // between quarters. Both are "live" for rendering and polling.
+            function isLiveStatus(status) {{
+                return status === 'STATUS_IN_PROGRESS'
+                    || status === 'STATUS_HALFTIME'
+                    || status === 'STATUS_END_PERIOD';
+            }}
+
             function collapsePanel() {{
                 if (pollInterval) {{ clearInterval(pollInterval); pollInterval = null; }}
                 document.querySelectorAll('.wp-panel-row').forEach(el => el.remove());
@@ -1824,7 +1832,7 @@ _HOMEPAGE_HTML = f"""
                     }}
                     const data = await resp.json();
                     renderChartData(espnId, data, game);
-                    if (data.status === 'STATUS_IN_PROGRESS' && openEspnId === espnId) {{
+                    if (isLiveStatus(data.status) && openEspnId === espnId) {{
                         if (pollInterval) clearInterval(pollInterval);
                         pollInterval = setInterval(async () => {{
                             if (openEspnId !== espnId) {{ clearInterval(pollInterval); pollInterval = null; return; }}
@@ -1833,7 +1841,7 @@ _HOMEPAGE_HTML = f"""
                                 if (!r.ok) return;
                                 const d = await r.json();
                                 renderChartData(espnId, d, game);
-                                if (d.status === 'STATUS_FINAL') {{ clearInterval(pollInterval); pollInterval = null; }}
+                                if (!isLiveStatus(d.status)) {{ clearInterval(pollInterval); pollInterval = null; }}
                             }} catch (e) {{ console.warn('WP poll failed:', e); }}
                         }}, 30000);
                     }}
@@ -1867,10 +1875,18 @@ _HOMEPAGE_HTML = f"""
                     const scoreStr = (hs && as_) ? `${{homeAbbr}} ${{hs}}&ndash;${{as_}} ${{awayAbbr}}` : '';
                     if (data.status === 'STATUS_FINAL') {{
                         header = scoreStr ? `${{scoreStr}} &mdash; Final &middot; ${{wpLabel}}` : `Final &middot; ${{wpLabel}}`;
-                    }} else if (data.status === 'STATUS_IN_PROGRESS') {{
-                        const q = last.period <= 4 ? `Q${{last.period}}` : `OT`;
-                        const clk = last.clock ? ` ${{escapeHtml(last.clock)}}` : '';
-                        const gameState = scoreStr ? `${{scoreStr}} &middot; ${{q}}${{clk}}` : `${{q}}${{clk}}`;
+                    }} else if (isLiveStatus(data.status)) {{
+                        let gameLabel;
+                        if (data.status === 'STATUS_HALFTIME') {{
+                            gameLabel = 'Halftime';
+                        }} else if (data.status === 'STATUS_END_PERIOD') {{
+                            gameLabel = last.period <= 4 ? `End Q${{last.period}}` : `End OT`;
+                        }} else {{
+                            const q = last.period <= 4 ? `Q${{last.period}}` : `OT`;
+                            const clk = last.clock ? ` ${{escapeHtml(last.clock)}}` : '';
+                            gameLabel = `${{q}}${{clk}}`;
+                        }}
+                        const gameState = scoreStr ? `${{scoreStr}} &middot; ${{gameLabel}}` : gameLabel;
                         header = `${{gameState}} &mdash; ${{wpLabel}}`;
                     }} else {{
                         header = wpLabel;
