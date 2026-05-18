@@ -769,6 +769,85 @@ def test_upsert_game_rekeys_daily_ranking_on_reschedule(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
+def test_upsert_game_scheduled_status_preserves_stored_final(tmp_path, monkeypatch):
+    """STATUS_SCHEDULED and STATUS_IN_PROGRESS on an already-final game
+    must NOT clear stored completion. A stale or partially rolled-back
+    ESPN schedule payload reporting one of those for a previously-final
+    row is more likely a transient glitch than a real un-finalization.
+    Only POSTPONED / CANCELED / RESCHEDULED clear stored finals."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from datetime import datetime
+
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import upsert_game
+        from src.db.schema import Game
+
+        # Seed a fully-stored final.
+        now = datetime.now()
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="7:00 PM ET",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="ev",
+                excitement_index=5.0,
+                excitement_computed_at=now,
+            )
+        )
+        session.commit()
+
+        # Simulate fetch_and_store_games' tristate is_complete on a
+        # STATUS_SCHEDULED schedule payload (no winner_team, status not
+        # in UN_FINALIZE_STATUSES → is_complete=None).
+        upsert_game(
+            session,
+            team_a_id=1,
+            team_b_id=2,
+            date="2026-05-20",
+            time="7:00 PM ET",
+            broadcaster="ION",
+            winner_id=None,
+            final_score_a=None,
+            final_score_b=None,
+            espn_id="ev",
+            is_complete=None,
+        )
+        g = session.query(Game).filter(Game.espn_id == "ev").one()
+        # Completion preserved — STATUS_SCHEDULED is treated as transient.
+        assert g.winner_id == 1
+        assert g.final_score_a == 80 and g.final_score_b == 70
+        assert g.excitement_index == 5.0
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
+def test_un_finalize_statuses_excludes_scheduled_and_in_progress():
+    """UN_FINALIZE_STATUSES is the explicit allow-list for clearing
+    stored completion. SCHEDULED and IN_PROGRESS are deliberately NOT
+    in it so a stale/partial ESPN payload can't erase real archive
+    entries. Only POSTPONED, CANCELED, RESCHEDULED clear."""
+    from src.constants import UN_FINALIZE_STATUSES, GameStatus
+
+    assert GameStatus.POSTPONED in UN_FINALIZE_STATUSES
+    assert GameStatus.CANCELED in UN_FINALIZE_STATUSES
+    assert GameStatus.RESCHEDULED in UN_FINALIZE_STATUSES
+    assert GameStatus.SCHEDULED not in UN_FINALIZE_STATUSES
+    assert GameStatus.IN_PROGRESS not in UN_FINALIZE_STATUSES
+
+
 def test_fetch_and_store_unknown_status_preserves_stored_final(tmp_path, monkeypatch):
     """The daily schedule path must not destructively clear a stored final
     when ESPN returns STATUS_UNKNOWN (parser fallback for a malformed/
@@ -1025,14 +1104,17 @@ def test_refresh_preserves_completion_on_unknown_status(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
-def test_standings_query_excludes_null_after_partial_espn_backfill(
+def test_standings_query_degrades_gracefully_with_unrepaired_nulls(
     tmp_path, monkeypatch
 ):
-    """If ESPN returns a partial/empty schedule during the season_type
-    backfill (no exception raised), legacy NULL rows can survive the
-    repair attempt. The standings query must still exclude them so a
-    leftover preseason game can't corrupt standings / playoff odds /
-    importance scoring on the same daily run."""
+    """When the season_type backfill leaves rows unrepaired (e.g. ESPN
+    returned a partial/empty schedule), get_completed_games degrades
+    gracefully: it uses the looser NULL-tolerant filter so legacy
+    regular-season games don't drop out of standings. The trade-off is
+    that a legacy NULL preseason row might briefly count as competitive,
+    but losing real regular-season results would be worse. Once every
+    row has season_type populated, the strict IN (2, 3) filter
+    activates — see test_get_completed_games_uses_strict_filter_after_backfill."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     from src.db import schema
 
@@ -1090,11 +1172,13 @@ def test_standings_query_excludes_null_after_partial_espn_backfill(
         legacy = session.query(Game).filter(Game.espn_id == "legacy-preseason").one()
         assert legacy.season_type is None  # still unrepaired
 
-        # Despite the unrepaired NULL row, get_completed_games returns
-        # only the known regular-season game.
+        # Degrade-gracefully: the NULL row IS included alongside the
+        # known regular-season game so legacy regulars don't disappear
+        # from standings. Once backfill catches up, the strict filter
+        # activates (see other test).
         games = get_completed_games(session, season_year=2026)
         espn_ids = {g.espn_id for g in games}
-        assert espn_ids == {"real-reg"}
+        assert espn_ids == {"legacy-preseason", "real-reg"}
     finally:
         session.close()
         schema._engine = None
@@ -1181,16 +1265,11 @@ def test_backfill_season_type_repairs_legacy_nulls(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
-def test_get_completed_games_excludes_preseason_and_null_season_type(
-    tmp_path, monkeypatch
-):
-    """compute_standings consumes get_completed_games. Only regular-season
-    (2) + postseason (3) belong — NULL `season_type` is also excluded
-    here (unlike the archive queries) because a partial / degraded ESPN
-    backfill response could leave a legacy preseason row NULL, and a
-    NULL-tolerant standings filter would silently count it as a
-    competitive result. The archive keeps NULL tolerance for display
-    purposes; standings must be exact."""
+def test_get_completed_games_uses_strict_filter_after_backfill(tmp_path, monkeypatch):
+    """Once every row has season_type populated (no NULLs remain),
+    get_completed_games activates the strict `IN (2, 3)` filter. This
+    is the steady-state mode and the only one where standings are
+    guaranteed not to be polluted by a NULL row sneaking in."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     from src.db import schema
 
@@ -1202,11 +1281,11 @@ def test_get_completed_games_excludes_preseason_and_null_season_type(
         from src.db.queries import get_completed_games
         from src.db.schema import Game
 
+        # No NULL rows — backfill is complete.
         for date, espn_id, st in [
             ("2026-05-05", "pre", 1),
             ("2026-05-20", "reg", 2),
             ("2026-09-25", "post", 3),
-            ("2026-05-21", "legacy", None),
         ]:
             session.add(
                 Game(
@@ -1226,11 +1305,9 @@ def test_get_completed_games_excludes_preseason_and_null_season_type(
 
         games = get_completed_games(session, season_year=2026)
         espn_ids = {g.espn_id for g in games}
-        # Only known regular + postseason. NULL legacy and known
-        # preseason are both excluded — failing closed for standings.
+        # Strict filter: only known regular + postseason.
         assert espn_ids == {"reg", "post"}
         assert "pre" not in espn_ids
-        assert "legacy" not in espn_ids
     finally:
         session.close()
         schema._engine = None

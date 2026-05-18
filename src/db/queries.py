@@ -324,22 +324,35 @@ def get_upcoming_games(session: Session, start_date: str) -> list[Game]:
 def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]:
     """Completed regular-season + postseason games for a season.
 
-    `season_type IN (2, 3)` is required — NULL is *excluded* here even
-    though the archive queries tolerate it. The reason: this query feeds
-    standings + Monte Carlo + importance scoring, and a partial /
-    degraded ESPN backfill response can leave legacy preseason rows
-    NULL. The NULL-tolerant filter would silently count those as
-    competitive results. The archive is user-facing display so it
-    keeps the looser filter; standings must be exact.
+    Filter is conditional on backfill state:
+
+    * If any 2026 row still has `season_type IS NULL`, we're mid-backfill
+      (or backfill failed). Use the looser `IS NULL OR != 1` filter so
+      legacy regular-season games stay in standings — losing them would
+      corrupt wins/losses worse than a stray legacy preseason row would.
+    * Once all rows have `season_type` populated, switch to the strict
+      `IN (2, 3)` filter — fail-closed so a partial ESPN backfill that
+      leaves a row NULL can't sneak a preseason game in.
+
+    Archive queries (`get_completed_rankings` etc.) always use the
+    looser filter — they're user-facing display, so prefer inclusivity.
     """
-    return (
+    null_count = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.season_type.is_(None))
+        .count()
+    )
+    base = (
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
-        .filter(Game.season_type.in_([2, 3]))
-        .order_by(Game.date, Game.time)
-        .all()
     )
+    if null_count == 0:
+        base = base.filter(Game.season_type.in_([2, 3]))
+    else:
+        base = base.filter(or_(Game.season_type.is_(None), Game.season_type != 1))
+    return base.order_by(Game.date, Game.time).all()
 
 
 def get_completed_games_missing_excitement(
