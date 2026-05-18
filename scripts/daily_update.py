@@ -624,7 +624,13 @@ def main() -> int:
             # get_completed_games, which excludes preseason but tolerates
             # NULL season_type. Legacy NULL rows could otherwise feed
             # preseason wins/losses into standings until backfilled.
-            backfill_missing_season_types(session)
+            # Non-fatal: an ESPN outage here mustn't block the user-visible
+            # ranking computation. Worst case is standings see a stale
+            # preseason game for one more day until ESPN recovers.
+            try:
+                backfill_missing_season_types(session)
+            except Exception as e:
+                logger.warning(f"season_type backfill failed (non-fatal): {e}")
             elo_ratings = compute_elo_ratings()
             standings = compute_standings(session, elo_ratings)
             scored, playoff_probs = compute_daily_scores(session, games, standings)
