@@ -865,6 +865,86 @@ def test_refresh_preserves_completion_on_unknown_status(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
+def test_backfill_season_type_repairs_legacy_nulls(tmp_path, monkeypatch):
+    """Rows ingested before the season_type column existed have NULL
+    season_type after migration. The daily schedule refresh only fetches
+    yesterday-onward, so pre-deploy preseason finals would otherwise
+    keep slipping past the NULL-tolerant standings filter forever.
+    backfill_missing_season_types must repair those rows by re-fetching
+    the full season schedule keyed by espn_id."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+    try:
+        from src.db.queries import get_completed_games
+        from src.db.schema import Game
+
+        # Legacy rows: pre-deploy ingestion left season_type NULL.
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-05",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="legacy-pre",
+            )
+        )
+        session.add(
+            Game(
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-05-20",
+                time="",
+                broadcaster="ION",
+                winner_id=1,
+                final_score_a=80,
+                final_score_b=70,
+                espn_id="legacy-reg",
+            )
+        )
+        session.commit()
+
+        import scripts.daily_update as daily_update
+
+        # ESPN's full-season fetch returns these two events with their
+        # real season_types.
+        monkeypatch.setattr(
+            daily_update,
+            "fetch_games_for_range",
+            lambda start, end: [
+                {"event_id": "legacy-pre", "season_type": 1},
+                {"event_id": "legacy-reg", "season_type": 2},
+                # A game we never ingested — should be ignored, no insert.
+                {"event_id": "unknown", "season_type": 2},
+            ],
+        )
+        daily_update.backfill_missing_season_types(session)
+        session.expire_all()
+
+        pre = session.query(Game).filter(Game.espn_id == "legacy-pre").one()
+        reg = session.query(Game).filter(Game.espn_id == "legacy-reg").one()
+        assert pre.season_type == 1
+        assert reg.season_type == 2
+
+        # And now get_completed_games (which feeds standings) correctly
+        # filters the preseason game out.
+        ids = {g.espn_id for g in get_completed_games(session, season_year=2026)}
+        assert ids == {"legacy-reg"}
+        assert "legacy-pre" not in ids
+    finally:
+        session.close()
+        schema._engine = None
+        schema._session_factory = None
+
+
 def test_get_completed_games_excludes_preseason(tmp_path, monkeypatch):
     """compute_standings consumes get_completed_games; preseason results
     leaking in would corrupt wins/losses, head-to-head, Monte Carlo

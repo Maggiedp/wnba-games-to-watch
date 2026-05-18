@@ -179,6 +179,50 @@ def fetch_and_store_games(session) -> list[dict]:
     return games
 
 
+def backfill_missing_season_types(session) -> None:
+    """One-shot guard for rows ingested before the season_type column
+    existed. The schedule refresh only fetches yesterday-onward, so
+    pre-deploy games (notably preseason) would otherwise keep NULL
+    season_type forever and continue feeding standings via the
+    NULL-tolerant filter in get_completed_games.
+
+    Idempotent: a fast COUNT short-circuits after the first run leaves
+    no NULL rows for the current season.
+    """
+    from src.db.schema import Game
+
+    null_count = (
+        session.query(Game)
+        .filter(Game.date.like("2026-%"))
+        .filter(Game.season_type.is_(None))
+        .filter(Game.espn_id.isnot(None))
+        .count()
+    )
+    if null_count == 0:
+        return
+    logger.info(f"Backfilling season_type for {null_count} legacy rows")
+    parsed = fetch_games_for_range(date(2026, 4, 1), date(2026, 9, 30))
+    by_espn_id = {
+        g["event_id"]: g.get("season_type")
+        for g in parsed
+        if g.get("event_id") and g.get("season_type") is not None
+    }
+    updated = 0
+    for game in (
+        session.query(Game)
+        .filter(Game.date.like("2026-%"))
+        .filter(Game.season_type.is_(None))
+        .filter(Game.espn_id.isnot(None))
+        .all()
+    ):
+        st = by_espn_id.get(game.espn_id)
+        if st is not None:
+            game.season_type = st
+            updated += 1
+    session.commit()
+    logger.info(f"Backfilled season_type for {updated} games")
+
+
 DAILY_EXCITEMENT_RETRY_CAP = 50
 BACKFILL_ESPN_TIMEOUT_S = 5
 # How long after first compute we keep re-checking ESPN in case the PBP
@@ -576,6 +620,11 @@ def main() -> int:
         try:
             fetch_and_store_bpi_ratings(session)
             games = fetch_and_store_games(session)
+            # Must run BEFORE compute_standings — that path consumes
+            # get_completed_games, which excludes preseason but tolerates
+            # NULL season_type. Legacy NULL rows could otherwise feed
+            # preseason wins/losses into standings until backfilled.
+            backfill_missing_season_types(session)
             elo_ratings = compute_elo_ratings()
             standings = compute_standings(session, elo_ratings)
             scored, playoff_probs = compute_daily_scores(session, games, standings)
