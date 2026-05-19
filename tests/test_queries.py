@@ -101,7 +101,30 @@ def test_upsert_game_preserves_time_when_incoming_empty(session, team_ids):
     assert game.time == "7:00 PM ET"
 
 
-def test_upsert_playoff_probability_inserts(session, team_ids):
+def test_upsert_playoff_probability_inserts_with_all_columns(session, team_ids):
+    a_id, _ = team_ids
+    upsert_playoff_probability(
+        session,
+        date="2026-06-01",
+        team_id=a_id,
+        probability=0.72,
+        reach_semis_prob=0.55,
+        reach_finals_prob=0.30,
+        win_championship_prob=0.15,
+    )
+    record = (
+        session.query(PlayoffProbability)
+        .filter_by(date="2026-06-01", team_id=a_id)
+        .one()
+    )
+    assert abs(record.probability - 0.72) < 1e-6
+    assert abs(record.reach_semis_prob - 0.55) < 1e-6
+    assert abs(record.reach_finals_prob - 0.30) < 1e-6
+    assert abs(record.win_championship_prob - 0.15) < 1e-6
+
+
+def test_upsert_playoff_probability_inserts_legacy_signature(session, team_ids):
+    """Backwards-compat: positional/old-keyword call still inserts a row."""
     a_id, _ = team_ids
     upsert_playoff_probability(
         session, date="2026-06-01", team_id=a_id, probability=0.72
@@ -112,15 +135,29 @@ def test_upsert_playoff_probability_inserts(session, team_ids):
         .one()
     )
     assert abs(record.probability - 0.72) < 1e-6
+    assert record.reach_semis_prob is None
+    assert record.win_championship_prob is None
 
 
-def test_upsert_playoff_probability_updates(session, team_ids):
+def test_upsert_playoff_probability_updates_all_columns(session, team_ids):
     a_id, _ = team_ids
     upsert_playoff_probability(
-        session, date="2026-06-01", team_id=a_id, probability=0.72
+        session,
+        date="2026-06-01",
+        team_id=a_id,
+        probability=0.72,
+        reach_semis_prob=0.55,
+        reach_finals_prob=0.30,
+        win_championship_prob=0.15,
     )
     upsert_playoff_probability(
-        session, date="2026-06-01", team_id=a_id, probability=0.85
+        session,
+        date="2026-06-01",
+        team_id=a_id,
+        probability=0.85,
+        reach_semis_prob=0.60,
+        reach_finals_prob=0.32,
+        win_championship_prob=0.18,
     )
     records = (
         session.query(PlayoffProbability)
@@ -129,19 +166,34 @@ def test_upsert_playoff_probability_updates(session, team_ids):
     )
     assert len(records) == 1
     assert abs(records[0].probability - 0.85) < 1e-6
+    assert abs(records[0].reach_semis_prob - 0.60) < 1e-6
+    assert abs(records[0].reach_finals_prob - 0.32) < 1e-6
+    assert abs(records[0].win_championship_prob - 0.18) < 1e-6
 
 
-def test_get_playoff_probabilities_returns_dict(session, team_ids):
+def test_get_playoff_probabilities_returns_records(session, team_ids):
     a_id, b_id = team_ids
     upsert_playoff_probability(
-        session, date="2026-06-01", team_id=a_id, probability=0.72
+        session,
+        date="2026-06-01",
+        team_id=a_id,
+        probability=0.72,
+        reach_semis_prob=0.55,
+        reach_finals_prob=0.30,
+        win_championship_prob=0.15,
     )
     upsert_playoff_probability(
         session, date="2026-06-01", team_id=b_id, probability=0.33
     )
     result = get_playoff_probabilities(session, "2026-06-01")
-    assert result[a_id] == pytest.approx(0.72)
-    assert result[b_id] == pytest.approx(0.33)
+    assert result[a_id].make_playoffs_prob == pytest.approx(0.72)
+    assert result[a_id].reach_semis_prob == pytest.approx(0.55)
+    assert result[a_id].reach_finals_prob == pytest.approx(0.30)
+    assert result[a_id].win_championship_prob == pytest.approx(0.15)
+    # Legacy row (no round columns): NULLs become None.
+    assert result[b_id].make_playoffs_prob == pytest.approx(0.33)
+    assert result[b_id].reach_semis_prob is None
+    assert result[b_id].win_championship_prob is None
 
 
 def test_get_playoff_probabilities_empty_for_missing_date(session, team_ids):

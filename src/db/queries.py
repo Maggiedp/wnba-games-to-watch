@@ -643,13 +643,31 @@ def upsert_daily_ranking(
     return ranking
 
 
+@dataclass
+class PlayoffProbabilityRecord:
+    """In-memory record of one team's per-round playoff probabilities."""
+
+    make_playoffs_prob: float
+    reach_semis_prob: float | None
+    reach_finals_prob: float | None
+    win_championship_prob: float | None
+
+
 def upsert_playoff_probability(
     session: Session,
     date: str,
     team_id: int,
     probability: float,
+    reach_semis_prob: float | None = None,
+    reach_finals_prob: float | None = None,
+    win_championship_prob: float | None = None,
 ) -> PlayoffProbability:
-    """Upsert a team's playoff probability for a given date."""
+    """Upsert a team's playoff probabilities for a given date.
+
+    `probability` retains its original meaning: "make playoffs" probability.
+    Round-by-round columns are nullable; pass None to leave a column untouched
+    on update (only specified columns are written).
+    """
     record = (
         session.query(PlayoffProbability)
         .filter(PlayoffProbability.date == date, PlayoffProbability.team_id == team_id)
@@ -657,19 +675,42 @@ def upsert_playoff_probability(
     )
     if record:
         record.probability = probability
+        if reach_semis_prob is not None:
+            record.reach_semis_prob = reach_semis_prob
+        if reach_finals_prob is not None:
+            record.reach_finals_prob = reach_finals_prob
+        if win_championship_prob is not None:
+            record.win_championship_prob = win_championship_prob
     else:
-        record = PlayoffProbability(date=date, team_id=team_id, probability=probability)
+        record = PlayoffProbability(
+            date=date,
+            team_id=team_id,
+            probability=probability,
+            reach_semis_prob=reach_semis_prob,
+            reach_finals_prob=reach_finals_prob,
+            win_championship_prob=win_championship_prob,
+        )
         session.add(record)
     session.commit()
     return record
 
 
-def get_playoff_probabilities(session: Session, date: str) -> dict[int, float]:
-    """Return {team_id: probability} for all teams on the given date."""
+def get_playoff_probabilities(
+    session: Session, date: str
+) -> dict[int, PlayoffProbabilityRecord]:
+    """Return {team_id: PlayoffProbabilityRecord} for all teams on the given date."""
     records = (
         session.query(PlayoffProbability).filter(PlayoffProbability.date == date).all()
     )
-    return {r.team_id: r.probability for r in records}
+    return {
+        r.team_id: PlayoffProbabilityRecord(
+            make_playoffs_prob=r.probability,
+            reach_semis_prob=r.reach_semis_prob,
+            reach_finals_prob=r.reach_finals_prob,
+            win_championship_prob=r.win_championship_prob,
+        )
+        for r in records
+    }
 
 
 def get_importance_max_swing(session: Session, season_year: int) -> float | None:

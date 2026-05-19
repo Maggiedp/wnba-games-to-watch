@@ -73,6 +73,10 @@ def format_games_response(
     today = today_et()
     prob_by_team_id = get_playoff_probabilities(session, today)
 
+    def _make_playoffs_prob(team_id: int) -> float | None:
+        rec = prob_by_team_id.get(team_id)
+        return rec.make_playoffs_prob if rec is not None else None
+
     results = []
     for ranking in rankings:
         team_a = teams.get(ranking.team_a_id)
@@ -114,8 +118,8 @@ def format_games_response(
                 importance_score=ranking.importance_score,
                 overall_score=ranking.overall_score,
                 broadcaster=broadcaster,
-                team_a_playoff_prob=prob_by_team_id.get(ranking.team_a_id),
-                team_b_playoff_prob=prob_by_team_id.get(ranking.team_b_id),
+                team_a_playoff_prob=_make_playoffs_prob(ranking.team_a_id),
+                team_b_playoff_prob=_make_playoffs_prob(ranking.team_b_id),
                 win_prob_a=ranking.win_prob_a,
                 espn_id=espn_id,
                 game_status=game_status,
