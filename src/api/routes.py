@@ -48,12 +48,15 @@ class GameResponse(BaseModel):
 
 
 class PlayoffOddsResponse(BaseModel):
-    """Per-team playoff probability for the standings section."""
+    """Per-team round-by-round playoff probabilities for the standings section."""
 
     team: str
     abbreviation: str
     logo_url: str
-    probability: float  # 0.0–1.0
+    make_playoffs_prob: float  # 0.0–1.0
+    reach_semis_prob: float  # 0.0–1.0; 0 if not yet computed
+    reach_finals_prob: float  # 0.0–1.0
+    win_championship_prob: float  # 0.0–1.0
 
 
 def format_games_response(

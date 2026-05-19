@@ -260,28 +260,32 @@ def get_live_win_probability(espn_id: str = Query(..., pattern=_ESPN_ID_PATTERN)
 
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])
 async def get_playoff_odds(date: str = Query(default=None)):
-    """Return per-team playoff probabilities, sorted highest-first."""
+    """Return per-team round-by-round playoff probabilities.
+
+    Sorted by win_championship_prob desc, with team name as tiebreaker.
+    """
     if date is None:
         date = today_et()
     session = get_session()
     try:
-        prob_by_id = get_playoff_probabilities(session, date)
-        if not prob_by_id:
+        recs = get_playoff_probabilities(session, date)
+        if not recs:
             return []
-        teams = get_teams_by_ids(session, set(prob_by_id.keys()))
-        return sorted(
-            [
-                PlayoffOddsResponse(
-                    team=teams[tid].name,
-                    abbreviation=teams[tid].abbreviation or "",
-                    logo_url=teams[tid].logo_url or "",
-                    probability=prob_by_id[tid].make_playoffs_prob,
-                )
-                for tid in prob_by_id
-                if tid in teams
-            ],
-            key=lambda x: -x.probability,
-        )
+        teams = get_teams_by_ids(session, set(recs.keys()))
+        rows = [
+            PlayoffOddsResponse(
+                team=teams[tid].name,
+                abbreviation=teams[tid].abbreviation or "",
+                logo_url=teams[tid].logo_url or "",
+                make_playoffs_prob=recs[tid].make_playoffs_prob,
+                reach_semis_prob=recs[tid].reach_semis_prob or 0.0,
+                reach_finals_prob=recs[tid].reach_finals_prob or 0.0,
+                win_championship_prob=recs[tid].win_championship_prob or 0.0,
+            )
+            for tid in recs
+            if tid in teams
+        ]
+        return sorted(rows, key=lambda x: (-x.win_championship_prob, x.team))
     finally:
         session.close()
 
