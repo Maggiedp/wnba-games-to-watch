@@ -35,6 +35,16 @@ class TeamStanding:
         return self.wins / total if total > 0 else 0.0
 
 
+@dataclass
+class RoundProbabilities:
+    """Per-team probability of reaching each playoff round, from a single MC run."""
+
+    make_playoffs: dict[str, float] = field(default_factory=dict)
+    reach_semis: dict[str, float] = field(default_factory=dict)
+    reach_finals: dict[str, float] = field(default_factory=dict)
+    win_championship: dict[str, float] = field(default_factory=dict)
+
+
 def simulate_game(
     elo_a: float,
     elo_b: float,
@@ -57,9 +67,14 @@ def run_monte_carlo_simulation(
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     return_matrix: bool = False,
 ) -> (
-    dict[str, float] | tuple[dict[str, float], list[list[bool | None]], list[set[str]]]
+    RoundProbabilities
+    | tuple[RoundProbabilities, list[list[bool | None]], list[set[str]]]
 ):
-    """Run Monte Carlo simulations to compute playoff probabilities.
+    """Run Monte Carlo simulations to compute round-by-round playoff probabilities.
+
+    Each sim plays the regular season to completion, then plays out the
+    8-team bracket via src.scoring.playoffs.simulate_playoffs. Counters
+    are accumulated for each round and divided by num_simulations.
 
     Args:
         current_standings: {team_name: {"wins", "losses", "elo", ...}}.
@@ -70,15 +85,18 @@ def run_monte_carlo_simulation(
             playoff sets (needed for compute_importance_from_matrix).
 
     Returns:
-        If return_matrix=False: dict mapping team_name -> playoff_probability.
-        If return_matrix=True: (playoff_probs, outcome_matrix, playoff_sets)
+        If return_matrix=False: RoundProbabilities with per-team probs for each round.
+        If return_matrix=True: (RoundProbabilities, outcome_matrix, playoff_sets)
             outcome_matrix: list[list[bool]] shape (num_sims, num_remaining_games),
                 True = team_a won that game in that sim.
             playoff_sets: list[set[str]] shape (num_sims,),
                 set of team names that made the playoffs in that sim.
     """
     assert_all_teams_have_conferences(current_standings)
-    playoff_counts: dict[str, int] = defaultdict(int)
+    made_counts: dict[str, int] = defaultdict(int)
+    semi_counts: dict[str, int] = defaultdict(int)
+    final_counts: dict[str, int] = defaultdict(int)
+    champ_counts: dict[str, int] = defaultdict(int)
     outcome_matrix: list[list[bool]] = []
     playoff_sets: list[set[str]] = []
 
@@ -118,22 +136,40 @@ def run_monte_carlo_simulation(
         seeded = resolve_seeding(standings)
         playoff_team_set = set(seeded[:PLAYOFF_TEAMS])
         for team_name in playoff_team_set:
-            playoff_counts[team_name] += 1
+            made_counts[team_name] += 1
+
+        if len(playoff_team_set) == PLAYOFF_TEAMS:
+            # Local import avoids circular dependency (playoffs imports simulate_game).
+            from src.scoring.playoffs import simulate_playoffs  # noqa: PLC0415
+
+            bracket = simulate_playoffs(
+                seeded[:PLAYOFF_TEAMS], standings, home_advantage=home_advantage
+            )
+            for t in bracket["reached_semis"]:
+                semi_counts[t] += 1
+            for t in bracket["reached_finals"]:
+                final_counts[t] += 1
+            champ_counts[bracket["won_championship"]] += 1
 
         if return_matrix:
             outcome_matrix.append(game_outcomes)
             playoff_sets.append(playoff_team_set)
 
-    playoff_probs = {
-        name: count / num_simulations for name, count in playoff_counts.items()
-    }
-    for name in current_standings.keys():
-        if name not in playoff_probs:
-            playoff_probs[name] = 0.0
+    all_teams = list(current_standings.keys())
+
+    def _to_prob(counts: dict[str, int]) -> dict[str, float]:
+        return {n: counts.get(n, 0) / num_simulations for n in all_teams}
+
+    result = RoundProbabilities(
+        make_playoffs=_to_prob(made_counts),
+        reach_semis=_to_prob(semi_counts),
+        reach_finals=_to_prob(final_counts),
+        win_championship=_to_prob(champ_counts),
+    )
 
     if return_matrix:
-        return playoff_probs, outcome_matrix, playoff_sets
-    return playoff_probs
+        return result, outcome_matrix, playoff_sets
+    return result
 
 
 def compute_importance_swing(
@@ -172,7 +208,7 @@ def compute_importance_swing(
         games_without,
         num_simulations=num_simulations,
         home_advantage=home_advantage,
-    )
+    ).make_playoffs
 
     standings_b_wins = {name: dict(data) for name, data in current_standings.items()}
     standings_b_wins[team_b]["wins"] += 1
@@ -182,7 +218,7 @@ def compute_importance_swing(
         games_without,
         num_simulations=num_simulations,
         home_advantage=home_advantage,
-    )
+    ).make_playoffs
 
     total_swing = sum(
         abs(probs_a_win.get(name, 0.0) - probs_b_win.get(name, 0.0))

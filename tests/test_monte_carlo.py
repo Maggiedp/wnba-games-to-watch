@@ -7,7 +7,10 @@ teams land in the playoffs more often, etc.
 
 import random
 
+import pytest
+
 from src.scoring.monte_carlo import (
+    RoundProbabilities,
     TeamStanding,
     compute_importance_from_matrix,
     run_monte_carlo_simulation,
@@ -53,13 +56,11 @@ def test_run_monte_carlo_simulation():
         (_ALL_TEAMS[4], _ALL_TEAMS[5]),
     ]
 
-    probs = run_monte_carlo_simulation(standings, remaining_games, num_simulations=1000)
-
-    assert len(probs) == 13
-    for _, prob in probs.items():
+    result = run_monte_carlo_simulation(standings, remaining_games, num_simulations=1000)
+    assert len(result.make_playoffs) == 13
+    for _, prob in result.make_playoffs.items():
         assert 0.0 <= prob <= 1.0
-
-    assert probs[_ALL_TEAMS[0]] >= probs[_ALL_TEAMS[12]]
+    assert result.make_playoffs[_ALL_TEAMS[0]] >= result.make_playoffs[_ALL_TEAMS[12]]
 
 
 def test_team_standing_has_h2h_default_empty():
@@ -118,7 +119,7 @@ def test_run_monte_carlo_tracks_h2h_during_simulation():
     # No remaining games — playoffs decided entirely by current standings + tiebreakers.
     # 7 safe-in teams lock the top 7 seeds.  Sun and Liberty compete for seed 8.
     # Sun swept Liberty 3-0 → Sun should win H2H tiebreaker every time.
-    probs = run_monte_carlo_simulation(standings, [], num_simulations=200)
+    probs = run_monte_carlo_simulation(standings, [], num_simulations=200).make_playoffs
     assert probs["Connecticut Sun"] > probs["New York Liberty"], (
         f"Sun swept Liberty 3-0; Sun should win H2H tiebreaker, "
         f"got Sun={probs['Connecticut Sun']:.2f}, Liberty={probs['New York Liberty']:.2f}"
@@ -199,17 +200,18 @@ def test_return_matrix_shape():
     import random; random.seed(0)
     result = run_monte_carlo_simulation(_S3, _G2, num_simulations=50, return_matrix=True)
     assert isinstance(result, tuple) and len(result) == 3
-    probs, outcome_matrix, playoff_sets = result
+    round_probs, outcome_matrix, playoff_sets = result
+    assert isinstance(round_probs, RoundProbabilities)
     assert len(outcome_matrix) == 50
     assert all(len(row) == 2 for row in outcome_matrix)
     assert len(playoff_sets) == 50
 
 
-def test_return_matrix_false_returns_dict():
-    """Default (return_matrix=False) still returns a plain dict."""
+def test_return_matrix_false_returns_round_probabilities():
+    """Without return_matrix, returns RoundProbabilities directly."""
     import random; random.seed(0)
     result = run_monte_carlo_simulation(_S3, _G2, num_simulations=50)
-    assert isinstance(result, dict)
+    assert isinstance(result, RoundProbabilities)
 
 
 def test_return_matrix_probs_match_non_matrix():
@@ -219,10 +221,8 @@ def test_return_matrix_probs_match_non_matrix():
     probs_plain = run_monte_carlo_simulation(_S3, _G2, num_simulations=5000)
     random.seed(42)
     probs_matrix, _, _ = run_monte_carlo_simulation(_S3, _G2, num_simulations=5000, return_matrix=True)
-    for name in _S3:
-        assert abs(probs_plain[name] - probs_matrix[name]) < 0.03, (
-            f"{name}: plain={probs_plain[name]:.3f} matrix={probs_matrix[name]:.3f}"
-        )
+    for name in probs_plain.make_playoffs:
+        assert probs_plain.make_playoffs[name] == probs_matrix.make_playoffs[name]
 
 
 def test_playoff_sets_are_sets_of_team_names():
@@ -303,3 +303,62 @@ def test_compute_importance_from_matrix_empty_subset_returns_zero():
     games = [("Las Vegas Aces", "Indiana Fever"), ("New York Liberty", "Indiana Fever")]
     swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, games, ["Las Vegas Aces", "New York Liberty", "Indiana Fever"])
     assert swings[0] == 0.0  # b_won is empty — no split possible
+
+
+# ---------------------------------------------------------------------------
+# RoundProbabilities tests (Task 3)
+# ---------------------------------------------------------------------------
+
+
+def test_run_monte_carlo_returns_round_probabilities():
+    """Return type is now RoundProbabilities, not a plain dict."""
+    standings = {}
+    for i, name in enumerate(_ALL_TEAMS):
+        standings[name] = {
+            "wins": 20 - i * 2,
+            "losses": i,
+            "elo": 1600 - i * 20,
+        }
+    result = run_monte_carlo_simulation(standings, [], num_simulations=200)
+    assert isinstance(result, RoundProbabilities)
+    assert set(result.make_playoffs.keys()) == set(_ALL_TEAMS)
+    assert set(result.reach_semis.keys()) == set(_ALL_TEAMS)
+    assert set(result.reach_finals.keys()) == set(_ALL_TEAMS)
+    assert set(result.win_championship.keys()) == set(_ALL_TEAMS)
+
+
+def test_run_monte_carlo_round_probability_sums():
+    """Each round contributes its team count per sim, so summed probability
+    across teams equals the round size (8 / 4 / 2 / 1)."""
+    standings = {}
+    for i, name in enumerate(_ALL_TEAMS):
+        standings[name] = {
+            "wins": 20 - i * 2,
+            "losses": i,
+            "elo": 1600 - i * 20,
+        }
+    result = run_monte_carlo_simulation(standings, [], num_simulations=500)
+    assert sum(result.make_playoffs.values()) == pytest.approx(8.0, abs=0.01)
+    assert sum(result.reach_semis.values()) == pytest.approx(4.0, abs=0.01)
+    assert sum(result.reach_finals.values()) == pytest.approx(2.0, abs=0.01)
+    assert sum(result.win_championship.values()) == pytest.approx(1.0, abs=0.01)
+
+
+def test_run_monte_carlo_round_probabilities_are_monotone():
+    """For any team, P(make_playoffs) >= P(reach_semis) >= P(reach_finals) >= P(win_championship)."""
+    standings = {}
+    for i, name in enumerate(_ALL_TEAMS):
+        standings[name] = {
+            "wins": 20 - i * 2,
+            "losses": i,
+            "elo": 1600 - i * 20,
+        }
+    result = run_monte_carlo_simulation(standings, [], num_simulations=500)
+    for name in _ALL_TEAMS:
+        mp = result.make_playoffs[name]
+        sf = result.reach_semis[name]
+        fn = result.reach_finals[name]
+        ch = result.win_championship[name]
+        assert mp + 1e-9 >= sf
+        assert sf + 1e-9 >= fn
+        assert fn + 1e-9 >= ch

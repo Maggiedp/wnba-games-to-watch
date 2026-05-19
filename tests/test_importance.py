@@ -158,8 +158,8 @@ def test_importance_swing_direction():
         standings_7_wins, games_without, num_simulations=2000
     )
 
-    assert probs_if_6_wins[_T[6]] > probs_if_7_wins[_T[6]]
-    assert probs_if_7_wins[_T[7]] > probs_if_6_wins[_T[7]]
+    assert probs_if_6_wins.make_playoffs[_T[6]] > probs_if_7_wins.make_playoffs[_T[6]]
+    assert probs_if_7_wins.make_playoffs[_T[7]] > probs_if_6_wins.make_playoffs[_T[7]]
 
 
 def test_importance_swing_out_of_bounds_returns_zero():
