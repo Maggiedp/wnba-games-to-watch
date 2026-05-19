@@ -249,76 +249,71 @@ _HOMEPAGE_HTML = f"""
 
             /* ---------- Playoff Picture ---------- */
             .playoff-picture {{
-                background: var(--surface);
-                border-bottom: 1px solid var(--line);
-                padding: 20px 32px;
+                margin: 24px 0;
             }}
             .playoff-picture-inner {{
-                max-width: 1100px;
-                margin: 0 auto;
+                padding: 0;
             }}
             .playoff-picture-header {{
-                font-family: var(--body);
-                font-size: 0.75rem;
+                font-family: 'Fraunces', Georgia, serif;
+                font-size: 18px;
                 font-weight: 600;
-                letter-spacing: 0.08em;
+                margin-bottom: 8px;
+            }}
+            .playoff-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+            }}
+            .playoff-table th {{
+                text-align: right;
+                font-weight: 500;
+                color: var(--navy-3);
+                padding: 6px 8px;
+                font-size: 12px;
                 text-transform: uppercase;
-                color: var(--text-subtle);
-                margin-bottom: 14px;
+                letter-spacing: 0.04em;
+                border-bottom: 1px solid var(--navy-3);
             }}
-            .playoff-grid {{
-                display: grid;
-                grid-template-columns: repeat(2, 1fr);
-                gap: 6px 32px;
+            .playoff-table th.team-col {{
+                text-align: left;
             }}
-            .playoff-row {{
+            .playoff-table td {{
+                padding: 6px 8px;
+                border-bottom: 1px solid rgba(0,0,0,0.06);
+            }}
+            .playoff-table td.team-cell {{
                 display: flex;
                 align-items: center;
                 gap: 8px;
-                font-size: 0.82rem;
+            }}
+            .playoff-table td.prob-cell {{
+                text-align: right;
+                font-variant-numeric: tabular-nums;
+                background-position: left center;
+                background-repeat: no-repeat;
+            }}
+            .playoff-table tr.eliminated {{
+                opacity: 0.5;
             }}
             .playoff-logo {{
-                width: 20px;
-                height: 20px;
+                width: 22px;
+                height: 22px;
                 object-fit: contain;
                 flex-shrink: 0;
             }}
             .playoff-team-name {{
-                flex: 1;
-                min-width: 0;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                color: var(--text);
                 font-weight: 500;
             }}
-            .playoff-bar-track {{
-                width: 80px;
-                height: 4px;
-                background: var(--line);
-                border-radius: 2px;
-                flex-shrink: 0;
-            }}
-            .playoff-bar-fill {{
-                height: 100%;
-                border-radius: 2px;
-                background: var(--orange);
-                transition: width 0.3s ease;
-            }}
-            .playoff-pct {{
-                font-size: 0.78rem;
-                font-variant-numeric: tabular-nums;
-                color: var(--text-muted);
-                width: 30px;
-                text-align: right;
-                flex-shrink: 0;
-            }}
             @media (max-width: 768px) {{
-                .playoff-grid {{
-                    grid-template-columns: 1fr;
+                .playoff-table {{
+                    font-size: 13px;
+                }}
+                .playoff-table th, .playoff-table td {{
+                    padding: 5px 6px;
                 }}
                 .playoff-picture {{
-                    padding: 16px 20px;
+                    margin: 16px 0;
                 }}
             }}
 
@@ -1153,7 +1148,18 @@ _HOMEPAGE_HTML = f"""
         <div class="playoff-picture" id="playoff-picture" style="display:none">
             <div class="playoff-picture-inner">
                 <div class="playoff-picture-header">Playoff Picture &middot; Updated daily</div>
-                <div class="playoff-grid" id="playoff-grid"></div>
+                <table class="playoff-table" id="playoff-table">
+                    <thead>
+                        <tr>
+                            <th class="team-col">Team</th>
+                            <th>Playoffs</th>
+                            <th>Semis</th>
+                            <th>Finals</th>
+                            <th>Champ</th>
+                        </tr>
+                    </thead>
+                    <tbody id="playoff-tbody"></tbody>
+                </table>
             </div>
         </div>
 
@@ -1442,22 +1448,29 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function renderPlayoffPicture(odds) {{
-                const grid = document.getElementById('playoff-grid');
+                const tbody = document.getElementById('playoff-tbody');
                 const section = document.getElementById('playoff-picture');
-                grid.innerHTML = odds.map(t => {{
-                    const pct = Math.round(t.probability * 100);
+                tbody.innerHTML = odds.map(t => {{
+                    const mp = Math.round(t.make_playoffs_prob * 100);
+                    const sf = Math.round(t.reach_semis_prob * 100);
+                    const fn = Math.round(t.reach_finals_prob * 100);
+                    const ch = Math.round(t.win_championship_prob * 100);
+                    const eliminated = (mp === 0 && sf === 0 && fn === 0 && ch === 0);
                     const logoHtml = t.logo_url
                         ? `<img class="playoff-logo" src="${{escapeHtml(t.logo_url)}}" alt="" aria-hidden="true">`
                         : `<span class="playoff-logo"></span>`;
+                    const cell = (pct, label) => {{
+                        const fill = `linear-gradient(to right, rgba(255,107,0,0.20) ${{pct}}%, transparent ${{pct}}%)`;
+                        return `<td class="prob-cell" style="background: ${{fill}}" aria-label="${{pct}}% ${{label}}">${{pct}}%</td>`;
+                    }};
                     return `
-                        <div class="playoff-row">
-                            ${{logoHtml}}
-                            <span class="playoff-team-name">${{escapeHtml(t.team)}}</span>
-                            <div class="playoff-bar-track" aria-hidden="true">
-                                <div class="playoff-bar-fill" style="width:${{pct}}%"></div>
-                            </div>
-                            <span class="playoff-pct" aria-label="${{pct}}% playoff probability">${{pct}}%</span>
-                        </div>`;
+                        <tr${{eliminated ? ' class="eliminated"' : ''}}>
+                            <td class="team-cell">${{logoHtml}}<span class="playoff-team-name">${{escapeHtml(t.team)}}</span></td>
+                            ${{cell(mp, 'chance to make the playoffs')}}
+                            ${{cell(sf, 'chance to reach the semifinals')}}
+                            ${{cell(fn, 'chance to reach the finals')}}
+                            ${{cell(ch, 'chance to win the championship')}}
+                        </tr>`;
                 }}).join('');
                 section.style.display = '';
             }}
