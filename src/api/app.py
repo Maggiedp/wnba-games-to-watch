@@ -3,6 +3,9 @@
 import asyncio
 import logging
 import os
+import threading
+import time
+from collections import OrderedDict
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -17,6 +20,7 @@ from src.data.espn_api import (
     today_et,
 )
 from src.db.queries import (
+    get_all_known_espn_ids,
     get_completed_rankings,
     get_daily_rankings,
     get_playoff_probabilities,
@@ -73,6 +77,27 @@ async def get_upcoming_games_endpoint(days: int = Query(7, ge=1, le=30)):  # noq
         session.close()
 
 
+@app.get("/api/games/live-status")
+def get_live_game_statuses():
+    """Return {espn_id: status} for today's games.
+
+    Split off from /api/games/upcoming so a slow ESPN scoreboard call can't
+    block the homepage's primary DB-backed response. The frontend fetches
+    this in parallel and uses it to drive live-WP hydration. Sync `def` so
+    FastAPI runs the blocking ESPN call in a threadpool.
+
+    Returns 502 on ESPN failure so the frontend can distinguish "ESPN is down"
+    from "no games today" (both would otherwise produce {}). The frontend
+    backs off and retries on 5xx so a transient outage doesn't strand the
+    page on stale pregame WP forever.
+    """
+    try:
+        return fetch_today_game_statuses(today_et())
+    except ESPNAPIError as e:
+        logger.warning("Failed to fetch today's game statuses from ESPN: %s", e)
+        raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
+
+
 @app.get("/api/games/completed", response_model=list[GameResponse])
 async def get_completed_games_endpoint():
     """Return all completed 2026 games sorted by excitement desc."""
@@ -102,10 +127,131 @@ async def get_broadcasters():
     return {"broadcasters": Broadcasters.ALL}
 
 
-@app.get("/api/live-wp")
-def get_live_win_probability(espn_id: str = Query(...)):
+# Short-lived cache for /api/live-wp. Without this, every browser polling
+# /api/live-wp every 30s during live games would hit ESPN directly — N viewers
+# × M live games × every 30s. The cache collapses concurrent viewers into one
+# ESPN call per game per TTL window, and the per-key fetch lock prevents a
+# cold-start stampede when multiple requests arrive simultaneously.
+#
+# Failures are negative-cached so an ESPN outage doesn't convoy N waiters
+# through N separate 10s timeouts; instead concurrent failing requests fail
+# fast from the cached error until the negative TTL expires.
+#
+# Cache is a bounded LRU so unique-id traffic (legitimate or hostile) can't
+# grow the per-id lock map indefinitely.
+_LIVE_WP_CACHE_TTL_S = 15
+_LIVE_WP_NEG_CACHE_TTL_S = 5  # transient ESPN errors retry quickly
+_LIVE_WP_NOT_FOUND_TTL_S = 60  # 404 is closer to permanent
+_LIVE_WP_CACHE_MAX_ENTRIES = 64  # ~5× a typical WNBA night's slate
+# Each entry is (expires_at, kind, value) where kind ∈ {'ok', 'err'}.
+# For 'ok', value is the payload dict; for 'err', value is the raised exception.
+_live_wp_cache: "OrderedDict[str, tuple[float, str, object]]" = OrderedDict()
+_live_wp_cache_lock = threading.Lock()
+_live_wp_fetch_locks: dict[str, threading.Lock] = {}
+
+
+def _read_live_wp_cache(espn_id: str):
+    """Return the cached entry if still fresh, else None. Raises cached errors."""
+    cached = _live_wp_cache.get(espn_id)
+    if not cached or cached[0] <= time.monotonic():
+        return None
+    _live_wp_cache.move_to_end(espn_id)
+    _, kind, value = cached
+    if kind == "err":
+        raise value  # type: ignore[misc]
+    return value
+
+
+def _store_live_wp_cache(espn_id: str, expires_at: float, kind: str, value: object):
+    """Insert/refresh an entry and enforce the size cap, dropping its fetch lock too.
+
+    Known limitation: if MAX_ENTRIES unique ids cycle through during a single
+    in-flight fetch, the in-flight id's lock can be evicted while a thread
+    still holds it. A subsequent request for that id would create a new lock
+    and allow a second concurrent ESPN fetch. Reaching this requires hostile
+    high-cardinality traffic; on this app (`--max-instances=1`, ~12 games per
+    night) it's not reachable in practice. A true single-flight design
+    (cache entry owns its lock, evict only when unlocked) is the correct fix
+    if production traffic ever justifies it.
+    """
+    _live_wp_cache[espn_id] = (expires_at, kind, value)
+    _live_wp_cache.move_to_end(espn_id)
+    while len(_live_wp_cache) > _LIVE_WP_CACHE_MAX_ENTRIES:
+        evicted_id, _ = _live_wp_cache.popitem(last=False)
+        _live_wp_fetch_locks.pop(evicted_id, None)
+
+
+def _fetch_live_wp_cached(espn_id: str) -> dict:
+    with _live_wp_cache_lock:
+        hit = _read_live_wp_cache(espn_id)
+        if hit is not None:
+            return hit
+        fetch_lock = _live_wp_fetch_locks.setdefault(espn_id, threading.Lock())
+
+    with fetch_lock:
+        # Re-check after acquiring per-key lock — another thread may have
+        # populated the cache (success or error) while we were waiting.
+        with _live_wp_cache_lock:
+            hit = _read_live_wp_cache(espn_id)
+            if hit is not None:
+                return hit
+        try:
+            payload = fetch_live_win_probability(espn_id)
+        except ESPNNotFoundError as e:
+            with _live_wp_cache_lock:
+                _store_live_wp_cache(
+                    espn_id, time.monotonic() + _LIVE_WP_NOT_FOUND_TTL_S, "err", e
+                )
+            raise
+        except ESPNAPIError as e:
+            with _live_wp_cache_lock:
+                _store_live_wp_cache(
+                    espn_id, time.monotonic() + _LIVE_WP_NEG_CACHE_TTL_S, "err", e
+                )
+            raise
+        with _live_wp_cache_lock:
+            _store_live_wp_cache(
+                espn_id, time.monotonic() + _LIVE_WP_CACHE_TTL_S, "ok", payload
+            )
+        return payload
+
+
+# ESPN event IDs are 8–10 digit integers. Pattern-validate to reject garbage
+# input cheaply.
+_ESPN_ID_PATTERN = r"^\d{1,12}$"
+
+# Allowlist of espn_ids known to the DB, refreshed periodically. The cache
+# stops an attacker from forcing one outbound 10s ESPN fetch per arbitrary
+# numeric id; only ids we already track ever reach ESPN. ~500 entries max
+# per season, so the set is tiny and the refresh DB query is cheap.
+_KNOWN_IDS_TTL_S = 60
+_known_espn_ids_cache: tuple[float, frozenset[str]] | None = None
+_known_espn_ids_lock = threading.Lock()
+
+
+def _get_known_espn_ids() -> frozenset[str]:
+    global _known_espn_ids_cache
+    with _known_espn_ids_lock:
+        cached = _known_espn_ids_cache
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+    # Refresh outside the lock so a slow query doesn't serialize readers.
+    session = get_session()
     try:
-        return fetch_live_win_probability(espn_id)
+        ids = frozenset(get_all_known_espn_ids(session))
+    finally:
+        session.close()
+    with _known_espn_ids_lock:
+        _known_espn_ids_cache = (time.monotonic() + _KNOWN_IDS_TTL_S, ids)
+    return ids
+
+
+@app.get("/api/live-wp")
+def get_live_win_probability(espn_id: str = Query(..., pattern=_ESPN_ID_PATTERN)):
+    if espn_id not in _get_known_espn_ids():
+        raise HTTPException(status_code=404, detail="Unknown game id")
+    try:
+        return _fetch_live_wp_cached(espn_id)
     except ESPNNotFoundError:
         raise HTTPException(status_code=404, detail="Game not found on ESPN")
     except ESPNAPIError as e:

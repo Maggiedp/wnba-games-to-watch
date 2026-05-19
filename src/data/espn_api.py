@@ -323,16 +323,11 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
 def fetch_today_game_statuses(game_date: str) -> dict[str, str]:
     """Return {espn_id: status_name} for all games on game_date (YYYY-MM-DD).
 
-    Returns empty dict if ESPN is unreachable.
+    Raises ESPNAPIError on failure — callers decide whether to surface or
+    swallow. (A previous version silently returned {} on error, which made
+    the response indistinguishable from "no games today" and broke retries.)
     """
-    try:
-        data = _get(
-            f"{SITE_API}/scoreboard", timeout=5, dates=game_date.replace("-", "")
-        )
-    except ESPNAPIError as e:
-        logger.warning(f"Failed to fetch game statuses for {game_date}: {e}")
-        return {}
-
+    data = _get(f"{SITE_API}/scoreboard", timeout=5, dates=game_date.replace("-", ""))
     result: dict[str, str] = {}
     for event in data.get("events", []):
         event_id = event.get("id", "")

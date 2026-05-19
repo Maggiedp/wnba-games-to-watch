@@ -268,6 +268,17 @@ def get_games_by_date(session: Session, date: str) -> list[Game]:
     return session.query(Game).filter(Game.date == date).order_by(Game.time).all()
 
 
+def get_all_known_espn_ids(session: Session) -> set[str]:
+    """Return every non-null espn_id in the games table.
+
+    Used to gate /api/live-wp so the endpoint only fans out to ESPN for ids
+    that exist in our database — otherwise an attacker enumerating numeric
+    ids could force one outbound 10s ESPN call per id.
+    """
+    rows = session.query(Game.espn_id).filter(Game.espn_id.isnot(None)).all()
+    return {r[0] for r in rows}
+
+
 @dataclass(frozen=True)
 class GameFields:
     """Per-game metadata joined into ranking responses. Broadcaster is

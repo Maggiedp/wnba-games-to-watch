@@ -1315,11 +1315,96 @@ _HOMEPAGE_HTML = f"""
                     populateFilters();
                     applyFilters();
                     loadCompleted();
+                    // Decoupled from the main payload: a slow ESPN scoreboard
+                    // call shouldn't delay first paint. Merge in when it lands.
+                    hydrateGameStatuses();
                 }} catch (error) {{
                     document.getElementById('featured-container').innerHTML = '';
                     document.getElementById('games-container').innerHTML =
                         `<div class="error">Error loading games: ${{escapeHtml(error.message)}}</div>`;
                 }}
+            }}
+
+            // Tracks which espn_ids appeared in the most recent live-status
+            // response (i.e. "today's slate"). Lets us know when to keep
+            // polling for tipoff transitions and when to stop.
+            let todaysEspnIds = new Set();
+            let statusRefreshInterval = null;
+
+            // Backoff sequence (seconds) for live-status retries on 5xx. Doubles
+            // until 5 min then holds, so a flaky ESPN scoreboard doesn't strand
+            // the page on stale pregame WP forever.
+            const STATUS_RETRY_BACKOFFS = [30, 60, 120, 300];
+            let statusRetryStep = 0;
+            let statusRetryTimer = null;
+
+            async function hydrateGameStatuses() {{
+                try {{
+                    const resp = await fetch('/api/games/live-status');
+                    if (!resp.ok) {{
+                        scheduleStatusRetry();
+                        return;
+                    }}
+                    const statuses = await resp.json();
+                    if (!statuses || typeof statuses !== 'object') return;
+                    statusRetryStep = 0;
+                    if (statusRetryTimer) {{
+                        clearTimeout(statusRetryTimer); statusRetryTimer = null;
+                    }}
+                    todaysEspnIds = new Set(Object.keys(statuses));
+                    let changed = false;
+                    for (const g of allGames) {{
+                        const next = g.espn_id ? statuses[g.espn_id] : null;
+                        if (next && g.game_status !== next) {{
+                            g.game_status = next;
+                            changed = true;
+                        }}
+                    }}
+                    if (changed) {{
+                        hydrateLiveWp();
+                        armLiveWpPoll();
+                    }}
+                    armStatusRefreshPoll();
+                }} catch (e) {{
+                    scheduleStatusRetry();
+                }}
+            }}
+
+            function scheduleStatusRetry() {{
+                if (statusRetryTimer) return;  // already scheduled
+                const delay = STATUS_RETRY_BACKOFFS[
+                    Math.min(statusRetryStep, STATUS_RETRY_BACKOFFS.length - 1)
+                ] * 1000;
+                statusRetryStep++;
+                statusRetryTimer = setTimeout(() => {{
+                    statusRetryTimer = null;
+                    hydrateGameStatuses();
+                }}, delay);
+            }}
+
+            // Periodically re-fetch live-status until every game on today's
+            // slate has tipped off (or otherwise left STATUS_SCHEDULED). Without
+            // this, a page opened pre-tipoff would never start live-WP polling
+            // because game_status would stay 'STATUS_SCHEDULED' forever.
+            function hasPendingTippoff() {{
+                if (todaysEspnIds.size === 0) return false;
+                return allGames.some(g =>
+                    g.espn_id && todaysEspnIds.has(g.espn_id) && g.game_status === 'STATUS_SCHEDULED'
+                );
+            }}
+
+            function armStatusRefreshPoll() {{
+                if (statusRefreshInterval) {{
+                    clearInterval(statusRefreshInterval); statusRefreshInterval = null;
+                }}
+                if (!hasPendingTippoff()) return;
+                statusRefreshInterval = setInterval(() => {{
+                    if (!hasPendingTippoff()) {{
+                        clearInterval(statusRefreshInterval); statusRefreshInterval = null;
+                        return;
+                    }}
+                    hydrateGameStatuses();
+                }}, 60000);
             }}
 
             async function fetchPlayoffOdds() {{
@@ -1432,6 +1517,8 @@ _HOMEPAGE_HTML = f"""
                 if (games.length === 0) {{
                     renderEmpty();
                     if (isCompletedExpanded()) renderCompleted();
+                    renderedEspnIds = new Set();
+                    clearLiveWpPoll();
                     return;
                 }}
 
@@ -1443,6 +1530,13 @@ _HOMEPAGE_HTML = f"""
                 }}
                 renderGames(rest, featured, 'games-container', 'Overall');
                 if (isCompletedExpanded()) renderCompleted();
+                renderedEspnIds = new Set(
+                    rest.concat(featured ? [featured] : [])
+                        .filter(g => g.espn_id)
+                        .map(g => g.espn_id)
+                );
+                hydrateLiveWp();
+                armLiveWpPoll();
             }}
 
             async function loadCompleted() {{
@@ -1519,8 +1613,9 @@ _HOMEPAGE_HTML = f"""
                     ? 'Not simulated'
                     : 'Playoff stakes from Monte Carlo';
                 const wp = winProbText(game);
+                const wpTag = game.espn_id ? ` data-row-wp-id="${{escapeHtml(game.espn_id)}}"` : '';
                 const winProbStat = wp
-                    ? `<span class="featured-stat"><span class="featured-stat-label">Win prob</span><span class="featured-stat-value">${{wp}}</span></span>`
+                    ? `<span class="featured-stat"><span class="featured-stat-label">Win prob</span><span class="featured-stat-value"${{wpTag}}>${{wp}}</span></span>`
                     : '';
 
                 container.innerHTML = `
@@ -1642,9 +1737,11 @@ _HOMEPAGE_HTML = f"""
                 return getScoreClass(game.overall_score);
             }}
 
-            function winProbText(game) {{
-                if (game.win_prob_a == null) return '';
-                const pctA = Math.round(game.win_prob_a * 100);
+            // Pass homePctOverride (0..1) for live data; omit for pregame (uses game.win_prob_a).
+            function winProbText(game, homePctOverride) {{
+                const homePct = homePctOverride != null ? homePctOverride : game.win_prob_a;
+                if (homePct == null) return '';
+                const pctA = Math.round(homePct * 100);
                 const pctB = 100 - pctA;
                 const a = escapeHtml(game.team_a_abbr || game.team_a);
                 const b = escapeHtml(game.team_b_abbr || game.team_b);
@@ -1653,7 +1750,9 @@ _HOMEPAGE_HTML = f"""
 
             function renderWinProb(game) {{
                 const text = winProbText(game);
-                return text ? `<div class="win-prob">${{text}}</div>` : '';
+                if (!text) return '';
+                const tag = game.espn_id ? ` data-row-wp-id="${{escapeHtml(game.espn_id)}}"` : '';
+                return `<div class="win-prob"${{tag}}>${{text}}</div>`;
             }}
 
             function renderFinalScore(game) {{
@@ -1795,6 +1894,62 @@ _HOMEPAGE_HTML = f"""
                 return status === 'STATUS_IN_PROGRESS'
                     || status === 'STATUS_HALFTIME'
                     || status === 'STATUS_END_PERIOD';
+            }}
+
+            // ---------- Live WP hydration (collapsed row) ----------
+            // The main table/card shows the *pregame* Elo WP by default
+            // (game.win_prob_a). For games currently in progress, fetch the
+            // latest live home_pct from /api/live-wp and swap in the live
+            // numbers so users don't see a stale pregame line.
+            let liveWpInterval = null;
+            // Tracks the espn_ids actually rendered after the most recent
+            // applyFilters() — so the poller doesn't keep hitting ESPN for
+            // games the user has filtered off-screen.
+            let renderedEspnIds = new Set();
+
+            function clearLiveWpPoll() {{
+                if (liveWpInterval) {{ clearInterval(liveWpInterval); liveWpInterval = null; }}
+            }}
+
+            function liveGamesInList() {{
+                return (allGames || []).filter(g =>
+                    g.espn_id && isLiveStatus(g.game_status) && renderedEspnIds.has(g.espn_id)
+                );
+            }}
+
+            async function hydrateOneLiveWp(game) {{
+                try {{
+                    const resp = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(game.espn_id)}}`);
+                    if (!resp.ok) return;
+                    const data = await resp.json();
+                    // ESPN may have flipped the game to a terminal state since
+                    // the last upcoming-list fetch; update local cache so the
+                    // poll stops including it.
+                    if (data.status) game.game_status = data.status;
+                    const plays = data.plays || [];
+                    if (plays.length === 0) return;
+                    const last = plays[plays.length - 1];
+                    const text = winProbText(game, last.home_pct);
+                    const sel = `[data-row-wp-id="${{CSS.escape(game.espn_id)}}"]`;
+                    document.querySelectorAll(sel).forEach(el => {{ el.innerHTML = text; }});
+                }} catch (e) {{
+                    console.warn('Live WP hydration failed:', e);
+                }}
+            }}
+
+            async function hydrateLiveWp() {{
+                const live = liveGamesInList();
+                if (live.length === 0) return;
+                await Promise.all(live.map(hydrateOneLiveWp));
+            }}
+
+            function armLiveWpPoll() {{
+                clearLiveWpPoll();
+                if (liveGamesInList().length === 0) return;
+                liveWpInterval = setInterval(() => {{
+                    if (liveGamesInList().length === 0) {{ clearLiveWpPoll(); return; }}
+                    hydrateLiveWp();
+                }}, 30000);
             }}
 
             function collapsePanel() {{

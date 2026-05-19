@@ -131,10 +131,12 @@ def test_fetch_today_game_statuses_returns_status_by_espn_id():
     }
 
 
-def test_fetch_today_game_statuses_returns_empty_on_error():
+def test_fetch_today_game_statuses_raises_on_error():
+    import pytest
+
     with patch("src.data.espn_api._get", side_effect=ESPNAPIError("down")):
-        result = fetch_today_game_statuses("2026-05-13")
-    assert result == {}
+        with pytest.raises(ESPNAPIError):
+            fetch_today_game_statuses("2026-05-13")
 
 
 def test_fetch_today_game_statuses_passes_correct_date_param():
