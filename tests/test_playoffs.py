@@ -8,6 +8,7 @@ from src.scoring.playoffs import (
     HOME_PATTERN_BO5,
     HOME_PATTERN_BO7,
     play_series,
+    reconstruct_bracket_state,
     simulate_playoffs,
 )
 
@@ -129,3 +130,190 @@ def test_simulate_playoffs_top_seed_wins_against_weak_field():
         simulate_playoffs(SEEDS, s)["won_championship"] == "S1" for _ in range(200)
     )
     assert champ_wins >= 170  # > 85%
+
+
+# ---------------------------------------------------------------------------
+# play_series resume + bracket-state tests
+# ---------------------------------------------------------------------------
+
+
+def test_play_series_resumes_from_starting_score():
+    """A Bo3 already 1-0 to the higher seed should need at most 2 more games."""
+    s = _standings({"H": 1500, "L": 1500})
+    call_count = {"n": 0}
+    real_random = random.random
+
+    def counting_random():
+        call_count["n"] += 1
+        return real_random()
+
+    random.random = counting_random
+    try:
+        play_series(
+            "H",
+            "L",
+            HOME_PATTERN_BO3,
+            s,
+            starting_higher_wins=1,
+            starting_lower_wins=0,
+        )
+    finally:
+        random.random = real_random
+
+    assert call_count["n"] <= 2
+
+
+def test_play_series_short_circuits_when_starting_score_decides():
+    """If the starting score already meets the win threshold, no simulation runs."""
+    s = _standings({"H": 1500, "L": 1500})
+    real_random = random.random
+    called = {"n": 0}
+
+    def boom():
+        called["n"] += 1
+        return real_random()
+
+    random.random = boom
+    try:
+        winner = play_series(
+            "H",
+            "L",
+            HOME_PATTERN_BO3,
+            s,
+            starting_higher_wins=2,
+            starting_lower_wins=0,
+        )
+    finally:
+        random.random = real_random
+
+    assert winner == "H"
+    assert called["n"] == 0
+
+
+def test_reconstruct_bracket_state_no_games_is_empty_qf_slots():
+    """Zero completed games → QF slots filled from seeded, SF/F empty, no winners."""
+    state = reconstruct_bracket_state(SEEDS, [])
+    for qf_id, hi_idx, lo_idx in [
+        ("qf1", 0, 7),
+        ("qf2", 3, 4),
+        ("qf3", 2, 5),
+        ("qf4", 1, 6),
+    ]:
+        assert state[qf_id].higher == SEEDS[hi_idx]
+        assert state[qf_id].lower == SEEDS[lo_idx]
+        assert state[qf_id].winner is None
+    assert state["sf1"].higher is None
+    assert state["f"].higher is None
+
+
+def test_reconstruct_bracket_state_decided_qf_only_no_sf_match():
+    """After a QF1 sweep with QF2 still open, SF1 slot stays empty."""
+    games = [
+        {"team_a": "S1", "team_b": "S8", "winner_team": "S1", "date": "2026-09-15"},
+        {"team_a": "S1", "team_b": "S8", "winner_team": "S1", "date": "2026-09-17"},
+    ]
+    state = reconstruct_bracket_state(SEEDS, games)
+    assert state["qf1"].winner == "S1"
+    assert state["qf1"].higher_wins == 2
+    assert state["sf1"].higher is None
+    assert state["sf1"].lower is None
+
+
+def test_reconstruct_bracket_state_in_progress_series():
+    """Bo3 at 1-1 should record 1-1, no winner."""
+    games = [
+        {"team_a": "S1", "team_b": "S8", "winner_team": "S1", "date": "2026-09-15"},
+        {"team_a": "S1", "team_b": "S8", "winner_team": "S8", "date": "2026-09-17"},
+    ]
+    state = reconstruct_bracket_state(SEEDS, games)
+    assert state["qf1"].higher_wins == 1
+    assert state["qf1"].lower_wins == 1
+    assert state["qf1"].winner is None
+
+
+def test_simulate_playoffs_honors_decided_qf():
+    """If S1 swept S8 in QF1, S8 never reaches semis in any sim."""
+    games = [
+        {"team_a": "S1", "team_b": "S8", "winner_team": "S1", "date": "2026-09-15"},
+        {"team_a": "S1", "team_b": "S8", "winner_team": "S1", "date": "2026-09-17"},
+    ]
+    state = reconstruct_bracket_state(SEEDS, games)
+    s = _equal_standings()
+    random.seed(0)
+    for _ in range(50):
+        result = simulate_playoffs(SEEDS, s, bracket_state=state)
+        assert "S1" in result["reached_semis"]
+        assert "S8" not in result["reached_semis"]
+
+
+def test_simulate_playoffs_resumes_in_progress_series():
+    """QF1 at 1-1: both teams still possible semifinalists across many runs."""
+    games = [
+        {"team_a": "S1", "team_b": "S8", "winner_team": "S1", "date": "2026-09-15"},
+        {"team_a": "S1", "team_b": "S8", "winner_team": "S8", "date": "2026-09-17"},
+    ]
+    state = reconstruct_bracket_state(SEEDS, games)
+    s = _equal_standings()
+    random.seed(0)
+    s1_wins = sum(
+        "S1" in simulate_playoffs(SEEDS, s, bracket_state=state)["reached_semis"]
+        for _ in range(200)
+    )
+    s8_wins = 200 - s1_wins
+    assert 0 < s1_wins < 200
+    assert 0 < s8_wins < 200
+
+
+def test_run_monte_carlo_eliminated_team_zero_downstream():
+    """End-to-end: a swept QF loser has 0% odds for semis/finals/championship."""
+    from src.scoring.monte_carlo import (
+        TeamStanding as TS,
+        run_monte_carlo_simulation,
+    )
+    from src.scoring.tiebreakers import resolve_seeding
+
+    real_names = [
+        "Atlanta Dream",
+        "Chicago Sky",
+        "Indiana Fever",
+        "Washington Mystics",
+        "Dallas Wings",
+        "Las Vegas Aces",
+        "Minnesota Lynx",
+        "New York Liberty",
+    ]
+    standings_dict = {
+        n: {"wins": 30 - i, "losses": i, "elo": 1600 - i * 20, "h2h": {}}
+        for i, n in enumerate(real_names)
+    }
+    ts = {
+        n: TS(name=n, wins=d["wins"], losses=d["losses"], elo=d["elo"])
+        for n, d in standings_dict.items()
+    }
+    seeded = resolve_seeding(ts)[:8]
+    eliminated = seeded[7]
+    advancing = seeded[0]
+    completed = [
+        {
+            "team_a": advancing,
+            "team_b": eliminated,
+            "winner_team": advancing,
+            "date": "2026-09-15",
+        },
+        {
+            "team_a": advancing,
+            "team_b": eliminated,
+            "winner_team": advancing,
+            "date": "2026-09-17",
+        },
+    ]
+    bracket_state = reconstruct_bracket_state(seeded, completed)
+
+    random.seed(7)
+    result = run_monte_carlo_simulation(
+        standings_dict, [], num_simulations=500, bracket_state=bracket_state
+    )
+    assert result.reach_semis[eliminated] == 0.0
+    assert result.reach_finals[eliminated] == 0.0
+    assert result.win_championship[eliminated] == 0.0
+    assert result.reach_semis[advancing] == 1.0

@@ -46,11 +46,12 @@ from src.scoring.excitement import compute_excitement
 from src.scoring.importance import normalize_importance_score
 from src.scoring.monte_carlo import (
     RoundProbabilities,
+    TeamStanding,
     compute_importance_from_matrix,
     run_monte_carlo_simulation,
 )
 from src.scoring.quality import compute_quality_score
-from src.scoring.tiebreakers import increment_h2h
+from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
 
 logging.basicConfig(
     level=logging.INFO,
@@ -455,6 +456,44 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
     return max(swings) if swings else 0.75
 
 
+def _build_current_bracket_state(games: list[dict], standings: dict):
+    """Build the observed BracketState from completed postseason games.
+
+    Returns None if no completed postseason games exist (pre-playoffs).
+    Otherwise the result respects actual playoff results: decided series
+    are locked, in-progress series resume from the current score.
+    """
+    completed_post = [
+        g
+        for g in games
+        if g.get("status") == GameStatus.FINAL
+        and g.get("season_type") == 3
+        and g.get("winner_team")
+    ]
+    if not completed_post:
+        return None
+
+    # `resolve_seeding` expects TeamStanding objects; daily_update keeps
+    # plain dicts. Coerce only for this one call.
+    ts_standings = {
+        name: TeamStanding(
+            name=name,
+            wins=d["wins"],
+            losses=d["losses"],
+            elo=d.get("elo", INITIAL_RATING),
+            h2h={opp: list(rec) for opp, rec in d.get("h2h", {}).items()},
+        )
+        for name, d in standings.items()
+    }
+    seeded = resolve_seeding(ts_standings)
+    if len(seeded) < PLAYOFF_TEAMS:
+        return None
+
+    from src.scoring.playoffs import reconstruct_bracket_state  # noqa: PLC0415
+
+    return reconstruct_bracket_state(seeded[:PLAYOFF_TEAMS], completed_post)
+
+
 def compute_daily_scores(
     session, games: list[dict], standings: dict
 ) -> tuple[list[dict], RoundProbabilities]:
@@ -495,6 +534,11 @@ def compute_daily_scores(
                 remaining_event_index[eid] = len(remaining_games)
             remaining_games.append((g["team_a"], g["team_b"]))
 
+    # If postseason is underway, thread observed bracket state through the sim:
+    # decided series use the real winner, in-progress series resume from the
+    # actual score. With no completed postseason games, this is a no-op.
+    bracket_state = _build_current_bracket_state(games, standings)
+
     logger.info(
         f"Running 10k Monte Carlo over {len(remaining_games)} remaining games..."
     )
@@ -503,6 +547,7 @@ def compute_daily_scores(
         remaining_games,
         num_simulations=10000,
         return_matrix=True,
+        bracket_state=bracket_state,
     )
 
     team_names = list(standings.keys())

@@ -66,6 +66,7 @@ def run_monte_carlo_simulation(
     num_simulations: int = 10000,
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     return_matrix: bool = False,
+    bracket_state=None,
 ) -> (
     RoundProbabilities
     | tuple[RoundProbabilities, list[list[bool | None]], list[set[str]]]
@@ -143,7 +144,10 @@ def run_monte_carlo_simulation(
             from src.scoring.playoffs import simulate_playoffs  # noqa: PLC0415
 
             bracket = simulate_playoffs(
-                seeded[:PLAYOFF_TEAMS], standings, home_advantage=home_advantage
+                seeded[:PLAYOFF_TEAMS],
+                standings,
+                home_advantage=home_advantage,
+                bracket_state=bracket_state,
             )
             for t in bracket["reached_semis"]:
                 semi_counts[t] += 1
