@@ -180,6 +180,44 @@ def test_compute_standings_populates_h2h(monkeypatch):
     assert standings["Las Vegas Aces"]["wins"] == 1
 
 
+def test_compute_standings_ignores_postseason_completions(monkeypatch):
+    """Completed postseason games (season_type=3) must not bump regular-season W/L
+    or H2H. Otherwise playoff wins would distort seeding mid-postseason."""
+    from unittest.mock import MagicMock
+    from scripts.daily_update import compute_standings
+
+    team_a = MagicMock(id=1, bpi_rating=5.0)
+    team_a.name = "New York Liberty"
+    team_b = MagicMock(id=2, bpi_rating=4.0)
+    team_b.name = "Las Vegas Aces"
+
+    # Regular-season: Liberty wins.
+    reg = MagicMock(team_a_id=1, team_b_id=2, winner_id=1, season_type=2)
+    # Postseason: Aces win — must be ignored.
+    post = MagicMock(team_a_id=2, team_b_id=1, winner_id=2, season_type=3)
+
+    monkeypatch.setattr(
+        "scripts.daily_update.get_all_teams", lambda s: [team_a, team_b]
+    )
+    monkeypatch.setattr(
+        "scripts.daily_update.get_completed_games",
+        lambda s, season_year=2026: [reg, post],
+    )
+    monkeypatch.setattr(
+        "scripts.daily_update.get_team_by_id",
+        lambda s, tid: {1: team_a, 2: team_b}[tid],
+    )
+
+    standings = compute_standings(session=None, elo_ratings={})
+
+    # Liberty 1-0, Aces 0-1 — postseason game does not contribute.
+    assert standings["New York Liberty"]["wins"] == 1
+    assert standings["New York Liberty"]["losses"] == 0
+    assert standings["Las Vegas Aces"]["wins"] == 0
+    assert standings["Las Vegas Aces"]["losses"] == 1
+    assert standings["New York Liberty"]["h2h"]["Las Vegas Aces"] == [1, 0]
+
+
 # ---------------------------------------------------------------------------
 # return_matrix tests (Task 1)
 # ---------------------------------------------------------------------------

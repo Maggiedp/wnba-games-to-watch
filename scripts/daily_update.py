@@ -410,6 +410,10 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
     }
     completed = get_completed_games(session, season_year=2026)
     for game in completed:
+        # Postseason wins/losses don't count toward regular-season seeding.
+        # get_completed_games returns season_type in (2, 3); skip 3 here.
+        if game.season_type == 3:
+            continue
         team_a = get_team_by_id(session, game.team_a_id)
         team_b = get_team_by_id(session, game.team_b_id)
         if not team_a or not team_b:
@@ -439,7 +443,7 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
         for team, info in standings.items()
     }
     remaining = [
-        (g["team_a"], g["team_b"]) for g in all_games if g.get("season_type", 2) != 1
+        (g["team_a"], g["team_b"]) for g in all_games if g.get("season_type", 2) == 2
     ]
     _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
         zero_standings, remaining, num_simulations=10000, return_matrix=True
@@ -479,11 +483,13 @@ def compute_daily_scores(
     random.seed(int(last_completed_date.replace("-", "")))
     logger.info(f"Monte Carlo seed: last completed game on {last_completed_date}")
 
-    # All non-final, non-preseason games form the simulation universe.
+    # Only regular-season (season_type == 2) games drive seeding. Postseason
+    # games (3) are simulated by the bracket sim; including them here would
+    # double-count playoff wins into regular-season standings.
     remaining_games = []
     remaining_event_index: dict[str, int] = {}
     for g in games:
-        if g.get("status") != GameStatus.FINAL and g.get("season_type", 2) != 1:
+        if g.get("status") != GameStatus.FINAL and g.get("season_type", 2) == 2:
             eid = g.get("event_id", "")
             if eid:
                 remaining_event_index[eid] = len(remaining_games)
