@@ -45,6 +45,7 @@ from src.scoring.elo import (
 from src.scoring.excitement import compute_excitement
 from src.scoring.importance import normalize_importance_score
 from src.scoring.monte_carlo import (
+    RoundProbabilities,
     compute_importance_from_matrix,
     run_monte_carlo_simulation,
 )
@@ -452,12 +453,12 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
 
 def compute_daily_scores(
     session, games: list[dict], standings: dict
-) -> tuple[list[dict], dict[str, float]]:
-    """Score upcoming games and return (scored_games, playoff_probs).
+) -> tuple[list[dict], RoundProbabilities]:
+    """Score upcoming games and return (scored_games, round_probabilities).
 
     Uses a single 10k-sim Monte Carlo run. Game importance is derived by
     splitting that run's outcome matrix — no additional simulations needed.
-    Playoff probabilities (one per team) are the aggregate of the same run.
+    Playoff probabilities (one per team per round) are the aggregate of the same run.
     """
     today = today_et()
 
@@ -468,7 +469,7 @@ def compute_daily_scores(
     ]
     if not upcoming_games:
         logger.info("No upcoming games to score")
-        return [], {}
+        return [], RoundProbabilities()
 
     # Seed with date of last completed game so scores are stable until new results arrive.
     last_completed_date = max(
@@ -491,7 +492,7 @@ def compute_daily_scores(
     logger.info(
         f"Running 10k Monte Carlo over {len(remaining_games)} remaining games..."
     )
-    playoff_probs, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+    round_probs, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
         standings,
         remaining_games,
         num_simulations=10000,
@@ -571,7 +572,7 @@ def compute_daily_scores(
             }
         )
 
-    return scored, playoff_probs
+    return scored, round_probs
 
 
 def store_daily_rankings(session, scored_games: list[dict]) -> None:
@@ -602,18 +603,24 @@ def store_daily_rankings(session, scored_games: list[dict]) -> None:
 
 
 def store_playoff_probabilities(
-    session, playoff_probs: dict[str, float], snapshot_date: str
+    session, round_probs: RoundProbabilities, snapshot_date: str
 ) -> None:
-    """Persist per-team playoff probabilities for a given date."""
+    """Persist per-team round-by-round playoff probabilities for a given date."""
     get_cached_team_id = _make_team_id_resolver(session)
     stored = 0
-    for team_name, prob in playoff_probs.items():
+    for team_name, mp_prob in round_probs.make_playoffs.items():
         team_id = get_cached_team_id(team_name)
         if not team_id:
             logger.warning(f"Skipping playoff prob for unknown team: {team_name}")
             continue
         upsert_playoff_probability(
-            session, date=snapshot_date, team_id=team_id, probability=prob
+            session,
+            date=snapshot_date,
+            team_id=team_id,
+            probability=mp_prob,
+            reach_semis_prob=round_probs.reach_semis.get(team_name),
+            reach_finals_prob=round_probs.reach_finals.get(team_name),
+            win_championship_prob=round_probs.win_championship.get(team_name),
         )
         stored += 1
     logger.info(f"Stored {stored} playoff probabilities for {snapshot_date}")
@@ -640,10 +647,10 @@ def main() -> int:
                 logger.warning(f"season_type backfill failed (non-fatal): {e}")
             elo_ratings = compute_elo_ratings()
             standings = compute_standings(session, elo_ratings)
-            scored, playoff_probs = compute_daily_scores(session, games, standings)
+            scored, round_probs = compute_daily_scores(session, games, standings)
             store_daily_rankings(session, scored)
             today = today_et()
-            store_playoff_probabilities(session, playoff_probs, today)
+            store_playoff_probabilities(session, round_probs, today)
             # Archive backfill runs LAST and bounded — a slow/failing ESPN
             # PBP API must not delay the user-visible ranking computation.
             try:
