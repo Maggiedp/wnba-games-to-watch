@@ -277,7 +277,6 @@ async def get_playoff_odds(date: str = Query(default=None)):
                 team=teams[tid].name,
                 abbreviation=teams[tid].abbreviation or "",
                 logo_url=teams[tid].logo_url or "",
-                probability=recs[tid].make_playoffs_prob,
                 make_playoffs_prob=recs[tid].make_playoffs_prob,
                 reach_semis_prob=recs[tid].reach_semis_prob or 0.0,
                 reach_finals_prob=recs[tid].reach_finals_prob or 0.0,

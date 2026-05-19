@@ -674,8 +674,7 @@ def test_filter_endpoint_mode_completed(tmp_path, monkeypatch):
 
 
 def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
-    """GET /api/playoff-odds returns 4 round probs (plus legacy `probability` alias),
-    sorted by win_championship_prob desc."""
+    """GET /api/playoff-odds returns 4 round probs sorted by win_championship_prob desc."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     from src.db import schema
 
@@ -724,16 +723,12 @@ def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
         "team",
         "abbreviation",
         "logo_url",
-        "probability",
         "make_playoffs_prob",
         "reach_semis_prob",
         "reach_finals_prob",
         "win_championship_prob",
     }
     assert rows[0]["make_playoffs_prob"] == pytest.approx(0.85)
-    assert rows[0]["probability"] == pytest.approx(
-        0.85
-    )  # legacy alias mirrors make_playoffs_prob
     assert rows[0]["win_championship_prob"] == pytest.approx(0.25)
     schema._engine = None
     schema._session_factory = None
