@@ -53,6 +53,7 @@ class PlayoffOddsResponse(BaseModel):
     team: str
     abbreviation: str
     logo_url: str
+    probability: float  # deprecated: alias of make_playoffs_prob, kept one release for back-compat
     make_playoffs_prob: float  # 0.0–1.0
     reach_semis_prob: float  # 0.0–1.0; 0 if not yet computed
     reach_finals_prob: float  # 0.0–1.0

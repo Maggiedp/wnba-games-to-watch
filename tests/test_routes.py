@@ -671,3 +671,69 @@ def test_filter_endpoint_mode_completed(tmp_path, monkeypatch):
     assert [r["date"] for r in rows] == ["2026-05-10"]
     schema._engine = None
     schema._session_factory = None
+
+
+def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
+    """GET /api/playoff-odds returns 4 round probs (plus legacy `probability` alias),
+    sorted by win_championship_prob desc."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+
+    from src.db.queries import upsert_playoff_probability, upsert_team
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a_id = session.query(schema.Team).filter_by(name="Aces").one().id
+    b_id = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    today = today_et()
+    upsert_playoff_probability(
+        session,
+        date=today,
+        team_id=a_id,
+        probability=0.85,
+        reach_semis_prob=0.60,
+        reach_finals_prob=0.40,
+        win_championship_prob=0.25,
+    )
+    upsert_playoff_probability(
+        session,
+        date=today,
+        team_id=b_id,
+        probability=0.90,
+        reach_semis_prob=0.65,
+        reach_finals_prob=0.30,
+        win_championship_prob=0.10,
+    )
+    session.close()
+
+    from fastapi.testclient import TestClient
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/playoff-odds")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert [r["team"] for r in rows] == ["Aces", "Liberty"]
+    assert set(rows[0].keys()) == {
+        "team",
+        "abbreviation",
+        "logo_url",
+        "probability",
+        "make_playoffs_prob",
+        "reach_semis_prob",
+        "reach_finals_prob",
+        "win_championship_prob",
+    }
+    assert rows[0]["make_playoffs_prob"] == pytest.approx(0.85)
+    assert rows[0]["probability"] == pytest.approx(
+        0.85
+    )  # legacy alias mirrors make_playoffs_prob
+    assert rows[0]["win_championship_prob"] == pytest.approx(0.25)
+    schema._engine = None
+    schema._session_factory = None
