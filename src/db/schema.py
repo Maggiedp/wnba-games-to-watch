@@ -100,6 +100,9 @@ class PlayoffProbability(Base):
     date = Column(String(10), nullable=False)  # YYYY-MM-DD
     team_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
     probability = Column(Float, nullable=False)
+    reach_semis_prob = Column(Float, nullable=True)
+    reach_finals_prob = Column(Float, nullable=True)
+    win_championship_prob = Column(Float, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     __table_args__ = (
@@ -267,6 +270,9 @@ def init_db():
                 "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
                 "ALTER TABLE games ADD COLUMN excitement_computed_at DATETIME",
                 "ALTER TABLE games ADD COLUMN season_type INTEGER",
+                "ALTER TABLE playoff_probabilities ADD COLUMN reach_semis_prob FLOAT",
+                "ALTER TABLE playoff_probabilities ADD COLUMN reach_finals_prob FLOAT",
+                "ALTER TABLE playoff_probabilities ADD COLUMN win_championship_prob FLOAT",
             ]:
                 try:
                     conn.execute(text(stmt))
@@ -352,6 +358,24 @@ def init_db():
             )
             conn.execute(
                 text("ALTER TABLE games ADD COLUMN IF NOT EXISTS season_type INTEGER")
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE playoff_probabilities ADD COLUMN IF NOT EXISTS "
+                    "reach_semis_prob FLOAT"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE playoff_probabilities ADD COLUMN IF NOT EXISTS "
+                    "reach_finals_prob FLOAT"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE playoff_probabilities ADD COLUMN IF NOT EXISTS "
+                    "win_championship_prob FLOAT"
+                )
             )
             _dedupe_games_by_espn_id(conn)
             conn.execute(
