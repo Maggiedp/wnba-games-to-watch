@@ -878,6 +878,14 @@ _HOMEPAGE_HTML = f"""
                 font-style: italic;
                 color: var(--navy-3);
             }}
+            .completed-header-row {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 8px;
+            }}
+            .completed-header-row .completed-heading {{ margin: 24px 0 16px; }}
             .footer {{
                 text-align: center;
                 padding: 28px 16px;
@@ -1188,9 +1196,15 @@ _HOMEPAGE_HTML = f"""
                     <span class="completed-toggle-chevron" aria-hidden="true">&#9662;</span>
                 </button>
                 <div id="completed-content" hidden>
-                    <h2 id="completed-heading" class="completed-heading">
-                        Completed games <span class="completed-heading-sub">&middot; Sorted by excitement</span>
-                    </h2>
+                    <div class="completed-header-row">
+                        <h2 id="completed-heading" class="completed-heading">
+                            Completed games <span class="completed-heading-sub" id="completed-sort-label">&middot; Sorted by date</span>
+                        </h2>
+                        <div class="sort-toggle" role="group" aria-label="Sort completed games">
+                            <button class="sort-btn" id="completed-sort-date" type="button" aria-pressed="true">Date</button>
+                            <button class="sort-btn" id="completed-sort-excitement" type="button" aria-pressed="false">Excitement</button>
+                        </div>
+                    </div>
                     <div id="completed-games-container"></div>
                 </div>
             </section>
@@ -1241,6 +1255,7 @@ _HOMEPAGE_HTML = f"""
             let allCompleted = [];
             let selectedNetworks = new Set();
             let sortBy = 'date';
+            let completedSortMode = 'date';
 
             const NETWORK_LABELS = {{
                 'ESPN': 'ESPN', 'ABC': 'ABC', 'NBC': 'NBC/Peacock',
@@ -1571,6 +1586,21 @@ _HOMEPAGE_HTML = f"""
                         next ? 'Hide completed games' : 'Show completed games';
                     if (next) renderCompleted();
                 }});
+                const dateBtn = document.getElementById('completed-sort-date');
+                const exciteBtn = document.getElementById('completed-sort-excitement');
+                const label = document.getElementById('completed-sort-label');
+                function setCompletedSort(mode) {{
+                    if (mode === completedSortMode) return;
+                    completedSortMode = mode;
+                    dateBtn.setAttribute('aria-pressed', mode === 'date' ? 'true' : 'false');
+                    exciteBtn.setAttribute('aria-pressed', mode === 'excitement' ? 'true' : 'false');
+                    if (label) label.textContent = mode === 'date'
+                        ? '· Sorted by date'
+                        : '· Sorted by excitement';
+                    if (isCompletedExpanded()) renderCompleted();
+                }}
+                dateBtn.addEventListener('click', () => setCompletedSort('date'));
+                exciteBtn.addEventListener('click', () => setCompletedSort('excitement'));
             }}
 
             function isCompletedExpanded() {{
@@ -1591,11 +1621,21 @@ _HOMEPAGE_HTML = f"""
                 return '';
             }}
 
+            function sortCompleted(games) {{
+                const byDateDesc = (a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
+                const byExciteDesc = (a, b) =>
+                    (b.excitement_index ?? -Infinity) - (a.excitement_index ?? -Infinity);
+                const cmp = completedSortMode === 'date'
+                    ? (a, b) => byDateDesc(a, b) || byExciteDesc(a, b)
+                    : (a, b) => byExciteDesc(a, b) || byDateDesc(a, b);
+                return games.slice().sort(cmp);
+            }}
+
             function renderCompleted() {{
                 const container = document.getElementById('completed-games-container');
                 if (!container) return;
                 const team = document.getElementById('team-filter').value;
-                const filtered = allCompleted.filter(g => matchesScope(g, team));
+                const filtered = sortCompleted(allCompleted.filter(g => matchesScope(g, team)));
                 renderGames(filtered, null, 'completed-games-container', 'Excitement');
                 filtered.forEach(g => {{
                     if (!g.espn_id) return;
