@@ -69,6 +69,69 @@ def play_series(
     )
 
 
-def simulate_playoffs(*args, **kwargs):
-    """Implemented in Task 2."""
-    raise NotImplementedError
+def simulate_playoffs(
+    seeded: list[str],
+    standings: dict[str, "TeamStanding"],
+    home_advantage: float = DEFAULT_HOME_ADVANTAGE,
+) -> dict[str, set[str] | str]:
+    """Play the full 8-team WNBA bracket (no reseeding).
+
+    Args:
+        seeded: top 8 team names, index 0 = #1 seed.
+        standings: TeamStanding map (uses .elo on each).
+        home_advantage: Elo bonus applied to the host of each game.
+
+    Returns:
+        {
+          "made_playoffs":    set of 8 team names,
+          "reached_semis":    set of 4,
+          "reached_finals":   set of 2,
+          "won_championship": team name (str),
+        }
+    """
+    if len(seeded) != 8:
+        raise ValueError(
+            f"simulate_playoffs requires exactly 8 seeded teams, got {len(seeded)}"
+        )
+
+    made_playoffs: set[str] = set(seeded)
+
+    # First Round (Bo3): higher seed is always the first arg.
+    qf1 = play_series(seeded[0], seeded[7], HOME_PATTERN_BO3, standings, home_advantage)
+    qf2 = play_series(seeded[3], seeded[4], HOME_PATTERN_BO3, standings, home_advantage)
+    qf3 = play_series(seeded[2], seeded[5], HOME_PATTERN_BO3, standings, home_advantage)
+    qf4 = play_series(seeded[1], seeded[6], HOME_PATTERN_BO3, standings, home_advantage)
+
+    reached_semis: set[str] = {qf1, qf2, qf3, qf4}
+
+    # Fixed bracket: QF1/QF2 winners play in one semi, QF3/QF4 in the other.
+    sf1_higher, sf1_lower = _higher_lower(qf1, qf2, seeded)
+    sf2_higher, sf2_lower = _higher_lower(qf3, qf4, seeded)
+    sf1 = play_series(
+        sf1_higher, sf1_lower, HOME_PATTERN_BO5, standings, home_advantage
+    )
+    sf2 = play_series(
+        sf2_higher, sf2_lower, HOME_PATTERN_BO5, standings, home_advantage
+    )
+
+    reached_finals: set[str] = {sf1, sf2}
+
+    # Finals: higher original seed gets HCA.
+    f_higher, f_lower = _higher_lower(sf1, sf2, seeded)
+    champion = play_series(
+        f_higher, f_lower, HOME_PATTERN_BO7, standings, home_advantage
+    )
+
+    return {
+        "made_playoffs": made_playoffs,
+        "reached_semis": reached_semis,
+        "reached_finals": reached_finals,
+        "won_championship": champion,
+    }
+
+
+def _higher_lower(a: str, b: str, seeded: list[str]) -> tuple[str, str]:
+    """Return (higher_seed, lower_seed) by index in `seeded` (lower index = better)."""
+    if seeded.index(a) < seeded.index(b):
+        return a, b
+    return b, a
