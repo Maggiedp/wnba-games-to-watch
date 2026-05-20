@@ -218,6 +218,47 @@ def test_compute_standings_ignores_postseason_completions(monkeypatch):
     assert standings["New York Liberty"]["h2h"]["Las Vegas Aces"] == [1, 0]
 
 
+def test_compute_standings_skips_null_season_type(monkeypatch):
+    """A completed game with NULL season_type (e.g. failed backfill on a
+    postseason row) must NOT bump regular-season W/L. Otherwise a playoff
+    win could leak into seeding and distort downstream odds.
+    """
+    from unittest.mock import MagicMock
+    from scripts.daily_update import compute_standings
+
+    team_a = MagicMock(id=1, bpi_rating=5.0)
+    team_a.name = "New York Liberty"
+    team_b = MagicMock(id=2, bpi_rating=4.0)
+    team_b.name = "Las Vegas Aces"
+
+    # An October-dated row with NULL season_type — most likely a postseason
+    # game whose backfill hasn't run yet. Must be skipped.
+    null_row = MagicMock(
+        team_a_id=1, team_b_id=2, winner_id=1, season_type=None, date="2026-10-05"
+    )
+
+    monkeypatch.setattr(
+        "scripts.daily_update.get_all_teams", lambda s: [team_a, team_b]
+    )
+    monkeypatch.setattr(
+        "scripts.daily_update.get_completed_games",
+        lambda s, season_year=2026: [null_row],
+    )
+    monkeypatch.setattr(
+        "scripts.daily_update.get_team_by_id",
+        lambda s, tid: {1: team_a, 2: team_b}[tid],
+    )
+
+    standings = compute_standings(session=None, elo_ratings={})
+
+    # No wins/losses recorded — NULL row was conservatively skipped.
+    assert standings["New York Liberty"]["wins"] == 0
+    assert standings["New York Liberty"]["losses"] == 0
+    assert standings["Las Vegas Aces"]["wins"] == 0
+    assert standings["Las Vegas Aces"]["losses"] == 0
+    assert standings["New York Liberty"]["h2h"] == {}
+
+
 # ---------------------------------------------------------------------------
 # return_matrix tests (Task 1)
 # ---------------------------------------------------------------------------

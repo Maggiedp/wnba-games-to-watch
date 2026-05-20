@@ -417,10 +417,18 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
         for t in all_teams
     }
     completed = get_completed_games(session, season_year=2026)
+    null_skipped = 0
     for game in completed:
         # Postseason wins/losses don't count toward regular-season seeding.
-        # get_completed_games returns season_type in (2, 3); skip 3 here.
         if game.season_type == 3:
+            continue
+        # NULL season_type during the playoff window can mean a postseason
+        # game whose backfill failed. Counting it would corrupt seeding;
+        # the next daily run should re-attempt the backfill and recompute.
+        # Pre-playoffs NULL is also possible (very-early ingest rows from
+        # before season_type tracking) — same conservative skip applies.
+        if game.season_type is None:
+            null_skipped += 1
             continue
         team_a = get_team_by_id(session, game.team_a_id)
         team_b = get_team_by_id(session, game.team_b_id)
@@ -435,6 +443,11 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
             standings[team_a.name]["losses"] += 1
         increment_h2h(standings[team_a.name]["h2h"], team_b.name, won=a_won)
         increment_h2h(standings[team_b.name]["h2h"], team_a.name, won=not a_won)
+    if null_skipped:
+        logger.warning(
+            f"compute_standings: skipped {null_skipped} completed game(s) with "
+            f"NULL season_type — backfill should reclassify next run"
+        )
     logger.info(f"Computed standings for {len(standings)} teams")
     return standings
 
