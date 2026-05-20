@@ -317,3 +317,42 @@ def test_run_monte_carlo_eliminated_team_zero_downstream():
     assert result.reach_finals[eliminated] == 0.0
     assert result.win_championship[eliminated] == 0.0
     assert result.reach_semis[advancing] == 1.0
+
+
+def test_simulate_playoffs_ignores_mismatched_bracket_state():
+    """When the observed state describes a different matchup than the sim's
+    seeded slot, the state must not be applied — otherwise real wins get
+    credited to unrelated teams.
+
+    Bug scenario: the bracket_state was built assuming SEEDS order, but the
+    sim is called with a different seeded order (mimicking a sim whose
+    regular-season simulation drifted from observed seeding). The slot id
+    `qf1` now points to a different matchup; applying `state["qf1"].winner`
+    would put a team in reached_semis that isn't in its QF1 pair.
+    """
+    # Observed: S1 swept S8 in QF1.
+    games = [
+        {"team_a": "S1", "team_b": "S8", "winner_team": "S1", "date": "2026-09-15"},
+        {"team_a": "S1", "team_b": "S8", "winner_team": "S1", "date": "2026-09-17"},
+    ]
+    state = reconstruct_bracket_state(SEEDS, games)
+    # Scrambled: S1 moved to seeded[1] (so in scrambled, QF1 is S2 vs S8,
+    # and QF4 is S1 vs S7). S1 should never win QF1 here — only QF4.
+    scrambled = ["S2", "S1", "S3", "S4", "S5", "S6", "S7", "S8"]
+    # Make S1 dominant so it always wins QF4 (S1 vs S7). With the bug,
+    # state["qf1"].winner=S1 would also be returned for QF1, putting S1
+    # twice into the reached_semis set — yielding a 3-element set.
+    elos = {n: 1500 for n in scrambled}
+    elos["S1"] = 1900
+    s = _standings(elos)
+
+    random.seed(0)
+    for _ in range(20):
+        result = simulate_playoffs(scrambled, s, bracket_state=state)
+        # Without the validation guard, S1 would be the QF1 winner (from
+        # mismatched state) AND the QF4 winner (legitimately), collapsing
+        # to 3 distinct names.
+        assert len(result["reached_semis"]) == 4
+        # QF1 in scrambled is S2 vs S8 — winner must be one of those, not S1.
+        # (We can't observe QF winners directly; the cardinality check above
+        # is the load-bearing assertion here.)
