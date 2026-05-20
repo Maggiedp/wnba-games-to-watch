@@ -48,14 +48,14 @@ def compute_swings(
     s_a[team_b]["losses"] += 1
     probs_a = run_monte_carlo_simulation(
         s_a, games_without, num_simulations=NUM_SIMULATIONS
-    )
+    ).make_playoffs
 
     s_b = {n: dict(d) for n, d in current_standings.items()}
     s_b[team_b]["wins"] += 1
     s_b[team_a]["losses"] += 1
     probs_b = run_monte_carlo_simulation(
         s_b, games_without, num_simulations=NUM_SIMULATIONS
-    )
+    ).make_playoffs
 
     old = abs(probs_a.get(team_a, 0.0) - probs_b.get(team_a, 0.0)) + abs(
         probs_a.get(team_b, 0.0) - probs_b.get(team_b, 0.0)

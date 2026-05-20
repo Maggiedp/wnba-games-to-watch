@@ -236,7 +236,7 @@ def main() -> None:
 
             playoff_probs = run_monte_carlo_simulation(
                 standings, remaining, num_simulations=_NUM_SIMS
-            )
+            ).make_playoffs
             print(
                 f"  {md}: {len(standings)} teams, {n_completed} completed, "
                 f"{len(remaining)} remaining → MC done"

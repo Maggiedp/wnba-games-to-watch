@@ -24,7 +24,11 @@ SITE_API = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba"
 CORE_API = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba"
 
 _ET = ZoneInfo("America/New_York")
-_SEASON_END = date(2026, 9, 30)
+# Schedule fetch horizon. Must extend through the Finals — WNBA playoffs run
+# from late September into late October (Bo7 Finals can finish ~Oct 20-25).
+# `_SEASON_END.year` is also used as the season identifier; keep it in the
+# regular-season calendar year.
+_SEASON_END = date(2026, 10, 31)
 
 
 def today_et() -> str:

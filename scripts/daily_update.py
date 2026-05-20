@@ -10,6 +10,7 @@ from src.constants import UN_FINALIZE_STATUSES, GameStatus
 from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
+    _SEASON_END,
     fetch_bpi_ratings,
     fetch_games_for_range,
     fetch_live_win_probability,
@@ -25,10 +26,12 @@ from src.db.queries import (
     get_all_teams,
     get_completed_games,
     get_completed_games_missing_excitement,
+    get_completed_postseason_games,
     get_games_for_excitement_refresh,
     get_importance_max_swing,
     get_team_by_id,
     get_team_by_name,
+    get_teams_by_ids,
     save_importance_max_swing,
     upsert_daily_ranking,
     upsert_game,
@@ -45,11 +48,13 @@ from src.scoring.elo import (
 from src.scoring.excitement import compute_excitement
 from src.scoring.importance import normalize_importance_score
 from src.scoring.monte_carlo import (
+    RoundProbabilities,
     compute_importance_from_matrix,
     run_monte_carlo_simulation,
+    to_team_standings,
 )
 from src.scoring.quality import compute_quality_score
-from src.scoring.tiebreakers import increment_h2h
+from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
 
 logging.basicConfig(
     level=logging.INFO,
@@ -207,7 +212,11 @@ def backfill_missing_season_types(session) -> None:
     if null_count == 0:
         return
     logger.info(f"Backfilling season_type for {null_count} legacy rows")
-    parsed = fetch_games_for_range(date(2026, 4, 1), date(2026, 9, 30))
+    # End date must cover the full playoff window — _SEASON_END is the
+    # canonical horizon (extends through October Finals). Capping at Sept 30
+    # would leave October postseason rows unclassified and let their wins
+    # leak into regular-season standings.
+    parsed = fetch_games_for_range(date(2026, 4, 1), _SEASON_END)
     by_espn_id = {
         g["event_id"]: g.get("season_type")
         for g in parsed
@@ -408,7 +417,19 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
         for t in all_teams
     }
     completed = get_completed_games(session, season_year=2026)
+    null_skipped = 0
     for game in completed:
+        # Postseason wins/losses don't count toward regular-season seeding.
+        if game.season_type == 3:
+            continue
+        # NULL season_type during the playoff window can mean a postseason
+        # game whose backfill failed. Counting it would corrupt seeding;
+        # the next daily run should re-attempt the backfill and recompute.
+        # Pre-playoffs NULL is also possible (very-early ingest rows from
+        # before season_type tracking) — same conservative skip applies.
+        if game.season_type is None:
+            null_skipped += 1
+            continue
         team_a = get_team_by_id(session, game.team_a_id)
         team_b = get_team_by_id(session, game.team_b_id)
         if not team_a or not team_b:
@@ -422,6 +443,11 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
             standings[team_a.name]["losses"] += 1
         increment_h2h(standings[team_a.name]["h2h"], team_b.name, won=a_won)
         increment_h2h(standings[team_b.name]["h2h"], team_a.name, won=not a_won)
+    if null_skipped:
+        logger.warning(
+            f"compute_standings: skipped {null_skipped} completed game(s) with "
+            f"NULL season_type — backfill should reclassify next run"
+        )
     logger.info(f"Computed standings for {len(standings)} teams")
     return standings
 
@@ -438,7 +464,7 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
         for team, info in standings.items()
     }
     remaining = [
-        (g["team_a"], g["team_b"]) for g in all_games if g.get("season_type", 2) != 1
+        (g["team_a"], g["team_b"]) for g in all_games if g.get("season_type", 2) == 2
     ]
     _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
         zero_standings, remaining, num_simulations=10000, return_matrix=True
@@ -450,25 +476,113 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
     return max(swings) if swings else 0.75
 
 
+def _build_current_bracket_state(session, standings: dict):
+    """Build the observed BracketState from completed postseason games.
+
+    Sources playoff history from the DB so games older than the rolling
+    ESPN fetch window (yesterday-forward) are not forgotten. A Bo3 takes
+    ~4 days; using the in-memory fetch payload alone would drop Game 1
+    by the time Game 3 is played, falsely re-opening already-decided
+    series.
+
+    Returns None if no completed postseason games exist (pre-playoffs).
+    Otherwise the result respects actual playoff results: decided series
+    are locked, in-progress series resume from the current score.
+    """
+    season_year = int(today_et()[:4])
+    completed_post_rows = get_completed_postseason_games(session, season_year)
+    if not completed_post_rows:
+        return None
+
+    # Resolve team_id → team name once for the rows we have.
+    team_ids = set()
+    for row in completed_post_rows:
+        team_ids.add(row.team_a_id)
+        team_ids.add(row.team_b_id)
+        if row.winner_id is not None:
+            team_ids.add(row.winner_id)
+    teams_by_id = get_teams_by_ids(session, team_ids)
+    completed_post: list[dict] = []
+    for row in completed_post_rows:
+        ta = teams_by_id.get(row.team_a_id)
+        tb = teams_by_id.get(row.team_b_id)
+        winner = teams_by_id.get(row.winner_id) if row.winner_id else None
+        if not ta or not tb or not winner:
+            continue
+        completed_post.append(
+            {
+                "team_a": ta.name,
+                "team_b": tb.name,
+                "winner_team": winner.name,
+                "date": row.date,
+                "event_id": row.espn_id or "",
+            }
+        )
+    if not completed_post:
+        return None
+
+    # resolve_seeding expects TeamStanding objects; daily_update keeps plain dicts.
+    seeded = resolve_seeding(to_team_standings(standings))
+    if len(seeded) < PLAYOFF_TEAMS:
+        return None
+
+    from src.scoring.playoffs import reconstruct_bracket_state  # noqa: PLC0415
+
+    return reconstruct_bracket_state(seeded[:PLAYOFF_TEAMS], completed_post)
+
+
+def _importance_for_game(
+    game: dict,
+    raw_swings: list[float],
+    remaining_event_index: dict[str, int],
+    importance_ceiling: float,
+) -> float | None:
+    """Compute the importance score for one upcoming game.
+
+    Preseason: 0. Postseason: 100 (all playoff games are championship-stakes).
+    Regular season: normalized bubble-swing from the MC run, or None if the
+    event_id isn't in the sim universe.
+    """
+    season_type = game.get("season_type", 2)
+    if season_type == 1:
+        return 0.0
+    if season_type == 3:
+        return 100.0
+    game_index = remaining_event_index.get(game.get("event_id", ""))
+    if game_index is None:
+        return None
+    return normalize_importance_score(
+        raw_swings[game_index], max_swing=importance_ceiling
+    )
+
+
 def compute_daily_scores(
     session, games: list[dict], standings: dict
-) -> tuple[list[dict], dict[str, float]]:
-    """Score upcoming games and return (scored_games, playoff_probs).
+) -> tuple[list[dict], RoundProbabilities]:
+    """Score upcoming games and return (scored_games, round_probabilities).
 
     Uses a single 10k-sim Monte Carlo run. Game importance is derived by
     splitting that run's outcome matrix — no additional simulations needed.
-    Playoff probabilities (one per team) are the aggregate of the same run.
+    Playoff probabilities (one per team per round) are the aggregate of the same run.
     """
     today = today_et()
+
+    # Empty `games` means ESPN fetch failed or returned nothing — NOT the
+    # same as a legitimate "no upcoming games" end-of-season state (which has
+    # completed games in `games` but no future ones). Don't overwrite today's
+    # row with synthetic end-of-season odds; keep yesterday's record intact.
+    if not games:
+        logger.warning(
+            "Empty games list — likely ESPN fetch failure. "
+            "Skipping ranking/odds update; previous record preserved."
+        )
+        return [], RoundProbabilities()
 
     upcoming_games = [
         g
         for g in games
         if g.get("date", "") >= today and g.get("status") != GameStatus.FINAL
     ]
-    if not upcoming_games:
-        logger.info("No upcoming games to score")
-        return [], {}
 
     # Seed with date of last completed game so scores are stable until new results arrive.
     last_completed_date = max(
@@ -478,25 +592,42 @@ def compute_daily_scores(
     random.seed(int(last_completed_date.replace("-", "")))
     logger.info(f"Monte Carlo seed: last completed game on {last_completed_date}")
 
-    # All non-final, non-preseason games form the simulation universe.
+    # Only regular-season (season_type == 2) games drive seeding. Postseason
+    # games (3) are simulated by the bracket sim; including them here would
+    # double-count playoff wins into regular-season standings.
     remaining_games = []
     remaining_event_index: dict[str, int] = {}
     for g in games:
-        if g.get("status") != GameStatus.FINAL and g.get("season_type", 2) != 1:
+        if g.get("status") != GameStatus.FINAL and g.get("season_type", 2) == 2:
             eid = g.get("event_id", "")
             if eid:
                 remaining_event_index[eid] = len(remaining_games)
             remaining_games.append((g["team_a"], g["team_b"]))
 
+    # If postseason is underway, thread observed bracket state through the sim:
+    # decided series use the real winner, in-progress series resume from the
+    # actual score. With no completed postseason games, this is a no-op.
+    bracket_state = _build_current_bracket_state(session, standings)
+
+    # Always run MC: round probabilities are valid even when there are no
+    # upcoming regular-season games (e.g. end of season, playoff lulls, or
+    # the post-Finals window). With remaining_games empty the sim still
+    # resolves seeding from standings and plays the bracket — exactly what
+    # the playoff picture needs during those windows.
     logger.info(
         f"Running 10k Monte Carlo over {len(remaining_games)} remaining games..."
     )
-    playoff_probs, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+    round_probs, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
         standings,
         remaining_games,
         num_simulations=10000,
         return_matrix=True,
+        bracket_state=bracket_state,
     )
+
+    if not upcoming_games:
+        logger.info("No upcoming games to score — returning round probabilities only")
+        return [], round_probs
 
     team_names = list(standings.keys())
     raw_swings = compute_importance_from_matrix(
@@ -538,17 +669,9 @@ def compute_daily_scores(
         win_prob_a = expected_win_prob(elo_a, elo_b, DEFAULT_HOME_ADVANTAGE)
 
         game_date = game.get("date", today)
-        importance: float | None
-        if game.get("season_type", 2) == 1:
-            importance = 0.0
-        else:
-            game_index = remaining_event_index.get(game.get("event_id", ""))
-            if game_index is not None:
-                importance = normalize_importance_score(
-                    raw_swings[game_index], max_swing=importance_ceiling
-                )
-            else:
-                importance = None
+        importance = _importance_for_game(
+            game, raw_swings, remaining_event_index, importance_ceiling
+        )
 
         importance_for_overall = importance if importance is not None else 0.0
         overall = quality * 0.6 + importance_for_overall * 0.4
@@ -571,7 +694,7 @@ def compute_daily_scores(
             }
         )
 
-    return scored, playoff_probs
+    return scored, round_probs
 
 
 def store_daily_rankings(session, scored_games: list[dict]) -> None:
@@ -602,18 +725,24 @@ def store_daily_rankings(session, scored_games: list[dict]) -> None:
 
 
 def store_playoff_probabilities(
-    session, playoff_probs: dict[str, float], snapshot_date: str
+    session, round_probs: RoundProbabilities, snapshot_date: str
 ) -> None:
-    """Persist per-team playoff probabilities for a given date."""
+    """Persist per-team round-by-round playoff probabilities for a given date."""
     get_cached_team_id = _make_team_id_resolver(session)
     stored = 0
-    for team_name, prob in playoff_probs.items():
+    for team_name, mp_prob in round_probs.make_playoffs.items():
         team_id = get_cached_team_id(team_name)
         if not team_id:
             logger.warning(f"Skipping playoff prob for unknown team: {team_name}")
             continue
         upsert_playoff_probability(
-            session, date=snapshot_date, team_id=team_id, probability=prob
+            session,
+            date=snapshot_date,
+            team_id=team_id,
+            probability=mp_prob,
+            reach_semis_prob=round_probs.reach_semis.get(team_name),
+            reach_finals_prob=round_probs.reach_finals.get(team_name),
+            win_championship_prob=round_probs.win_championship.get(team_name),
         )
         stored += 1
     logger.info(f"Stored {stored} playoff probabilities for {snapshot_date}")
@@ -640,10 +769,10 @@ def main() -> int:
                 logger.warning(f"season_type backfill failed (non-fatal): {e}")
             elo_ratings = compute_elo_ratings()
             standings = compute_standings(session, elo_ratings)
-            scored, playoff_probs = compute_daily_scores(session, games, standings)
+            scored, round_probs = compute_daily_scores(session, games, standings)
             store_daily_rankings(session, scored)
             today = today_et()
-            store_playoff_probabilities(session, playoff_probs, today)
+            store_playoff_probabilities(session, round_probs, today)
             # Archive backfill runs LAST and bounded — a slow/failing ESPN
             # PBP API must not delay the user-visible ranking computation.
             try:

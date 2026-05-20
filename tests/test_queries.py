@@ -5,13 +5,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.db.queries import (
+    get_completed_postseason_games,
     get_playoff_probabilities,
     upsert_daily_ranking,
     upsert_game,
     upsert_playoff_probability,
     upsert_team,
 )
-from src.db.schema import Base, DailyRanking, PlayoffProbability
+from src.db.schema import Base, DailyRanking, Game, PlayoffProbability
 
 
 @pytest.fixture
@@ -63,8 +64,6 @@ def test_upsert_game_updates_time_when_backfilled(session, team_ids):
         broadcaster="",
     )
 
-    from src.db.schema import Game
-
     game = session.query(Game).filter_by(date="2026-06-01").one()
     assert game.time == "7:00 PM ET"
 
@@ -95,13 +94,34 @@ def test_upsert_game_preserves_time_when_incoming_empty(session, team_ids):
         broadcaster="",
     )
 
-    from src.db.schema import Game
-
     game = session.query(Game).filter_by(date="2026-06-01").one()
     assert game.time == "7:00 PM ET"
 
 
-def test_upsert_playoff_probability_inserts(session, team_ids):
+def test_upsert_playoff_probability_inserts_with_all_columns(session, team_ids):
+    a_id, _ = team_ids
+    upsert_playoff_probability(
+        session,
+        date="2026-06-01",
+        team_id=a_id,
+        probability=0.72,
+        reach_semis_prob=0.55,
+        reach_finals_prob=0.30,
+        win_championship_prob=0.15,
+    )
+    record = (
+        session.query(PlayoffProbability)
+        .filter_by(date="2026-06-01", team_id=a_id)
+        .one()
+    )
+    assert abs(record.probability - 0.72) < 1e-6
+    assert abs(record.reach_semis_prob - 0.55) < 1e-6
+    assert abs(record.reach_finals_prob - 0.30) < 1e-6
+    assert abs(record.win_championship_prob - 0.15) < 1e-6
+
+
+def test_upsert_playoff_probability_inserts_legacy_signature(session, team_ids):
+    """Backwards-compat: positional/old-keyword call still inserts a row."""
     a_id, _ = team_ids
     upsert_playoff_probability(
         session, date="2026-06-01", team_id=a_id, probability=0.72
@@ -112,15 +132,29 @@ def test_upsert_playoff_probability_inserts(session, team_ids):
         .one()
     )
     assert abs(record.probability - 0.72) < 1e-6
+    assert record.reach_semis_prob is None
+    assert record.win_championship_prob is None
 
 
-def test_upsert_playoff_probability_updates(session, team_ids):
+def test_upsert_playoff_probability_updates_all_columns(session, team_ids):
     a_id, _ = team_ids
     upsert_playoff_probability(
-        session, date="2026-06-01", team_id=a_id, probability=0.72
+        session,
+        date="2026-06-01",
+        team_id=a_id,
+        probability=0.72,
+        reach_semis_prob=0.55,
+        reach_finals_prob=0.30,
+        win_championship_prob=0.15,
     )
     upsert_playoff_probability(
-        session, date="2026-06-01", team_id=a_id, probability=0.85
+        session,
+        date="2026-06-01",
+        team_id=a_id,
+        probability=0.85,
+        reach_semis_prob=0.60,
+        reach_finals_prob=0.32,
+        win_championship_prob=0.18,
     )
     records = (
         session.query(PlayoffProbability)
@@ -129,19 +163,34 @@ def test_upsert_playoff_probability_updates(session, team_ids):
     )
     assert len(records) == 1
     assert abs(records[0].probability - 0.85) < 1e-6
+    assert abs(records[0].reach_semis_prob - 0.60) < 1e-6
+    assert abs(records[0].reach_finals_prob - 0.32) < 1e-6
+    assert abs(records[0].win_championship_prob - 0.18) < 1e-6
 
 
-def test_get_playoff_probabilities_returns_dict(session, team_ids):
+def test_get_playoff_probabilities_returns_records(session, team_ids):
     a_id, b_id = team_ids
     upsert_playoff_probability(
-        session, date="2026-06-01", team_id=a_id, probability=0.72
+        session,
+        date="2026-06-01",
+        team_id=a_id,
+        probability=0.72,
+        reach_semis_prob=0.55,
+        reach_finals_prob=0.30,
+        win_championship_prob=0.15,
     )
     upsert_playoff_probability(
         session, date="2026-06-01", team_id=b_id, probability=0.33
     )
     result = get_playoff_probabilities(session, "2026-06-01")
-    assert result[a_id] == pytest.approx(0.72)
-    assert result[b_id] == pytest.approx(0.33)
+    assert result[a_id].make_playoffs_prob == pytest.approx(0.72)
+    assert result[a_id].reach_semis_prob == pytest.approx(0.55)
+    assert result[a_id].reach_finals_prob == pytest.approx(0.30)
+    assert result[a_id].win_championship_prob == pytest.approx(0.15)
+    # Legacy row (no round columns): NULLs become None.
+    assert result[b_id].make_playoffs_prob == pytest.approx(0.33)
+    assert result[b_id].reach_semis_prob is None
+    assert result[b_id].win_championship_prob is None
 
 
 def test_get_playoff_probabilities_empty_for_missing_date(session, team_ids):
@@ -624,7 +673,6 @@ def test_completed_archive_keeps_scores_after_rekey(tmp_path, monkeypatch):
     schema.init_db()
     session = schema.get_session()
     from src.db.queries import upsert_daily_ranking, upsert_game, upsert_team
-    from src.db.schema import Game
 
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
@@ -2711,3 +2759,66 @@ def test_get_completed_rankings_includes_games_without_daily_ranking(
         session.close()
         schema._engine = None
         schema._session_factory = None
+
+
+def test_get_completed_postseason_games_returns_old_and_new(session, team_ids):
+    """A postseason game from many days ago must still come back from the DB.
+
+    Regression guard: bracket-state reconstruction relies on the durable DB
+    history, not the rolling ESPN fetch payload (yesterday-forward). A Bo3
+    takes ~4 days; Game 1 must remain visible when Game 3 is played.
+    """
+    a_id, b_id = team_ids
+    # Old QF game (4 days before "today"), and a regular-season game on the
+    # same date that must NOT show up.
+    session.add(
+        Game(
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-09-15",
+            time="7:00 PM ET",
+            winner_id=a_id,
+            espn_id="post_g1",
+            season_type=3,
+        )
+    )
+    session.add(
+        Game(
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-09-17",
+            time="7:00 PM ET",
+            winner_id=a_id,
+            espn_id="post_g2",
+            season_type=3,
+        )
+    )
+    # Regular season completed game on a postseason date — wrong season_type.
+    session.add(
+        Game(
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-09-15",
+            time="9:00 PM ET",
+            winner_id=b_id,
+            espn_id="rs_old",
+            season_type=2,
+        )
+    )
+    # In-progress postseason game (no winner) — must not be returned.
+    session.add(
+        Game(
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-09-19",
+            time="7:00 PM ET",
+            winner_id=None,
+            espn_id="post_pending",
+            season_type=3,
+        )
+    )
+    session.commit()
+
+    rows = get_completed_postseason_games(session, season_year=2026)
+    espn_ids = [r.espn_id for r in rows]
+    assert espn_ids == ["post_g1", "post_g2"]  # ordered by date,time; both old QF games
