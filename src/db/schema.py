@@ -41,6 +41,7 @@ class Game(Base):
     team_b_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
     date = Column(String(10), nullable=False)  # YYYY-MM-DD
     time = Column(String(20), default="")
+    time_utc = Column(String(40), nullable=True)
     winner_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
     final_score_a = Column(Integer, nullable=True)
     final_score_b = Column(Integer, nullable=True)
@@ -270,6 +271,7 @@ def init_db():
                 "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
                 "ALTER TABLE games ADD COLUMN excitement_computed_at DATETIME",
                 "ALTER TABLE games ADD COLUMN season_type INTEGER",
+                "ALTER TABLE games ADD COLUMN time_utc VARCHAR(40)",
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_semis_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_finals_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN win_championship_prob FLOAT",
@@ -358,6 +360,9 @@ def init_db():
             )
             conn.execute(
                 text("ALTER TABLE games ADD COLUMN IF NOT EXISTS season_type INTEGER")
+            )
+            conn.execute(
+                text("ALTER TABLE games ADD COLUMN IF NOT EXISTS time_utc VARCHAR(40)")
             )
             conn.execute(
                 text(
