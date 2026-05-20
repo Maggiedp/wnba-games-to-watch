@@ -455,10 +455,9 @@ def test_importance_for_game_regular_season_unindexed_returns_none():
 
 
 def test_compute_daily_scores_no_upcoming_games_still_produces_round_probs(monkeypatch):
-    """At schedule boundaries (post-RS pre-playoffs, post-Finals, ESPN outage)
-    `upcoming_games` is empty. The playoff picture should still update —
-    locked seeding + bracket sim produce meaningful round probabilities even
-    with zero remaining games.
+    """Legitimate end-of-season state: completed games exist but nothing's
+    upcoming. Playoff picture should still update — locked seeding + bracket
+    sim produce meaningful round probabilities even with zero remaining games.
     """
     from scripts.daily_update import compute_daily_scores
 
@@ -467,6 +466,18 @@ def test_compute_daily_scores_no_upcoming_games_still_produces_round_probs(monke
         n: {"wins": 30 - i, "losses": i, "bpi": 0.0, "elo": 1600 - i * 20, "h2h": {}}
         for i, n in enumerate(real_names)
     }
+    # A single completed FINAL game distinguishes "season ended" from
+    # "ESPN fetch failed". Date is in the past so no game is upcoming.
+    games = [
+        {
+            "team_a": real_names[0],
+            "team_b": real_names[1],
+            "date": "2026-04-01",
+            "status": "STATUS_FINAL",
+            "season_type": 2,
+            "event_id": "e1",
+        }
+    ]
     # Bypass the DB-dependent bracket-state build; this test is about the
     # no-upcoming-games path, not bracket reconstruction.
     monkeypatch.setattr(
@@ -475,7 +486,7 @@ def test_compute_daily_scores_no_upcoming_games_still_produces_round_probs(monke
     )
 
     scored, round_probs = compute_daily_scores(
-        session=None, games=[], standings=standings
+        session=None, games=games, standings=standings
     )
 
     assert scored == []
@@ -486,3 +497,28 @@ def test_compute_daily_scores_no_upcoming_games_still_produces_round_probs(monke
     # The bracket sim ran: each round's per-team probabilities sum to round size.
     assert sum(round_probs.make_playoffs.values()) == pytest.approx(8.0, abs=0.01)
     assert sum(round_probs.win_championship.values()) == pytest.approx(1.0, abs=0.01)
+
+
+def test_compute_daily_scores_empty_games_returns_empty(monkeypatch):
+    """ESPN fetch failure (games=[]) must not overwrite today's playoff
+    probabilities with synthetic end-of-season odds. Returns empty round
+    probs so the upsert path is a no-op and yesterday's record stays."""
+    from scripts.daily_update import compute_daily_scores
+
+    standings = {
+        n: {"wins": 30 - i, "losses": i, "bpi": 0.0, "elo": 1600 - i * 20, "h2h": {}}
+        for i, n in enumerate(_ALL_TEAMS)
+    }
+    monkeypatch.setattr(
+        "scripts.daily_update._build_current_bracket_state",
+        lambda session, standings: None,
+    )
+    scored, round_probs = compute_daily_scores(
+        session=None, games=[], standings=standings
+    )
+    assert scored == []
+    # Empty RoundProbabilities — no entries, store_playoff_probabilities is a no-op.
+    assert round_probs.make_playoffs == {}
+    assert round_probs.reach_semis == {}
+    assert round_probs.reach_finals == {}
+    assert round_probs.win_championship == {}

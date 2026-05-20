@@ -10,6 +10,7 @@ from src.constants import UN_FINALIZE_STATUSES, GameStatus
 from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
+    _SEASON_END,
     fetch_bpi_ratings,
     fetch_games_for_range,
     fetch_live_win_probability,
@@ -211,7 +212,11 @@ def backfill_missing_season_types(session) -> None:
     if null_count == 0:
         return
     logger.info(f"Backfilling season_type for {null_count} legacy rows")
-    parsed = fetch_games_for_range(date(2026, 4, 1), date(2026, 9, 30))
+    # End date must cover the full playoff window — _SEASON_END is the
+    # canonical horizon (extends through October Finals). Capping at Sept 30
+    # would leave October postseason rows unclassified and let their wins
+    # leak into regular-season standings.
+    parsed = fetch_games_for_range(date(2026, 4, 1), _SEASON_END)
     by_espn_id = {
         g["event_id"]: g.get("season_type")
         for g in parsed
@@ -563,6 +568,17 @@ def compute_daily_scores(
     Playoff probabilities (one per team per round) are the aggregate of the same run.
     """
     today = today_et()
+
+    # Empty `games` means ESPN fetch failed or returned nothing — NOT the
+    # same as a legitimate "no upcoming games" end-of-season state (which has
+    # completed games in `games` but no future ones). Don't overwrite today's
+    # row with synthetic end-of-season odds; keep yesterday's record intact.
+    if not games:
+        logger.warning(
+            "Empty games list — likely ESPN fetch failure. "
+            "Skipping ranking/odds update; previous record preserved."
+        )
+        return [], RoundProbabilities()
 
     upcoming_games = [
         g
