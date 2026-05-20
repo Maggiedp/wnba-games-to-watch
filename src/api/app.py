@@ -271,6 +271,15 @@ async def get_playoff_odds(date: str = Query(default=None)):
         recs = get_playoff_probabilities(session, date)
         if not recs:
             return []
+        # Skip legacy rows from before the round-prob migration: if any new
+        # column is NULL, we don't have a meaningful champ/finals/semis value.
+        # Showing those as 0% would mislead — wait for the next daily-update
+        # to populate them.
+        recs = {
+            tid: r for tid, r in recs.items() if r.win_championship_prob is not None
+        }
+        if not recs:
+            return []
         teams = get_teams_by_ids(session, set(recs.keys()))
         rows = [
             PlayoffOddsResponse(

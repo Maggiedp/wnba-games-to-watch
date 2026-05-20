@@ -452,3 +452,37 @@ def test_importance_for_game_regular_season_unindexed_returns_none():
         game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75
     )
     assert result is None
+
+
+def test_compute_daily_scores_no_upcoming_games_still_produces_round_probs(monkeypatch):
+    """At schedule boundaries (post-RS pre-playoffs, post-Finals, ESPN outage)
+    `upcoming_games` is empty. The playoff picture should still update —
+    locked seeding + bracket sim produce meaningful round probabilities even
+    with zero remaining games.
+    """
+    from scripts.daily_update import compute_daily_scores
+
+    real_names = _ALL_TEAMS
+    standings = {
+        n: {"wins": 30 - i, "losses": i, "bpi": 0.0, "elo": 1600 - i * 20, "h2h": {}}
+        for i, n in enumerate(real_names)
+    }
+    # Bypass the DB-dependent bracket-state build; this test is about the
+    # no-upcoming-games path, not bracket reconstruction.
+    monkeypatch.setattr(
+        "scripts.daily_update._build_current_bracket_state",
+        lambda session, standings: None,
+    )
+
+    scored, round_probs = compute_daily_scores(
+        session=None, games=[], standings=standings
+    )
+
+    assert scored == []
+    # All 13 teams represented; 8 of them have nonzero make_playoffs odds.
+    assert len(round_probs.make_playoffs) == len(real_names)
+    nonzero = sum(1 for v in round_probs.make_playoffs.values() if v > 0)
+    assert nonzero >= 8
+    # The bracket sim ran: each round's per-team probabilities sum to round size.
+    assert sum(round_probs.make_playoffs.values()) == pytest.approx(8.0, abs=0.01)
+    assert sum(round_probs.win_championship.values()) == pytest.approx(1.0, abs=0.01)

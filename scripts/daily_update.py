@@ -569,9 +569,6 @@ def compute_daily_scores(
         for g in games
         if g.get("date", "") >= today and g.get("status") != GameStatus.FINAL
     ]
-    if not upcoming_games:
-        logger.info("No upcoming games to score")
-        return [], RoundProbabilities()
 
     # Seed with date of last completed game so scores are stable until new results arrive.
     last_completed_date = max(
@@ -598,6 +595,11 @@ def compute_daily_scores(
     # actual score. With no completed postseason games, this is a no-op.
     bracket_state = _build_current_bracket_state(session, standings)
 
+    # Always run MC: round probabilities are valid even when there are no
+    # upcoming regular-season games (e.g. end of season, playoff lulls, or
+    # the post-Finals window). With remaining_games empty the sim still
+    # resolves seeding from standings and plays the bracket — exactly what
+    # the playoff picture needs during those windows.
     logger.info(
         f"Running 10k Monte Carlo over {len(remaining_games)} remaining games..."
     )
@@ -608,6 +610,10 @@ def compute_daily_scores(
         return_matrix=True,
         bracket_state=bracket_state,
     )
+
+    if not upcoming_games:
+        logger.info("No upcoming games to score — returning round probabilities only")
+        return [], round_probs
 
     team_names = list(standings.keys())
     raw_swings = compute_importance_from_matrix(
