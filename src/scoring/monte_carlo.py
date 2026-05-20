@@ -45,6 +45,22 @@ class RoundProbabilities:
     win_championship: dict[str, float] = field(default_factory=dict)
 
 
+def to_team_standings(current_standings: dict[str, dict]) -> dict[str, TeamStanding]:
+    """Coerce a plain standings dict (the daily_update shape) into TeamStanding
+    objects suitable for resolve_seeding / simulate_playoffs. Deep-copies h2h so
+    callers can mutate without aliasing."""
+    return {
+        name: TeamStanding(
+            name=name,
+            wins=data["wins"],
+            losses=data["losses"],
+            elo=data.get("elo", INITIAL_RATING),
+            h2h={opp: list(rec) for opp, rec in data.get("h2h", {}).items()},
+        )
+        for name, data in current_standings.items()
+    }
+
+
 def simulate_game(
     elo_a: float,
     elo_b: float,
@@ -102,16 +118,7 @@ def run_monte_carlo_simulation(
     playoff_sets: list[set[str]] = []
 
     for _ in range(num_simulations):
-        standings = {
-            name: TeamStanding(
-                name=name,
-                wins=data["wins"],
-                losses=data["losses"],
-                elo=data.get("elo", INITIAL_RATING),
-                h2h={opp: list(rec) for opp, rec in data.get("h2h", {}).items()},
-            )
-            for name, data in current_standings.items()
-        }
+        standings = to_team_standings(current_standings)
 
         game_outcomes: list[bool | None] = []
         for team_a, team_b in remaining_games:

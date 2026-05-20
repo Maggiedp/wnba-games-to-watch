@@ -198,6 +198,8 @@ def reconstruct_bracket_state(
             s.winner = s.higher
         elif s.lower_wins >= s.games_needed:
             s.winner = s.lower
+        else:
+            continue  # series still in flight; no downstream slot to populate
 
         _populate_downstream_slots(state, seeded)
 
@@ -250,20 +252,15 @@ def simulate_playoffs(
         if bracket_state is None:
             return play_series(higher, lower, pattern, standings, home_advantage)
         s = bracket_state.get(sid)
-        # Defense in depth: the observed state must describe the same matchup
-        # as this simulated slot. If the sim's seeded order has drifted from
-        # the order used to build bracket_state (e.g. malformed regular-season
-        # data ingesting a postseason game as season_type=2 and inflating a
-        # team's wins inside this sim), the slot id alone is not safe to
-        # trust — applying state.winner would credit real wins to unrelated
-        # teams. Fall through to a fresh simulation when participants don't
-        # match.
+        # Only trust the observed state when its unordered pair matches the
+        # simulated slot's participants — slot id alone is unsafe if a sim's
+        # seeded order has drifted from the one used to build bracket_state.
         if s is None or s.higher is None or {s.higher, s.lower} != {higher, lower}:
             return play_series(higher, lower, pattern, standings, home_advantage)
         if s.winner is not None:
             return s.winner
-        # Pair matches; map win counts to the (higher, lower) order the sim
-        # is using. Same teams in opposite seeded positions → swap counts.
+        # Pair matches; swap win counts when the sim's higher seed is the
+        # observed state's lower seed.
         if s.higher == higher:
             sh, sl = s.higher_wins, s.lower_wins
         else:

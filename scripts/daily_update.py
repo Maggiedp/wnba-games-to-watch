@@ -49,9 +49,9 @@ from src.scoring.excitement import compute_excitement
 from src.scoring.importance import normalize_importance_score
 from src.scoring.monte_carlo import (
     RoundProbabilities,
-    TeamStanding,
     compute_importance_from_matrix,
     run_monte_carlo_simulation,
+    to_team_standings,
 )
 from src.scoring.quality import compute_quality_score
 from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
@@ -521,19 +521,8 @@ def _build_current_bracket_state(session, standings: dict):
     if not completed_post:
         return None
 
-    # `resolve_seeding` expects TeamStanding objects; daily_update keeps
-    # plain dicts. Coerce only for this one call.
-    ts_standings = {
-        name: TeamStanding(
-            name=name,
-            wins=d["wins"],
-            losses=d["losses"],
-            elo=d.get("elo", INITIAL_RATING),
-            h2h={opp: list(rec) for opp, rec in d.get("h2h", {}).items()},
-        )
-        for name, d in standings.items()
-    }
-    seeded = resolve_seeding(ts_standings)
+    # resolve_seeding expects TeamStanding objects; daily_update keeps plain dicts.
+    seeded = resolve_seeding(to_team_standings(standings))
     if len(seeded) < PLAYOFF_TEAMS:
         return None
 
@@ -550,13 +539,9 @@ def _importance_for_game(
 ) -> float | None:
     """Compute the importance score for one upcoming game.
 
-    Preseason (season_type=1): 0 — exhibition, no stakes.
-    Postseason (season_type=3): 100 — every playoff game is championship-stakes.
-      A per-game stakes refinement (Game 7 > Game 1, finals > QFs) is future
-      work; the bracket sim already produces per-team round probabilities
-      that could drive it.
-    Regular season (season_type=2 or missing): normalized bubble-swing from
-      the Monte Carlo run; None if the event_id isn't in the sim universe.
+    Preseason: 0. Postseason: 100 (all playoff games are championship-stakes).
+    Regular season: normalized bubble-swing from the MC run, or None if the
+    event_id isn't in the sim universe.
     """
     season_type = game.get("season_type", 2)
     if season_type == 1:
