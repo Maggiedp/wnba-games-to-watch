@@ -40,6 +40,7 @@ env/
 .DS_Store
 logs/
 CLAUDE.md
+CODEX_CONTEXT.md
 INTERVIEW_NOTES.md
 docs/
 .superpowers/
