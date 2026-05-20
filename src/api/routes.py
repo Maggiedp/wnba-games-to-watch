@@ -21,6 +21,7 @@ class GameResponse(BaseModel):
 
     date: str
     time: str
+    time_utc: str | None = None
     team_a: str
     team_b: str
     team_a_abbr: str = ""
@@ -94,6 +95,7 @@ def format_games_response(
         key = (ranking.date, ranking.team_a_id, ranking.team_b_id)
         gf = fields.get(key)
         time_val = gf.time if gf else ""
+        time_utc_val = gf.time_utc if gf else None
         espn_id = gf.espn_id if gf else None
         final_score_a = gf.final_score_a if gf else None
         final_score_b = gf.final_score_b if gf else None
@@ -111,6 +113,7 @@ def format_games_response(
             GameResponse(
                 date=ranking.date,
                 time=time_val,
+                time_utc=time_utc_val,
                 team_a=team_a.name,
                 team_b=team_b.name,
                 team_a_abbr=team_a.abbreviation or "",

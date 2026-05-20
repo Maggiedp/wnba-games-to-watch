@@ -292,6 +292,7 @@ class GameFields:
     DailyRanking.broadcaster freezes at scoring time."""
 
     time: str
+    time_utc: str | None
     espn_id: str | None
     final_score_a: int | None
     final_score_b: int | None
@@ -320,6 +321,7 @@ def get_game_fields(
     return {
         (g.date, g.team_a_id, g.team_b_id): GameFields(
             time=g.time or "",
+            time_utc=g.time_utc,
             espn_id=g.espn_id,
             final_score_a=g.final_score_a,
             final_score_b=g.final_score_b,

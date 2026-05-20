@@ -673,6 +673,35 @@ def test_filter_endpoint_mode_completed(tmp_path, monkeypatch):
     schema._session_factory = None
 
 
+def test_format_games_response_includes_time_utc(session, team_ids):
+    """time_utc from the Game row must surface in the response."""
+    a_id, b_id = team_ids
+
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="7:00 PM ET",
+        time_utc="2026-06-01T23:00:00+00:00",
+        broadcaster="ESPN",
+    )
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.3,
+        overall_score=42.0,
+        broadcaster="ESPN",
+    )
+
+    [resp] = format_games_response([ranking], session)
+
+    assert resp.time_utc == "2026-06-01T23:00:00+00:00"
+
+
 def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
     """GET /api/playoff-odds returns 4 round probs sorted by win_championship_prob desc."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
