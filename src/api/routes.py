@@ -1564,7 +1564,7 @@ _HOMEPAGE_HTML = f"""
                 if (sortBy === 'score') {{
                     rest.sort((a, b) => b.overall_score - a.overall_score);
                 }} else {{
-                    rest.sort((a, b) => a.date.localeCompare(b.date) || timeToMinutes(a.time) - timeToMinutes(b.time));
+                    rest.sort((a, b) => a.date.localeCompare(b.date) || timeKey(a) - timeKey(b));
                 }}
                 renderGames(rest, featured, 'games-container', 'Overall');
                 if (isCompletedExpanded()) renderCompleted();
@@ -1685,7 +1685,7 @@ _HOMEPAGE_HTML = f"""
                     <div class="featured-eyebrow">Top pick &middot; Next 7 days</div>
                     <article class="featured" aria-label="Top pick game">
                         <div>
-                            <div class="featured-meta">${{formatDate(game.date, {{ weekday: 'long', month: 'long', day: 'numeric' }})}} &middot; ${{escapeHtml(game.time || 'TBD')}}</div>
+                            <div class="featured-meta">${{formatDate(game.date, {{ weekday: 'long', month: 'long', day: 'numeric' }})}} &middot; ${{escapeHtml(formatLocalTime(game.time_utc, game.time))}}</div>
                             <div class="featured-teams">
                                 ${{renderTeam(game.team_a, game.team_a_logo)}}
                                 <span class="vs">vs</span>
@@ -1744,15 +1744,20 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
-            function timeToMinutes(t) {{
-                if (!t || t === 'TBD') return Infinity;
-                const m = t.match(/(\d+):(\d+)\s*(AM|PM)/i);
-                if (!m) return Infinity;
-                let h = parseInt(m[1], 10);
-                const min = parseInt(m[2], 10);
-                if (m[3].toUpperCase() === 'PM' && h !== 12) h += 12;
-                if (m[3].toUpperCase() === 'AM' && h === 12) h = 0;
-                return h * 60 + min;
+            function formatLocalTime(timeUtc, fallback) {{
+                if (!timeUtc) return fallback || 'TBD';
+                const d = new Date(timeUtc);
+                if (isNaN(d)) return fallback || 'TBD';
+                return d.toLocaleTimeString(undefined, {{
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    timeZoneName: 'short',
+                }});
+            }}
+
+            function timeKey(g) {{
+                const t = g.time_utc ? Date.parse(g.time_utc) : NaN;
+                return isNaN(t) ? Infinity : t;
             }}
 
             function formatDate(dateStr, opts) {{
@@ -1889,7 +1894,7 @@ _HOMEPAGE_HTML = f"""
                 return `
                     <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <td class="col-date">${{formatDate(game.date)}}</td>
-                        <td class="col-time">${{escapeHtml(game.time || 'TBD')}}</td>
+                        <td class="col-time">${{escapeHtml(formatLocalTime(game.time_utc, game.time))}}</td>
                         <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{primaryScore(game)}}</span></div></td>
                         <td>
                             ${{badge}}
@@ -1917,7 +1922,7 @@ _HOMEPAGE_HTML = f"""
                 const cls = primaryScoreClass(game);
                 const eyebrow = isTopPick ? '<div class="games-card-eyebrow">Top pick</div>' : '';
                 const dateStr = formatDate(game.date);
-                const timeStr = escapeHtml(game.time || 'TBD');
+                const timeStr = escapeHtml(formatLocalTime(game.time_utc, game.time));
                 const hasBroadcaster = game.broadcaster && game.broadcaster !== 'TBD';
                 const broadcastSeg = hasBroadcaster ? ` &middot; ${{escapeHtml(game.broadcaster)}}` : '';
                 const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;
