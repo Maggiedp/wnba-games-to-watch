@@ -5,13 +5,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.db.queries import (
+    get_completed_postseason_games,
     get_playoff_probabilities,
     upsert_daily_ranking,
     upsert_game,
     upsert_playoff_probability,
     upsert_team,
 )
-from src.db.schema import Base, DailyRanking, PlayoffProbability
+from src.db.schema import Base, DailyRanking, Game, PlayoffProbability
 
 
 @pytest.fixture
@@ -63,8 +64,6 @@ def test_upsert_game_updates_time_when_backfilled(session, team_ids):
         broadcaster="",
     )
 
-    from src.db.schema import Game
-
     game = session.query(Game).filter_by(date="2026-06-01").one()
     assert game.time == "7:00 PM ET"
 
@@ -94,8 +93,6 @@ def test_upsert_game_preserves_time_when_incoming_empty(session, team_ids):
         time="",
         broadcaster="",
     )
-
-    from src.db.schema import Game
 
     game = session.query(Game).filter_by(date="2026-06-01").one()
     assert game.time == "7:00 PM ET"
@@ -676,7 +673,6 @@ def test_completed_archive_keeps_scores_after_rekey(tmp_path, monkeypatch):
     schema.init_db()
     session = schema.get_session()
     from src.db.queries import upsert_daily_ranking, upsert_game, upsert_team
-    from src.db.schema import Game
 
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
@@ -2763,3 +2759,66 @@ def test_get_completed_rankings_includes_games_without_daily_ranking(
         session.close()
         schema._engine = None
         schema._session_factory = None
+
+
+def test_get_completed_postseason_games_returns_old_and_new(session, team_ids):
+    """A postseason game from many days ago must still come back from the DB.
+
+    Regression guard: bracket-state reconstruction relies on the durable DB
+    history, not the rolling ESPN fetch payload (yesterday-forward). A Bo3
+    takes ~4 days; Game 1 must remain visible when Game 3 is played.
+    """
+    a_id, b_id = team_ids
+    # Old QF game (4 days before "today"), and a regular-season game on the
+    # same date that must NOT show up.
+    session.add(
+        Game(
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-09-15",
+            time="7:00 PM ET",
+            winner_id=a_id,
+            espn_id="post_g1",
+            season_type=3,
+        )
+    )
+    session.add(
+        Game(
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-09-17",
+            time="7:00 PM ET",
+            winner_id=a_id,
+            espn_id="post_g2",
+            season_type=3,
+        )
+    )
+    # Regular season completed game on a postseason date — wrong season_type.
+    session.add(
+        Game(
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-09-15",
+            time="9:00 PM ET",
+            winner_id=b_id,
+            espn_id="rs_old",
+            season_type=2,
+        )
+    )
+    # In-progress postseason game (no winner) — must not be returned.
+    session.add(
+        Game(
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-09-19",
+            time="7:00 PM ET",
+            winner_id=None,
+            espn_id="post_pending",
+            season_type=3,
+        )
+    )
+    session.commit()
+
+    rows = get_completed_postseason_games(session, season_year=2026)
+    espn_ids = [r.espn_id for r in rows]
+    assert espn_ids == ["post_g1", "post_g2"]  # ordered by date,time; both old QF games

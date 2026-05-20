@@ -25,10 +25,12 @@ from src.db.queries import (
     get_all_teams,
     get_completed_games,
     get_completed_games_missing_excitement,
+    get_completed_postseason_games,
     get_games_for_excitement_refresh,
     get_importance_max_swing,
     get_team_by_id,
     get_team_by_name,
+    get_teams_by_ids,
     save_importance_max_swing,
     upsert_daily_ranking,
     upsert_game,
@@ -456,20 +458,48 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
     return max(swings) if swings else 0.75
 
 
-def _build_current_bracket_state(games: list[dict], standings: dict):
+def _build_current_bracket_state(session, standings: dict):
     """Build the observed BracketState from completed postseason games.
+
+    Sources playoff history from the DB so games older than the rolling
+    ESPN fetch window (yesterday-forward) are not forgotten. A Bo3 takes
+    ~4 days; using the in-memory fetch payload alone would drop Game 1
+    by the time Game 3 is played, falsely re-opening already-decided
+    series.
 
     Returns None if no completed postseason games exist (pre-playoffs).
     Otherwise the result respects actual playoff results: decided series
     are locked, in-progress series resume from the current score.
     """
-    completed_post = [
-        g
-        for g in games
-        if g.get("status") == GameStatus.FINAL
-        and g.get("season_type") == 3
-        and g.get("winner_team")
-    ]
+    season_year = int(today_et()[:4])
+    completed_post_rows = get_completed_postseason_games(session, season_year)
+    if not completed_post_rows:
+        return None
+
+    # Resolve team_id → team name once for the rows we have.
+    team_ids = set()
+    for row in completed_post_rows:
+        team_ids.add(row.team_a_id)
+        team_ids.add(row.team_b_id)
+        if row.winner_id is not None:
+            team_ids.add(row.winner_id)
+    teams_by_id = get_teams_by_ids(session, team_ids)
+    completed_post: list[dict] = []
+    for row in completed_post_rows:
+        ta = teams_by_id.get(row.team_a_id)
+        tb = teams_by_id.get(row.team_b_id)
+        winner = teams_by_id.get(row.winner_id) if row.winner_id else None
+        if not ta or not tb or not winner:
+            continue
+        completed_post.append(
+            {
+                "team_a": ta.name,
+                "team_b": tb.name,
+                "winner_team": winner.name,
+                "date": row.date,
+                "event_id": row.espn_id or "",
+            }
+        )
     if not completed_post:
         return None
 
@@ -566,7 +596,7 @@ def compute_daily_scores(
     # If postseason is underway, thread observed bracket state through the sim:
     # decided series use the real winner, in-progress series resume from the
     # actual score. With no completed postseason games, this is a no-op.
-    bracket_state = _build_current_bracket_state(games, standings)
+    bracket_state = _build_current_bracket_state(session, standings)
 
     logger.info(
         f"Running 10k Monte Carlo over {len(remaining_games)} remaining games..."

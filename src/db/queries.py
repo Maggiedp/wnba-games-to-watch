@@ -371,6 +371,26 @@ def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]
     return base.order_by(Game.date, Game.time).all()
 
 
+def get_completed_postseason_games(
+    session: Session, season_year: int = 2026
+) -> list[Game]:
+    """Completed postseason games for a season (season_type=3 only).
+
+    Used by `_build_current_bracket_state` to source the full playoff
+    history from the DB rather than the rolling ESPN fetch window
+    (which only covers yesterday-forward and would forget games >1 day
+    old, e.g. Game 1 of a Bo3 played 4 days ago).
+    """
+    return (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(Game.season_type == 3)
+        .order_by(Game.date, Game.time)
+        .all()
+    )
+
+
 def get_completed_games_missing_excitement(
     session: Session, season_year: int = 2026, limit: int | None = None
 ) -> list[Game]:
