@@ -77,6 +77,7 @@ def upsert_game(
     excitement_index: float | None = None,
     is_complete: bool | None = None,
     season_type: int | None = None,
+    time_utc: str | None = None,
     _retry: bool = False,
 ) -> Game:
     """Upsert a game (insert if not exists, update result if it has been played).
@@ -137,6 +138,8 @@ def upsert_game(
             game.broadcaster = broadcaster
         if time:
             game.time = time
+        if time_utc is not None:
+            game.time_utc = time_utc
         if espn_id:
             game.espn_id = espn_id
         if season_type is not None:
@@ -199,6 +202,7 @@ def upsert_game(
         team_b_id=team_b_id,
         date=date,
         time=time,
+        time_utc=time_utc,
         broadcaster=broadcaster,
         winner_id=winner_id,
         final_score_a=final_score_a,
@@ -231,6 +235,7 @@ def upsert_game(
             excitement_index=excitement_index,
             is_complete=is_complete,
             season_type=season_type,
+            time_utc=time_utc,
             _retry=True,
         )
     return game

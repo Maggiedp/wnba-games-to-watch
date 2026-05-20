@@ -2822,3 +2822,52 @@ def test_get_completed_postseason_games_returns_old_and_new(session, team_ids):
     rows = get_completed_postseason_games(session, season_year=2026)
     espn_ids = [r.espn_id for r in rows]
     assert espn_ids == ["post_g1", "post_g2"]  # ordered by date,time; both old QF games
+
+
+def test_upsert_game_persists_time_utc(session, team_ids):
+    a_id, b_id = team_ids
+
+    game = upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-21",
+        time="7:00 PM ET",
+        time_utc="2026-05-21T23:00:00+00:00",
+        broadcaster="ESPN",
+        espn_id="401717777",
+    )
+
+    assert game.time_utc == "2026-05-21T23:00:00+00:00"
+
+
+def test_upsert_game_does_not_clobber_time_utc_with_none(session, team_ids):
+    """A second upsert with time_utc=None must preserve the previously-stored value.
+
+    Mirrors test_upsert_game_preserves_time_when_incoming_empty — treat None
+    as 'no new info'.
+    """
+    a_id, b_id = team_ids
+
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-21",
+        time="7:00 PM ET",
+        time_utc="2026-05-21T23:00:00+00:00",
+        broadcaster="ESPN",
+        espn_id="401717778",
+    )
+    game = upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-21",
+        time="7:00 PM ET",
+        time_utc=None,
+        broadcaster="ESPN",
+        espn_id="401717778",
+    )
+
+    assert game.time_utc == "2026-05-21T23:00:00+00:00"
