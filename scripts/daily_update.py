@@ -494,6 +494,35 @@ def _build_current_bracket_state(games: list[dict], standings: dict):
     return reconstruct_bracket_state(seeded[:PLAYOFF_TEAMS], completed_post)
 
 
+def _importance_for_game(
+    game: dict,
+    raw_swings: list[float],
+    remaining_event_index: dict[str, int],
+    importance_ceiling: float,
+) -> float | None:
+    """Compute the importance score for one upcoming game.
+
+    Preseason (season_type=1): 0 — exhibition, no stakes.
+    Postseason (season_type=3): 100 — every playoff game is championship-stakes.
+      A per-game stakes refinement (Game 7 > Game 1, finals > QFs) is future
+      work; the bracket sim already produces per-team round probabilities
+      that could drive it.
+    Regular season (season_type=2 or missing): normalized bubble-swing from
+      the Monte Carlo run; None if the event_id isn't in the sim universe.
+    """
+    season_type = game.get("season_type", 2)
+    if season_type == 1:
+        return 0.0
+    if season_type == 3:
+        return 100.0
+    game_index = remaining_event_index.get(game.get("event_id", ""))
+    if game_index is None:
+        return None
+    return normalize_importance_score(
+        raw_swings[game_index], max_swing=importance_ceiling
+    )
+
+
 def compute_daily_scores(
     session, games: list[dict], standings: dict
 ) -> tuple[list[dict], RoundProbabilities]:
@@ -590,17 +619,9 @@ def compute_daily_scores(
         win_prob_a = expected_win_prob(elo_a, elo_b, DEFAULT_HOME_ADVANTAGE)
 
         game_date = game.get("date", today)
-        importance: float | None
-        if game.get("season_type", 2) == 1:
-            importance = 0.0
-        else:
-            game_index = remaining_event_index.get(game.get("event_id", ""))
-            if game_index is not None:
-                importance = normalize_importance_score(
-                    raw_swings[game_index], max_swing=importance_ceiling
-                )
-            else:
-                importance = None
+        importance = _importance_for_game(
+            game, raw_swings, remaining_event_index, importance_ceiling
+        )
 
         importance_for_overall = importance if importance is not None else 0.0
         overall = quality * 0.6 + importance_for_overall * 0.4

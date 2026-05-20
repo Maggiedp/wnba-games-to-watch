@@ -400,3 +400,55 @@ def test_run_monte_carlo_round_probabilities_are_monotone():
         assert mp + 1e-9 >= sf
         assert sf + 1e-9 >= fn
         assert fn + 1e-9 >= ch
+
+
+# ---------------------------------------------------------------------------
+# Importance-rule per game type
+# ---------------------------------------------------------------------------
+
+
+def test_importance_for_game_postseason_is_max():
+    """Playoff games are all championship-stakes — must score max importance."""
+    from scripts.daily_update import _importance_for_game
+
+    game = {"team_a": "X", "team_b": "Y", "event_id": "e1", "season_type": 3}
+    result = _importance_for_game(
+        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75
+    )
+    assert result == 100.0
+
+
+def test_importance_for_game_preseason_is_zero():
+    from scripts.daily_update import _importance_for_game
+
+    game = {"team_a": "X", "team_b": "Y", "event_id": "e2", "season_type": 1}
+    result = _importance_for_game(
+        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75
+    )
+    assert result == 0.0
+
+
+def test_importance_for_game_regular_season_uses_indexed_swing():
+    """Regular season game with event in sim universe normalizes the raw swing."""
+    from scripts.daily_update import _importance_for_game
+
+    game = {"team_a": "X", "team_b": "Y", "event_id": "e3", "season_type": 2}
+    # raw_swings[0] = 0.375, ceiling 0.75 → 50/100.
+    result = _importance_for_game(
+        game,
+        raw_swings=[0.375],
+        remaining_event_index={"e3": 0},
+        importance_ceiling=0.75,
+    )
+    assert abs(result - 50.0) < 1e-6
+
+
+def test_importance_for_game_regular_season_unindexed_returns_none():
+    """Regular season game not in sim universe (e.g. preseason filter race) → None."""
+    from scripts.daily_update import _importance_for_game
+
+    game = {"team_a": "X", "team_b": "Y", "event_id": "e_missing", "season_type": 2}
+    result = _importance_for_game(
+        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75
+    )
+    assert result is None
