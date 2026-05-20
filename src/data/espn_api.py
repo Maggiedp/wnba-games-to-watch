@@ -200,8 +200,10 @@ def _parse_event(event: dict) -> Optional[dict]:
         time_valid = comp.get("timeValid", False)
         if not time_valid and dt_utc.hour == 0 and dt_utc.minute == 0:
             game_time = ""
+            game_time_utc = None
         else:
             game_time = dt_et.strftime("%-I:%M %p ET")
+            game_time_utc = dt_utc.isoformat()
 
         competitors = comp.get("competitors", [])
         if len(competitors) < 2:
@@ -240,6 +242,7 @@ def _parse_event(event: dict) -> Optional[dict]:
             "team_b": team_b,
             "date": game_date,
             "time": game_time,
+            "time_utc": game_time_utc,
             "winner_team": winner_team,
             "final_score_a": final_score_a,
             "final_score_b": final_score_b,
