@@ -68,7 +68,16 @@ def get_today_games():
 
 @app.get("/api/games/upcoming", response_model=list[GameResponse])
 async def get_upcoming_games_endpoint(days: int = Query(7, ge=1, le=30)):  # noqa: ARG001
-    start_date = today_et()
+    # Widen the window by one ET day. A late-ET game that has already
+    # crossed the UTC midnight boundary (date keyed to yesterday-ET) is
+    # still in *today* locally for any viewer west of Eastern; without
+    # the buffer they'd be invisible until the ET day fully cleared
+    # locally. The frontend's localDateISO filter narrows the response
+    # back per-viewer, so ET viewers see no extra rows.
+    from datetime import datetime, timedelta
+
+    et_today = datetime.strptime(today_et(), "%Y-%m-%d").date()
+    start_date = (et_today - timedelta(days=1)).strftime("%Y-%m-%d")
     session = get_session()
     try:
         rankings = get_upcoming_rankings(session, start_date)

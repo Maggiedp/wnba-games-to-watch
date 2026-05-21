@@ -810,3 +810,69 @@ def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
     assert rows[0]["win_championship_prob"] == pytest.approx(0.25)
     schema._engine = None
     schema._session_factory = None
+
+
+def test_upcoming_endpoint_includes_yesterday_et_for_west_coast_viewers(
+    tmp_path, monkeypatch
+):
+    """The endpoint must return rows keyed to yesterday-ET as well.
+
+    A 10 PM ET game whose ET date has rolled over (UTC midnight crossed)
+    is still in tonight's local window for any viewer west of Eastern.
+    The frontend's localDateISO filter prunes per-viewer; the server
+    needs to provide the candidate set or the boundary case shows
+    blank for non-ET users.
+    """
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+
+    from src.db.queries import upsert_daily_ranking, upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(schema.Team).filter_by(name="Aces").one().id
+    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    # Three games: yesterday-ET (boundary), today-ET, tomorrow-ET.
+    for date in ("2026-05-21", "2026-05-22", "2026-05-23"):
+        session.add(
+            Game(
+                team_a_id=a,
+                team_b_id=b,
+                date=date,
+                time="10:00 PM ET",
+                broadcaster="ION",
+                espn_id=f"g{date}",
+            )
+        )
+        upsert_daily_ranking(
+            session,
+            date=date,
+            team_a_id=a,
+            team_b_id=b,
+            quality_score=50.0,
+            importance_score=0.3,
+            overall_score=42.0,
+            broadcaster="ION",
+        )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/upcoming")
+    assert resp.status_code == 200
+    dates = sorted(r["date"] for r in resp.json())
+    assert dates == ["2026-05-21", "2026-05-22", "2026-05-23"]
+    schema._engine = None
+    schema._session_factory = None
