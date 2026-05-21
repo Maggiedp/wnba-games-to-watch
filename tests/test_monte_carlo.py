@@ -275,15 +275,72 @@ _G2 = [
 
 
 def test_return_matrix_shape():
-    """return_matrix=True yields a 3-tuple; matrix has shape (num_sims, num_games)."""
+    """return_matrix=True yields a 5-tuple; matrix has shape (num_sims, num_games)."""
     import random; random.seed(0)
     result = run_monte_carlo_simulation(_S3, _G2, num_simulations=50, return_matrix=True)
-    assert isinstance(result, tuple) and len(result) == 3
-    round_probs, outcome_matrix, playoff_sets = result
+    assert isinstance(result, tuple) and len(result) == 5
+    round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions = result
     assert isinstance(round_probs, RoundProbabilities)
     assert len(outcome_matrix) == 50
     assert all(len(row) == 2 for row in outcome_matrix)
     assert len(playoff_sets) == 50
+    assert len(bracket_outcomes) == 50
+    assert len(champions) == 50
+
+
+def test_return_matrix_now_yields_five_tuple():
+    """return_matrix=True yields (round_probs, outcome_matrix, playoff_sets,
+    bracket_outcomes, champions)."""
+    import random; random.seed(0)
+    result = run_monte_carlo_simulation(_S3, _G2, num_simulations=50, return_matrix=True)
+    assert isinstance(result, tuple) and len(result) == 5
+    round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions = result
+    assert isinstance(round_probs, RoundProbabilities)
+    assert len(outcome_matrix) == 50
+    assert len(playoff_sets) == 50
+    assert len(bracket_outcomes) == 50
+    assert len(champions) == 50
+
+
+def test_bracket_outcomes_populated_when_eight_teams_seed():
+    """When 8 teams reach the playoffs, bracket_outcomes for that sim is non-empty."""
+    import random; random.seed(0)
+    # 8-team fixture so every sim has a full bracket. Real WNBA names required
+    # by assert_all_teams_have_conferences.
+    eight_teams = [
+        "Las Vegas Aces",
+        "New York Liberty",
+        "Minnesota Lynx",
+        "Indiana Fever",
+        "Connecticut Sun",
+        "Seattle Storm",
+        "Atlanta Dream",
+        "Chicago Sky",
+    ]
+    standings = {
+        name: {"wins": 30 - i, "losses": i, "elo": 1600 - i * 20, "h2h": {}}
+        for i, name in enumerate(eight_teams)
+    }
+    _, _, _, bracket_outcomes, champions = run_monte_carlo_simulation(
+        standings, [], num_simulations=20, return_matrix=True
+    )
+    # Every sim must have played all 7 series.
+    for i in range(20):
+        slots = {sid for sid, _ in bracket_outcomes[i]}
+        assert slots == {"qf1", "qf2", "qf3", "qf4", "sf1", "sf2", "f"}, (
+            f"sim {i} missing slots: {slots}"
+        )
+        assert champions[i] in standings
+
+
+def test_champions_none_when_fewer_than_eight_teams():
+    """3-team fixture can never seed 8 → champions list is all None."""
+    import random; random.seed(0)
+    _, _, _, bracket_outcomes, champions = run_monte_carlo_simulation(
+        _S3, _G2, num_simulations=10, return_matrix=True
+    )
+    assert all(c is None for c in champions)
+    assert all(bo == {} for bo in bracket_outcomes)
 
 
 def test_return_matrix_false_returns_round_probabilities():
@@ -299,7 +356,7 @@ def test_return_matrix_probs_match_non_matrix():
     random.seed(42)
     probs_plain = run_monte_carlo_simulation(_S3, _G2, num_simulations=5000)
     random.seed(42)
-    probs_matrix, _, _ = run_monte_carlo_simulation(_S3, _G2, num_simulations=5000, return_matrix=True)
+    probs_matrix, _, _, _, _ = run_monte_carlo_simulation(_S3, _G2, num_simulations=5000, return_matrix=True)
     for name in probs_plain.make_playoffs:
         assert probs_plain.make_playoffs[name] == probs_matrix.make_playoffs[name]
 
@@ -307,7 +364,7 @@ def test_return_matrix_probs_match_non_matrix():
 def test_playoff_sets_are_sets_of_team_names():
     """Each playoff_set entry is a set of team name strings."""
     import random; random.seed(0)
-    _, _, playoff_sets = run_monte_carlo_simulation(_S3, _G2, num_simulations=20, return_matrix=True)
+    _, _, playoff_sets, _, _ = run_monte_carlo_simulation(_S3, _G2, num_simulations=20, return_matrix=True)
     for s in playoff_sets:
         assert isinstance(s, set)
         for name in s:
@@ -347,7 +404,7 @@ _BUBBLE_GAMES = [
 def test_compute_importance_from_matrix_length():
     """Returns one swing value per remaining game."""
     import random; random.seed(0)
-    _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+    _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
         _BUBBLE, _BUBBLE_GAMES, num_simulations=200, return_matrix=True
     )
     swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys()))
@@ -357,7 +414,7 @@ def test_compute_importance_from_matrix_length():
 def test_compute_importance_from_matrix_non_negative():
     """All swing values are >= 0."""
     import random; random.seed(0)
-    _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+    _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
         _BUBBLE, _BUBBLE_GAMES, num_simulations=500, return_matrix=True
     )
     swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys()))
@@ -367,7 +424,7 @@ def test_compute_importance_from_matrix_non_negative():
 def test_compute_importance_from_matrix_bubble_beats_safe():
     """Bubble game (index 0) has higher swing than safely-in game (index 2)."""
     import random; random.seed(42)
-    _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+    _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
         _BUBBLE, _BUBBLE_GAMES, num_simulations=5000, return_matrix=True
     )
     swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys()))

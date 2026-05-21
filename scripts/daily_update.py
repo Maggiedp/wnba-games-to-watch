@@ -467,7 +467,7 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
     remaining = [
         (g["team_a"], g["team_b"]) for g in all_games if g.get("season_type", 2) == 2
     ]
-    _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+    _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
         zero_standings, remaining, num_simulations=10000, return_matrix=True
     )
     team_names = list(zero_standings.keys())
@@ -618,12 +618,14 @@ def compute_daily_scores(
     logger.info(
         f"Running 10k Monte Carlo over {len(remaining_games)} remaining games..."
     )
-    round_probs, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
-        standings,
-        remaining_games,
-        num_simulations=10000,
-        return_matrix=True,
-        bracket_state=bracket_state,
+    round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions = (
+        run_monte_carlo_simulation(
+            standings,
+            remaining_games,
+            num_simulations=10000,
+            return_matrix=True,
+            bracket_state=bracket_state,
+        )
     )
 
     if not upcoming_games:

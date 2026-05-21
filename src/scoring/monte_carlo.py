@@ -85,7 +85,13 @@ def run_monte_carlo_simulation(
     bracket_state=None,
 ) -> (
     RoundProbabilities
-    | tuple[RoundProbabilities, list[list[bool | None]], list[set[str]]]
+    | tuple[
+        RoundProbabilities,
+        list[list[bool | None]],
+        list[set[str]],
+        list[dict[tuple[str, int], bool]],
+        list[str | None],
+    ]
 ):
     """Run Monte Carlo simulations to compute round-by-round playoff probabilities.
 
@@ -98,16 +104,22 @@ def run_monte_carlo_simulation(
         remaining_games: list of (home_team, away_team) tuples.
         num_simulations: Number of simulations to run.
         home_advantage: Elo-point bonus for the home team.
-        return_matrix: When True, also return the per-sim outcome matrix and
-            playoff sets (needed for compute_importance_from_matrix).
+        return_matrix: When True, also return the per-sim outcome matrix,
+            playoff sets, bracket outcomes, and champions.
 
     Returns:
         If return_matrix=False: RoundProbabilities with per-team probs for each round.
-        If return_matrix=True: (RoundProbabilities, outcome_matrix, playoff_sets)
+        If return_matrix=True: 5-tuple
+            (round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions)
             outcome_matrix: list[list[bool]] shape (num_sims, num_remaining_games),
                 True = team_a won that game in that sim.
             playoff_sets: list[set[str]] shape (num_sims,),
                 set of team names that made the playoffs in that sim.
+            bracket_outcomes: list[dict[(slot_id, game_num), bool]] shape (num_sims,),
+                per-sim record of every bracket game simulated. Empty dict for sims
+                where fewer than 8 teams seeded (no bracket played).
+            champions: list[str | None] shape (num_sims,),
+                champion team name per sim, or None if no bracket was played.
     """
     assert_all_teams_have_conferences(current_standings)
     made_counts: dict[str, int] = defaultdict(int)
@@ -116,6 +128,8 @@ def run_monte_carlo_simulation(
     champ_counts: dict[str, int] = defaultdict(int)
     outcome_matrix: list[list[bool]] = []
     playoff_sets: list[set[str]] = []
+    bracket_outcomes_per_sim: list[dict[tuple[str, int], bool]] = []
+    champions_per_sim: list[str | None] = []
 
     for _ in range(num_simulations):
         standings = to_team_standings(current_standings)
@@ -146,6 +160,9 @@ def run_monte_carlo_simulation(
         for team_name in playoff_team_set:
             made_counts[team_name] += 1
 
+        sim_bracket_outcomes: dict[tuple[str, int], bool] = {}
+        sim_champion: str | None = None
+
         if len(playoff_team_set) == PLAYOFF_TEAMS:
             # Local import avoids circular dependency (playoffs imports simulate_game).
             from src.scoring.playoffs import simulate_playoffs  # noqa: PLC0415
@@ -155,16 +172,20 @@ def run_monte_carlo_simulation(
                 standings,
                 home_advantage=home_advantage,
                 bracket_state=bracket_state,
+                recorder=sim_bracket_outcomes if return_matrix else None,
             )
             for t in bracket["reached_semis"]:
                 semi_counts[t] += 1
             for t in bracket["reached_finals"]:
                 final_counts[t] += 1
             champ_counts[bracket["won_championship"]] += 1
+            sim_champion = bracket["won_championship"]
 
         if return_matrix:
             outcome_matrix.append(game_outcomes)
             playoff_sets.append(playoff_team_set)
+            bracket_outcomes_per_sim.append(sim_bracket_outcomes)
+            champions_per_sim.append(sim_champion)
 
     all_teams = list(current_standings.keys())
 
@@ -179,7 +200,13 @@ def run_monte_carlo_simulation(
     )
 
     if return_matrix:
-        return result, outcome_matrix, playoff_sets
+        return (
+            result,
+            outcome_matrix,
+            playoff_sets,
+            bracket_outcomes_per_sim,
+            champions_per_sim,
+        )
     return result
 
 
