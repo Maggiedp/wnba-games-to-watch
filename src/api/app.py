@@ -18,6 +18,7 @@ from src.data.espn_api import (
     fetch_live_win_probability,
     fetch_today_game_statuses,
     today_et,
+    yesterday_et,
 )
 from src.db.queries import (
     get_all_known_espn_ids,
@@ -68,19 +69,12 @@ def get_today_games():
 
 @app.get("/api/games/upcoming", response_model=list[GameResponse])
 async def get_upcoming_games_endpoint(days: int = Query(7, ge=1, le=30)):  # noqa: ARG001
-    # Widen the window by one ET day. A late-ET game that has already
-    # crossed the UTC midnight boundary (date keyed to yesterday-ET) is
-    # still in *today* locally for any viewer west of Eastern; without
-    # the buffer they'd be invisible until the ET day fully cleared
-    # locally. The frontend's localDateISO filter narrows the response
-    # back per-viewer, so ET viewers see no extra rows.
-    from datetime import datetime, timedelta
-
-    et_today = datetime.strptime(today_et(), "%Y-%m-%d").date()
-    start_date = (et_today - timedelta(days=1)).strftime("%Y-%m-%d")
+    # Widen by one ET day so late-ET games crossing the UTC midnight
+    # boundary stay visible to non-ET viewers (still in their local
+    # today). The frontend's localDateISO filter narrows back per-viewer.
     session = get_session()
     try:
-        rankings = get_upcoming_rankings(session, start_date)
+        rankings = get_upcoming_rankings(session, yesterday_et())
         return format_games_response(rankings, session)
     finally:
         session.close()
@@ -109,23 +103,16 @@ def get_live_game_statuses():
     "ESPN is down" from "no games today" (both would otherwise produce {}).
     The frontend backs off and retries on 5xx.
     """
-    from datetime import datetime, timedelta
-
-    today = today_et()
-    et_today = datetime.strptime(today, "%Y-%m-%d").date()
-    yesterday = (et_today - timedelta(days=1)).strftime("%Y-%m-%d")
     try:
-        statuses = fetch_today_game_statuses(today)
+        statuses = fetch_today_game_statuses(today_et())
     except ESPNAPIError as e:
         logger.warning("Failed to fetch today's game statuses from ESPN: %s", e)
         raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
     try:
-        yesterday_statuses = fetch_today_game_statuses(yesterday)
+        yesterday_statuses = fetch_today_game_statuses(yesterday_et())
     except ESPNAPIError as e:
         logger.warning("Failed to fetch yesterday's game statuses (non-fatal): %s", e)
         yesterday_statuses = {}
-    # Today's authoritative values win on espn_id collision (shouldn't
-    # happen — each game tips off on exactly one ET date — but defensive).
     return {**yesterday_statuses, **statuses}
 
 

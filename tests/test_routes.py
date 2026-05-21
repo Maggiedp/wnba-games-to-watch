@@ -825,6 +825,7 @@ def test_upcoming_endpoint_includes_yesterday_et_for_west_coast_viewers(
     """
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+    monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
     from src.db import schema
 
     schema._engine = None
@@ -888,6 +889,7 @@ def test_live_status_endpoint_merges_yesterday_and_today_et(tmp_path, monkeypatc
     """
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+    monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
 
     calls: list[str] = []
 
@@ -924,6 +926,7 @@ def test_live_status_endpoint_degrades_gracefully_when_yesterday_fetch_fails(
     """
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+    monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
 
     from src.data.espn_api import ESPNAPIError
 
@@ -950,6 +953,7 @@ def test_live_status_endpoint_502s_when_today_fetch_fails(tmp_path, monkeypatch)
     """
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+    monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
 
     from src.data.espn_api import ESPNAPIError
 

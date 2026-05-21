@@ -23,7 +23,7 @@ def _canonical_name(name: str) -> str:
 SITE_API = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba"
 CORE_API = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba"
 
-_ET = ZoneInfo("America/New_York")
+ET = ZoneInfo("America/New_York")
 # Schedule fetch horizon. Must extend through the Finals — WNBA playoffs run
 # from late September into late October (Bo7 Finals can finish ~Oct 20-25).
 # `_SEASON_END.year` is also used as the season identifier; keep it in the
@@ -34,11 +34,23 @@ _SEASON_END = date(2026, 10, 31)
 def today_et() -> str:
     """Return today's date in America/New_York as 'YYYY-MM-DD'.
 
-    Why: Game.date is stored in ET (schedule fetcher parses ESPN times via _ET).
+    Why: Game.date is stored in ET (schedule fetcher parses ESPN times via ET).
     Cloud Run uses UTC, so datetime.now() rolls to tomorrow after 8 PM ET and
     filters out tonight's still-upcoming games.
     """
-    return datetime.now(_ET).strftime("%Y-%m-%d")
+    return datetime.now(ET).strftime("%Y-%m-%d")
+
+
+def yesterday_et() -> str:
+    """ET date one day before today_et(), as 'YYYY-MM-DD'.
+
+    Used to widen API windows (upcoming list + live-status) for non-ET
+    viewers around the UTC midnight boundary. A late-ET game that's
+    crossed into yesterday-ET is still in *today* locally for any
+    viewer west of Eastern.
+    """
+    d = datetime.strptime(today_et(), "%Y-%m-%d").date()
+    return (d - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 class ESPNAPIError(Exception):
@@ -194,7 +206,6 @@ def _parse_event(event: dict) -> Optional[dict]:
         season_type = event.get("season", {}).get("type", 2)
 
         dt_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        dt_et = dt_utc.astimezone(_ET)
 
         # ESPN's `timeValid` flag is authoritative when explicitly
         # present. Distinguish three states:
@@ -219,6 +230,7 @@ def _parse_event(event: dict) -> Optional[dict]:
             game_time = ""
             game_time_utc = None
         else:
+            dt_et = dt_utc.astimezone(ET)
             game_date = dt_et.strftime("%Y-%m-%d")
             game_time = dt_et.strftime("%-I:%M %p ET")
             game_time_utc = dt_utc.isoformat()

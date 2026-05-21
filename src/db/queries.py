@@ -67,7 +67,11 @@ def get_all_teams(session: Session) -> list[Team]:
 # "caller omitted the field" (preserve) from "caller explicitly says
 # TBD" (clear). ESPN's timeValid=False signal must clear a stale tip
 # time, not silently keep yesterday's value.
-_UNSET = object()
+class _Unset:
+    pass
+
+
+_UNSET = _Unset()
 
 
 def upsert_game(
@@ -84,7 +88,7 @@ def upsert_game(
     excitement_index: float | None = None,
     is_complete: bool | None = None,
     season_type: int | None = None,
-    time_utc: str | None = _UNSET,  # type: ignore[assignment]
+    time_utc: str | None | _Unset = _UNSET,
     _retry: bool = False,
 ) -> Game:
     """Upsert a game (insert if not exists, update result if it has been played).
@@ -143,13 +147,8 @@ def upsert_game(
             game.final_score_b = None
         if broadcaster:
             game.broadcaster = broadcaster
-        # Combined TBD signal from _parse_event: empty time string
-        # paired with an explicit time_utc=None. Both fields move
-        # together through the parser, so the pair is unambiguous —
-        # clear both, otherwise the frontend keeps rendering the stale
-        # ET string via the formatLocalTime fallback. A bare empty time
-        # without the time_utc signal still preserves (transient ESPN
-        # empties from other code paths; see CLAUDE.md gotcha).
+        # Combined TBD signal: empty `time` + explicit `time_utc=None`.
+        # `time` alone preserves (transient ESPN empties; CLAUDE.md gotcha).
         explicit_tbd = time_utc is not _UNSET and time_utc is None and time == ""
         if time:
             game.time = time

@@ -1766,31 +1766,30 @@ _HOMEPAGE_HTML = f"""
                 return isNaN(t) ? Infinity : t;
             }}
 
-            // Local-tz YYYY-MM-DD derived from time_utc, with the ET
-            // schedule date as fallback for rows that have no time_utc yet
-            // (transient during the first daily-update cycle after deploy).
+            // Local-tz Date derived from time_utc, or null if unavailable.
+            // Shared by localDateISO and formatLocalDate. Both fall back to
+            // the ET schedule date when this returns null (transient during
+            // the first daily-update cycle after deploy).
+            function gameLocalDate(g) {{
+                if (!g.time_utc) return null;
+                const d = new Date(g.time_utc);
+                return isNaN(d) ? null : d;
+            }}
+
             function localDateISO(g) {{
-                if (g.time_utc) {{
-                    const d = new Date(g.time_utc);
-                    if (!isNaN(d)) {{
-                        return d.getFullYear() + '-' +
-                            String(d.getMonth() + 1).padStart(2, '0') + '-' +
-                            String(d.getDate()).padStart(2, '0');
-                    }}
-                }}
-                return g.date;
+                const d = gameLocalDate(g);
+                if (!d) return g.date;
+                return d.getFullYear() + '-' +
+                    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                    String(d.getDate()).padStart(2, '0');
             }}
 
             function formatLocalDate(g, opts) {{
-                if (g.time_utc) {{
-                    const d = new Date(g.time_utc);
-                    if (!isNaN(d)) {{
-                        return d.toLocaleDateString(
-                            undefined, opts || {{ weekday: 'short', month: 'short', day: 'numeric' }}
-                        );
-                    }}
-                }}
-                return formatDate(g.date, opts);
+                const d = gameLocalDate(g);
+                if (!d) return formatDate(g.date, opts);
+                return d.toLocaleDateString(
+                    undefined, opts || {{ weekday: 'short', month: 'short', day: 'numeric' }}
+                );
             }}
 
             function formatDate(dateStr, opts) {{

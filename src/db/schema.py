@@ -147,7 +147,21 @@ def backfill_time_utc_from_legacy(session) -> int:
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
-    et = ZoneInfo("America/New_York")
+    from src.data.espn_api import ET
+
+    # Probe first so a steady-state boot doesn't pay full-scan ORM
+    # hydration on every cold start. After backfill completes, every
+    # subsequent call returns 0 rows via this single LIMIT 1 query.
+    has_legacy = (
+        session.query(Game.id)
+        .filter(Game.time_utc.is_(None))
+        .filter(Game.time != "")
+        .limit(1)
+        .first()
+    )
+    if has_legacy is None:
+        return 0
+
     utc = ZoneInfo("UTC")
     rows = (
         session.query(Game)
@@ -163,7 +177,7 @@ def backfill_time_utc_from_legacy(session) -> int:
             d = datetime.strptime(game.date, "%Y-%m-%d")
         except ValueError:
             continue
-        dt_et = d.replace(hour=t.hour, minute=t.minute, tzinfo=et)
+        dt_et = d.replace(hour=t.hour, minute=t.minute, tzinfo=ET)
         game.time_utc = dt_et.astimezone(utc).isoformat()
         updated += 1
     if updated:

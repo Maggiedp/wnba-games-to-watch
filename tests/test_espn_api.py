@@ -3,30 +3,34 @@
 from src.data.espn_api import _parse_event
 
 
-def _base_event(date: str, time_valid: bool) -> dict:
-    """Minimal ESPN event dict shape consumed by _parse_event."""
+def _base_event(date: str, time_valid: bool | None = True) -> dict:
+    """Minimal ESPN event dict shape consumed by _parse_event.
+
+    Pass `time_valid=None` to omit the `timeValid` key entirely
+    (models ESPN payloads where the optional flag is absent).
+    """
+    competition: dict = {
+        "competitors": [
+            {
+                "homeAway": "home",
+                "team": {"displayName": "Connecticut Sun"},
+                "score": "0",
+            },
+            {
+                "homeAway": "away",
+                "team": {"displayName": "New York Liberty"},
+                "score": "0",
+            },
+        ],
+        "status": {"type": {"name": "STATUS_SCHEDULED"}},
+        "broadcasts": [],
+    }
+    if time_valid is not None:
+        competition["timeValid"] = time_valid
     return {
         "date": date,
         "season": {"type": 2},
-        "competitions": [
-            {
-                "timeValid": time_valid,
-                "competitors": [
-                    {
-                        "homeAway": "home",
-                        "team": {"displayName": "Connecticut Sun"},
-                        "score": "0",
-                    },
-                    {
-                        "homeAway": "away",
-                        "team": {"displayName": "New York Liberty"},
-                        "score": "0",
-                    },
-                ],
-                "status": {"type": {"name": "STATUS_SCHEDULED"}},
-                "broadcasts": [],
-            }
-        ],
+        "competitions": [competition],
         "id": "401717000",
     }
 
@@ -83,44 +87,11 @@ def test_parse_event_time_utc_none_when_time_invalid_with_non_midnight_timestamp
     assert result["time_utc"] is None
 
 
-def _build_event_without_time_valid(date: str) -> dict:
-    """Like _base_event but omits the timeValid key entirely.
-
-    Models ESPN payloads where the optional flag is absent — we must not
-    treat that as authoritative TBD, or schema drift could silently wipe
-    real tip times.
-    """
-    return {
-        "date": date,
-        "season": {"type": 2},
-        "competitions": [
-            {
-                # timeValid intentionally absent
-                "competitors": [
-                    {
-                        "homeAway": "home",
-                        "team": {"displayName": "Connecticut Sun"},
-                        "score": "0",
-                    },
-                    {
-                        "homeAway": "away",
-                        "team": {"displayName": "New York Liberty"},
-                        "score": "0",
-                    },
-                ],
-                "status": {"type": {"name": "STATUS_SCHEDULED"}},
-                "broadcasts": [],
-            }
-        ],
-        "id": "401717000",
-    }
-
-
 def test_parse_event_preserves_time_when_time_valid_missing_with_real_timestamp():
     # ESPN sometimes omits `timeValid` entirely. A non-midnight UTC
     # timestamp in that case is still a real tip time — don't clear it.
     # Regression for schema drift wiping live/completed game times.
-    event = _build_event_without_time_valid("2026-05-21T23:00:00Z")
+    event = _base_event("2026-05-21T23:00:00Z", time_valid=None)
 
     result = _parse_event(event)
 
@@ -134,7 +105,7 @@ def test_parse_event_treats_missing_time_valid_at_midnight_utc_as_tbd():
     # Legacy fallback: ESPN's pre-timeValid TBD convention was midnight
     # UTC of the scheduled ET date. If the flag is absent AND the
     # timestamp is midnight UTC, treat as TBD (mirrors pre-PR behavior).
-    event = _build_event_without_time_valid("2026-05-21T00:00:00Z")
+    event = _base_event("2026-05-21T00:00:00Z", time_valid=None)
 
     result = _parse_event(event)
 
