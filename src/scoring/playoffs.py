@@ -62,6 +62,7 @@ def play_series(
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     starting_higher_wins: int = 0,
     starting_lower_wins: int = 0,
+    recorder: list[bool] | None = None,
 ) -> str:
     """Simulate a best-of-N. Returns the winning team name.
 
@@ -73,6 +74,10 @@ def play_series(
     series; the simulator skips the games already played in `home_pattern`.
     If the starting score already decides the series, returns the winner
     without simulating anything.
+
+    `recorder`, if provided, has one bool appended per game *actually
+    simulated* (True = higher seed won). Pre-played games (starting_*_wins)
+    are not appended — only the games this call simulates.
     """
     games_needed = len(home_pattern) // 2 + 1
     higher_wins = starting_higher_wins
@@ -98,6 +103,9 @@ def play_series(
             higher_won = not simulate_game(
                 lower_elo, higher_elo, home_advantage=home_advantage
             )
+
+        if recorder is not None:
+            recorder.append(higher_won)
 
         if higher_won:
             higher_wins += 1

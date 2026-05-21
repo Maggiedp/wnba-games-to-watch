@@ -356,3 +356,85 @@ def test_simulate_playoffs_ignores_mismatched_bracket_state():
         # QF1 in scrambled is S2 vs S8 — winner must be one of those, not S1.
         # (We can't observe QF winners directly; the cardinality check above
         # is the load-bearing assertion here.)
+
+
+def test_play_series_recorder_none_is_noop():
+    """With recorder=None (default), play_series behaves as before."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import HOME_PATTERN_BO3, play_series
+
+    standings = {
+        "A": TS(name="A", wins=20, losses=10, elo=1600),
+        "B": TS(name="B", wins=10, losses=20, elo=1400),
+    }
+    random.seed(0)
+    winner = play_series("A", "B", HOME_PATTERN_BO3, standings)
+    assert winner in {"A", "B"}
+
+
+def test_play_series_recorder_captures_per_game_outcomes():
+    """With recorder provided, each played game appends a bool (did_higher_win)."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import HOME_PATTERN_BO3, play_series
+
+    standings = {
+        "A": TS(name="A", wins=20, losses=10, elo=1600),
+        "B": TS(name="B", wins=10, losses=20, elo=1400),
+    }
+    recorder: list[bool] = []
+    random.seed(0)
+    winner = play_series("A", "B", HOME_PATTERN_BO3, standings, recorder=recorder)
+    # Bo3 takes 2 or 3 games — recorder has one entry per game actually played.
+    assert 2 <= len(recorder) <= 3
+    assert all(isinstance(x, bool) for x in recorder)
+    # Series winner is consistent with the recorded outcomes.
+    higher_wins = sum(1 for r in recorder if r)
+    lower_wins = sum(1 for r in recorder if not r)
+    assert (higher_wins == 2 and winner == "A") or (lower_wins == 2 and winner == "B")
+
+
+def test_play_series_recorder_skips_pre_played_games():
+    """When resuming from starting wins, recorder only captures simulated games."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import HOME_PATTERN_BO3, play_series
+
+    standings = {
+        "A": TS(name="A", wins=20, losses=10, elo=1600),
+        "B": TS(name="B", wins=10, losses=20, elo=1400),
+    }
+    recorder: list[bool] = []
+    random.seed(0)
+    # Series is 1-1 going into game 3 → only one game is simulated.
+    play_series(
+        "A",
+        "B",
+        HOME_PATTERN_BO3,
+        standings,
+        starting_higher_wins=1,
+        starting_lower_wins=1,
+        recorder=recorder,
+    )
+    assert len(recorder) == 1
+
+
+def test_play_series_recorder_empty_when_series_already_decided():
+    """Starting wins that already decide the series → no games played → empty recorder."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import HOME_PATTERN_BO3, play_series
+
+    standings = {
+        "A": TS(name="A", wins=20, losses=10, elo=1600),
+        "B": TS(name="B", wins=10, losses=20, elo=1400),
+    }
+    recorder: list[bool] = []
+    winner = play_series(
+        "A",
+        "B",
+        HOME_PATTERN_BO3,
+        standings,
+        starting_higher_wins=2,
+        starting_lower_wins=0,
+        recorder=recorder,
+    )
+    assert winner == "A"
+    assert recorder == []
