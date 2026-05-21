@@ -280,7 +280,18 @@ def simulate_playoffs(
         else:
             start_h, start_l = 0, 0
 
-        local_recorder: list[bool] | None = [] if recorder is not None else None
+        if recorder is None:
+            return play_series(
+                higher,
+                lower,
+                pattern,
+                standings,
+                home_advantage,
+                starting_higher_wins=start_h,
+                starting_lower_wins=start_l,
+            )
+
+        local_recorder: list[bool] = []
         winner = play_series(
             higher,
             lower,
@@ -291,10 +302,9 @@ def simulate_playoffs(
             starting_lower_wins=start_l,
             recorder=local_recorder,
         )
-        if recorder is not None and local_recorder is not None:
-            offset = start_h + start_l
-            for i, higher_won in enumerate(local_recorder):
-                recorder[(sid, offset + i + 1)] = higher_won
+        offset = start_h + start_l
+        for i, higher_won in enumerate(local_recorder):
+            recorder[(sid, offset + i + 1)] = higher_won
         return winner
 
     made_playoffs: set[str] = set(seeded)
