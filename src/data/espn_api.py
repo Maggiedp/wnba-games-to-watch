@@ -196,16 +196,25 @@ def _parse_event(event: dict) -> Optional[dict]:
         dt_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         dt_et = dt_utc.astimezone(_ET)
 
-        # ESPN's timeValid flag is authoritative. When false, the
-        # timestamp in `event.date` is a placeholder — never persist
-        # it, and don't TZ-shift it for the date label either: ESPN's
-        # canonical TBD sentinel is `YYYY-MM-DDT00:00:00Z` where the
-        # UTC calendar date IS the intended ET game date. Shifting to
-        # ET first would silently move the row to the previous day.
-        # When true, trust the timestamp even at midnight UTC
-        # (legitimate 8 PM ET tip-offs do that).
-        time_valid = comp.get("timeValid", False)
-        if not time_valid:
+        # ESPN's `timeValid` flag is authoritative when explicitly
+        # present. Distinguish three states:
+        #   - explicit False → ESPN says the time is a placeholder; clear.
+        #   - missing → field absent. Fall back to the legacy midnight-UTC
+        #     sentinel (don't assume TBD on every payload that omits
+        #     the optional flag — that would silently erase live and
+        #     completed game times if ESPN ever stops sending it).
+        #   - explicit True → trust the timestamp.
+        # For the TBD branch, don't TZ-shift the placeholder time-of-
+        # day when deriving game_date: ESPN's canonical sentinel
+        # `YYYY-MM-DDT00:00:00Z` carries the intended ET game date in
+        # its UTC calendar component; shifting to ET first would move
+        # the row to the previous day.
+        time_valid_raw = comp.get("timeValid")
+        explicit_tbd = time_valid_raw is False
+        implicit_tbd = (
+            time_valid_raw is None and dt_utc.hour == 0 and dt_utc.minute == 0
+        )
+        if explicit_tbd or implicit_tbd:
             game_date = dt_utc.strftime("%Y-%m-%d")
             game_time = ""
             game_time_utc = None
