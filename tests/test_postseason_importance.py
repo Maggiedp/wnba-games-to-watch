@@ -249,6 +249,46 @@ def test_importance_for_game_postseason_derives_from_swing():
     assert result == pytest.approx(100.0, abs=1e-6)
 
 
+def test_importance_for_game_postseason_partial_swing():
+    """Swing of ~1.0 → normalized ~50.0; proves derivation path actually executes."""
+    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+
+    state = {
+        "qf1": SeriesState(
+            higher="A", lower="B",
+            higher_wins=0, lower_wins=0,
+            games_needed=_GAMES_NEEDED_BO3,
+        ),
+    }
+    # 500 sims higher won qf1 game 1 → A champ in 250, B in 0, C in 250
+    # 500 sims lower won  qf1 game 1 → A champ in 0,   B in 250, C in 250
+    # Higher bucket rates: A=0.5, B=0.0, C=0.5
+    # Lower bucket rates:  A=0.0, B=0.5, C=0.5
+    # Σ|Δ| = 0.5 + 0.5 + 0.0 = 1.0  → normalized = 50.0
+    bracket_outcomes = []
+    champions = []
+    for _ in range(250):
+        bracket_outcomes.append({("qf1", 1): True})
+        champions.append("A")
+    for _ in range(250):
+        bracket_outcomes.append({("qf1", 1): True})
+        champions.append("C")
+    for _ in range(250):
+        bracket_outcomes.append({("qf1", 1): False})
+        champions.append("B")
+    for _ in range(250):
+        bracket_outcomes.append({("qf1", 1): False})
+        champions.append("C")
+
+    game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
+    result = _importance_for_game(
+        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
+        bracket_state=state, bracket_outcomes=bracket_outcomes,
+        champions=champions, team_names=["A", "B", "C"],
+    )
+    assert result == pytest.approx(50.0, abs=1e-6)
+
+
 def test_importance_for_game_regular_season_unchanged():
     """Regular-season path still uses raw_swings + ceiling, ignoring new kwargs."""
     game = {"season_type": 2, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
