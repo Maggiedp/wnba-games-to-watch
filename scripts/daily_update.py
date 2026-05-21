@@ -532,6 +532,31 @@ def _build_current_bracket_state(session, standings: dict):
     return reconstruct_bracket_state(seeded[:PLAYOFF_TEAMS], completed_post)
 
 
+def _find_bracket_slot(
+    bracket_state, team_a: str, team_b: str
+) -> tuple[str, int] | None:
+    """Locate the in-progress bracket slot whose participants match {team_a, team_b}.
+
+    Returns (slot_id, next_game_number_in_series), where game number is
+    1-indexed and includes already-played games. Returns None if no slot
+    matches — e.g. the teams aren't seeded yet (downstream rounds), the
+    series is already decided, or the slot's `higher`/`lower` are still
+    None (upstream round unresolved).
+    """
+    if bracket_state is None:
+        return None
+    pair = {team_a, team_b}
+    for slot_id, s in bracket_state.items():
+        if (
+            s.higher is not None
+            and s.lower is not None
+            and s.winner is None
+            and {s.higher, s.lower} == pair
+        ):
+            return slot_id, s.higher_wins + s.lower_wins + 1
+    return None
+
+
 def _importance_for_game(
     game: dict,
     raw_swings: list[float],

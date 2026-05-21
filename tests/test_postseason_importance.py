@@ -122,3 +122,75 @@ def test_postseason_swing_ignores_none_champion_sims():
     # Higher bucket: 1 sim, T1 champ 100%. Lower bucket: 1 sim, T2 champ 100%.
     # Σ|Δ| = |1-0| + |0-1| = 2.0. Third sim excluded by missing key.
     assert swing == pytest.approx(2.0, abs=1e-9)
+
+
+from scripts.daily_update import _find_bracket_slot
+
+
+def test_find_bracket_slot_matches_pair():
+    """Returns (slot_id, next_game_num) when teams match an in-progress slot."""
+    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+
+    state = {
+        "qf1": SeriesState(
+            higher="A", lower="B",
+            higher_wins=1, lower_wins=0,
+            games_needed=_GAMES_NEEDED_BO3,
+        ),
+        "qf2": SeriesState(games_needed=_GAMES_NEEDED_BO3),
+    }
+    assert _find_bracket_slot(state, "A", "B") == ("qf1", 2)
+    # Order of teams doesn't matter.
+    assert _find_bracket_slot(state, "B", "A") == ("qf1", 2)
+
+
+def test_find_bracket_slot_game_number_includes_pre_played():
+    """Game number = higher_wins + lower_wins + 1."""
+    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO7
+
+    state = {
+        "f": SeriesState(
+            higher="A", lower="B",
+            higher_wins=3, lower_wins=3,
+            games_needed=_GAMES_NEEDED_BO7,
+        ),
+    }
+    assert _find_bracket_slot(state, "A", "B") == ("f", 7)
+
+
+def test_find_bracket_slot_no_match_returns_none():
+    """Teams not in the bracket → None."""
+    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+
+    state = {
+        "qf1": SeriesState(
+            higher="A", lower="B",
+            games_needed=_GAMES_NEEDED_BO3,
+        ),
+    }
+    assert _find_bracket_slot(state, "X", "Y") is None
+
+
+def test_find_bracket_slot_skips_decided_series():
+    """A slot whose winner is set is treated as not matching (series is over)."""
+    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+
+    state = {
+        "qf1": SeriesState(
+            higher="A", lower="B",
+            higher_wins=2, lower_wins=0,
+            winner="A",
+            games_needed=_GAMES_NEEDED_BO3,
+        ),
+    }
+    assert _find_bracket_slot(state, "A", "B") is None
+
+
+def test_find_bracket_slot_skips_unseeded_slots():
+    """A slot with higher/lower=None (downstream not yet resolved) doesn't match."""
+    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO5
+
+    state = {
+        "sf1": SeriesState(games_needed=_GAMES_NEEDED_BO5),
+    }
+    assert _find_bracket_slot(state, "A", "B") is None
