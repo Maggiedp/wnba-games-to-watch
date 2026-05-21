@@ -63,6 +63,13 @@ def get_all_teams(session: Session) -> list[Team]:
     return session.query(Team).all()
 
 
+# Sentinel for upsert_game's time_utc kwarg so we can distinguish
+# "caller omitted the field" (preserve) from "caller explicitly says
+# TBD" (clear). ESPN's timeValid=False signal must clear a stale tip
+# time, not silently keep yesterday's value.
+_UNSET = object()
+
+
 def upsert_game(
     session: Session,
     team_a_id: int,
@@ -77,7 +84,7 @@ def upsert_game(
     excitement_index: float | None = None,
     is_complete: bool | None = None,
     season_type: int | None = None,
-    time_utc: str | None = None,
+    time_utc: str | None = _UNSET,  # type: ignore[assignment]
     _retry: bool = False,
 ) -> Game:
     """Upsert a game (insert if not exists, update result if it has been played).
@@ -138,7 +145,11 @@ def upsert_game(
             game.broadcaster = broadcaster
         if time:
             game.time = time
-        if time_utc is not None:
+        # Sentinel check: only `_UNSET` (default) means "caller omitted";
+        # an explicit `None` from _parse_event's TBD path clears the stale
+        # tip time. `time` keeps its preserve-on-empty semantics
+        # intentionally (transient ESPN empties; see CLAUDE.md gotcha).
+        if time_utc is not _UNSET:
             game.time_utc = time_utc
         if espn_id:
             game.espn_id = espn_id
@@ -197,12 +208,16 @@ def upsert_game(
         session.commit()
         return game
 
+    # On insert, the sentinel means "caller didn't specify" — store NULL
+    # (same as an explicit None). The retry path forwards `time_utc`
+    # verbatim so the sentinel reaches us here for unspecified callers.
+    insert_time_utc = None if time_utc is _UNSET else time_utc
     game = Game(
         team_a_id=team_a_id,
         team_b_id=team_b_id,
         date=date,
         time=time,
-        time_utc=time_utc,
+        time_utc=insert_time_utc,
         broadcaster=broadcaster,
         winner_id=winner_id,
         final_score_a=final_score_a,

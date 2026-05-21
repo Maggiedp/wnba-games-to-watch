@@ -2841,11 +2841,13 @@ def test_upsert_game_persists_time_utc(session, team_ids):
     assert game.time_utc == "2026-05-21T23:00:00+00:00"
 
 
-def test_upsert_game_does_not_clobber_time_utc_with_none(session, team_ids):
-    """A second upsert with time_utc=None must preserve the previously-stored value.
+def test_upsert_game_clears_time_utc_when_explicit_none(session, team_ids):
+    """ESPN's timeValid=False (TBD) signal must clear a stale tip time.
 
-    Mirrors test_upsert_game_preserves_time_when_incoming_empty — treat None
-    as 'no new info'.
+    _parse_event emits time_utc=None alongside time="" when ESPN withdraws
+    a previously-known tip time. The caller passes those values explicitly,
+    so the stored time_utc must be overwritten with NULL — otherwise the
+    frontend keeps localizing a stale UTC timestamp ESPN has retracted.
     """
     a_id, b_id = team_ids
 
@@ -2864,10 +2866,42 @@ def test_upsert_game_does_not_clobber_time_utc_with_none(session, team_ids):
         team_a_id=a_id,
         team_b_id=b_id,
         date="2026-05-21",
-        time="7:00 PM ET",
+        time="",
         time_utc=None,
         broadcaster="ESPN",
         espn_id="401717778",
+    )
+
+    assert game.time_utc is None
+
+
+def test_upsert_game_preserves_time_utc_when_kwarg_omitted(session, team_ids):
+    """A caller that doesn't pass time_utc at all must leave the stored value alone.
+
+    Distinct from the explicit-None case: omitting the kwarg means "no
+    info about this field" (e.g. a non-ESPN code path); the sentinel
+    default keeps prior data intact.
+    """
+    a_id, b_id = team_ids
+
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-21",
+        time="7:00 PM ET",
+        time_utc="2026-05-21T23:00:00+00:00",
+        broadcaster="ESPN",
+        espn_id="401717779",
+    )
+    game = upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-21",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="401717779",
     )
 
     assert game.time_utc == "2026-05-21T23:00:00+00:00"
