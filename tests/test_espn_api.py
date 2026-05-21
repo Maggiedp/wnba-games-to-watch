@@ -62,3 +62,16 @@ def test_parse_event_populates_time_utc_when_genuine_midnight_et():
     assert result is not None
     assert result["time"] == "12:00 AM ET"
     assert result["time_utc"] == "2026-05-22T04:00:00+00:00"
+
+
+def test_parse_event_time_utc_none_when_time_invalid_with_non_midnight_timestamp():
+    # ESPN occasionally leaves a non-midnight placeholder in `date`
+    # while flagging timeValid=False (schedule correction). The flag is
+    # authoritative — don't persist the placeholder.
+    event = _base_event("2026-05-22T19:30:00Z", time_valid=False)
+
+    result = _parse_event(event)
+
+    assert result is not None
+    assert result["time"] == ""
+    assert result["time_utc"] is None

@@ -197,8 +197,13 @@ def _parse_event(event: dict) -> Optional[dict]:
         dt_et = dt_utc.astimezone(_ET)
         game_date = dt_et.strftime("%Y-%m-%d")
 
+        # ESPN's timeValid flag is authoritative. When it's false, the
+        # timestamp in `event.date` is a placeholder regardless of
+        # whether it's midnight UTC or some other value — never persist
+        # it. When true, trust the timestamp even if it lands on
+        # midnight UTC (legitimate 8 PM ET tip-offs do that).
         time_valid = comp.get("timeValid", False)
-        if not time_valid and dt_utc.hour == 0 and dt_utc.minute == 0:
+        if not time_valid:
             game_time = ""
             game_time_utc = None
         else:
