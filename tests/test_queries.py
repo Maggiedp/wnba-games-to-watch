@@ -2822,3 +2822,192 @@ def test_get_completed_postseason_games_returns_old_and_new(session, team_ids):
     rows = get_completed_postseason_games(session, season_year=2026)
     espn_ids = [r.espn_id for r in rows]
     assert espn_ids == ["post_g1", "post_g2"]  # ordered by date,time; both old QF games
+
+
+def test_upsert_game_persists_time_utc(session, team_ids):
+    a_id, b_id = team_ids
+
+    game = upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-21",
+        time="7:00 PM ET",
+        time_utc="2026-05-21T23:00:00+00:00",
+        broadcaster="ESPN",
+        espn_id="401717777",
+    )
+
+    assert game.time_utc == "2026-05-21T23:00:00+00:00"
+
+
+def test_upsert_game_clears_time_utc_when_explicit_none(session, team_ids):
+    """ESPN's timeValid=False (TBD) signal must clear a stale tip time.
+
+    _parse_event emits time_utc=None alongside time="" when ESPN withdraws
+    a previously-known tip time. The caller passes those values explicitly,
+    so the stored time_utc must be overwritten with NULL — otherwise the
+    frontend keeps localizing a stale UTC timestamp ESPN has retracted.
+    """
+    a_id, b_id = team_ids
+
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-21",
+        time="7:00 PM ET",
+        time_utc="2026-05-21T23:00:00+00:00",
+        broadcaster="ESPN",
+        espn_id="401717778",
+    )
+    game = upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-21",
+        time="",
+        time_utc=None,
+        broadcaster="ESPN",
+        espn_id="401717778",
+    )
+
+    assert game.time_utc is None
+
+
+def test_upsert_game_preserves_time_utc_when_kwarg_omitted(session, team_ids):
+    """A caller that doesn't pass time_utc at all must leave the stored value alone.
+
+    Distinct from the explicit-None case: omitting the kwarg means "no
+    info about this field" (e.g. a non-ESPN code path); the sentinel
+    default keeps prior data intact.
+    """
+    a_id, b_id = team_ids
+
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-21",
+        time="7:00 PM ET",
+        time_utc="2026-05-21T23:00:00+00:00",
+        broadcaster="ESPN",
+        espn_id="401717779",
+    )
+    game = upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-21",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="401717779",
+    )
+
+    assert game.time_utc == "2026-05-21T23:00:00+00:00"
+
+
+def test_backfill_time_utc_derives_from_existing_time_and_date(session, team_ids):
+    """Legacy rows with time + date but no time_utc get UTC derived locally."""
+    from src.db.schema import backfill_time_utc_from_legacy
+
+    a_id, b_id = team_ids
+
+    game = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="7:00 PM ET",
+        time_utc=None,
+        broadcaster="ESPN",
+        espn_id="legacy_known",
+    )
+    session.add(game)
+    session.commit()
+
+    updated = backfill_time_utc_from_legacy(session)
+    assert updated == 1
+
+    session.expire_all()
+    refreshed = session.query(Game).filter_by(espn_id="legacy_known").one()
+    # 7:00 PM EDT on Jun 1 = 23:00 UTC.
+    assert refreshed.time_utc == "2026-06-01T23:00:00+00:00"
+
+
+def test_backfill_time_utc_skips_tbd_rows(session, team_ids):
+    """Empty time means genuine TBD — leave time_utc NULL."""
+    from src.db.schema import backfill_time_utc_from_legacy
+
+    a_id, b_id = team_ids
+
+    game = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="",
+        time_utc=None,
+        broadcaster="ESPN",
+        espn_id="legacy_tbd",
+    )
+    session.add(game)
+    session.commit()
+
+    updated = backfill_time_utc_from_legacy(session)
+    assert updated == 0
+
+    session.expire_all()
+    refreshed = session.query(Game).filter_by(espn_id="legacy_tbd").one()
+    assert refreshed.time_utc is None
+
+
+def test_backfill_time_utc_skips_already_populated(session, team_ids):
+    """Rows with time_utc set are left untouched — idempotent across runs."""
+    from src.db.schema import backfill_time_utc_from_legacy
+
+    a_id, b_id = team_ids
+
+    game = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="7:00 PM ET",
+        time_utc="2026-06-01T22:00:00+00:00",  # deliberately "wrong" value
+        broadcaster="ESPN",
+        espn_id="legacy_already",
+    )
+    session.add(game)
+    session.commit()
+
+    updated = backfill_time_utc_from_legacy(session)
+    assert updated == 0
+
+    session.expire_all()
+    refreshed = session.query(Game).filter_by(espn_id="legacy_already").one()
+    # Untouched — backfill only fills gaps, never overwrites.
+    assert refreshed.time_utc == "2026-06-01T22:00:00+00:00"
+
+
+def test_backfill_time_utc_dst_aware(session, team_ids):
+    """Standard time (EST, UTC-5) is handled correctly alongside DST (EDT, UTC-4)."""
+    from src.db.schema import backfill_time_utc_from_legacy
+
+    a_id, b_id = team_ids
+
+    # November tip-off: EST (UTC-5). 7 PM EST = 00:00 UTC next day.
+    game = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-11-15",
+        time="7:00 PM ET",
+        time_utc=None,
+        broadcaster="ESPN",
+        espn_id="legacy_est",
+    )
+    session.add(game)
+    session.commit()
+
+    backfill_time_utc_from_legacy(session)
+
+    session.expire_all()
+    refreshed = session.query(Game).filter_by(espn_id="legacy_est").one()
+    assert refreshed.time_utc == "2026-11-16T00:00:00+00:00"

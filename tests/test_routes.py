@@ -673,6 +673,84 @@ def test_filter_endpoint_mode_completed(tmp_path, monkeypatch):
     schema._session_factory = None
 
 
+def test_format_games_response_includes_time_utc(session, team_ids):
+    """time_utc from the Game row must surface in the response."""
+    a_id, b_id = team_ids
+
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="7:00 PM ET",
+        time_utc="2026-06-01T23:00:00+00:00",
+        broadcaster="ESPN",
+    )
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.3,
+        overall_score=42.0,
+        broadcaster="ESPN",
+    )
+
+    [resp] = format_games_response([ranking], session)
+
+    assert resp.time_utc == "2026-06-01T23:00:00+00:00"
+
+
+def test_format_games_response_clears_both_time_fields_on_tbd(session, team_ids):
+    """Full path: ESPN-known game → ESPN withdraws to TBD → API serves neither.
+
+    Regression for the failure mode Codex flagged on PR #41 — clearing
+    only time_utc let the frontend keep rendering the stale ET fallback
+    via formatLocalTime(game.time_utc, game.time). The combined TBD
+    signal (time="" + explicit time_utc=None) must clear both columns
+    end-to-end so the response shows no tip-off time at all.
+    """
+    a_id, b_id = team_ids
+
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="7:00 PM ET",
+        time_utc="2026-06-01T23:00:00+00:00",
+        broadcaster="ESPN",
+        espn_id="401900001",
+    )
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.3,
+        overall_score=42.0,
+        broadcaster="ESPN",
+    )
+
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="",
+        time_utc=None,
+        broadcaster="ESPN",
+        espn_id="401900001",
+    )
+
+    [resp] = format_games_response([ranking], session)
+
+    assert resp.time == ""
+    assert resp.time_utc is None
+
+
 def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
     """GET /api/playoff-odds returns 4 round probs sorted by win_championship_prob desc."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
@@ -732,3 +810,164 @@ def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
     assert rows[0]["win_championship_prob"] == pytest.approx(0.25)
     schema._engine = None
     schema._session_factory = None
+
+
+def test_upcoming_endpoint_includes_yesterday_et_for_west_coast_viewers(
+    tmp_path, monkeypatch
+):
+    """The endpoint must return rows keyed to yesterday-ET as well.
+
+    A 10 PM ET game whose ET date has rolled over (UTC midnight crossed)
+    is still in tonight's local window for any viewer west of Eastern.
+    The frontend's localDateISO filter prunes per-viewer; the server
+    needs to provide the candidate set or the boundary case shows
+    blank for non-ET users.
+    """
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+    monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    session = schema.get_session()
+
+    from src.db.queries import upsert_daily_ranking, upsert_team
+    from src.db.schema import Game
+
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(schema.Team).filter_by(name="Aces").one().id
+    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+
+    # Three games: yesterday-ET (boundary), today-ET, tomorrow-ET.
+    for date in ("2026-05-21", "2026-05-22", "2026-05-23"):
+        session.add(
+            Game(
+                team_a_id=a,
+                team_b_id=b,
+                date=date,
+                time="10:00 PM ET",
+                broadcaster="ION",
+                espn_id=f"g{date}",
+            )
+        )
+        upsert_daily_ranking(
+            session,
+            date=date,
+            team_a_id=a,
+            team_b_id=b,
+            quality_score=50.0,
+            importance_score=0.3,
+            overall_score=42.0,
+            broadcaster="ION",
+        )
+    session.commit()
+    session.close()
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/upcoming")
+    assert resp.status_code == 200
+    dates = sorted(r["date"] for r in resp.json())
+    assert dates == ["2026-05-21", "2026-05-22", "2026-05-23"]
+    schema._engine = None
+    schema._session_factory = None
+
+
+def test_live_status_endpoint_merges_yesterday_and_today_et(tmp_path, monkeypatch):
+    """Live-status must include yesterday-ET in-progress games.
+
+    Mirrors the upcoming-window widening. Without this, a late-ET game
+    still live after the UTC midnight rollover would appear in the
+    upcoming response but with no status — the frontend's isLiveStatus
+    gate would skip live-WP polling and render stale pregame odds.
+    """
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+    monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
+
+    calls: list[str] = []
+
+    def fake_fetch(game_date: str):
+        calls.append(game_date)
+        if game_date == "2026-05-22":
+            return {"401_today": "STATUS_SCHEDULED"}
+        if game_date == "2026-05-21":
+            return {"401_yesterday_live": "STATUS_IN_PROGRESS"}
+        return {}
+
+    monkeypatch.setattr("src.api.app.fetch_today_game_statuses", fake_fetch)
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/live-status")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Both ET days fetched, both espn_ids surfaced.
+    assert set(calls) == {"2026-05-21", "2026-05-22"}
+    assert body["401_today"] == "STATUS_SCHEDULED"
+    assert body["401_yesterday_live"] == "STATUS_IN_PROGRESS"
+
+
+def test_live_status_endpoint_degrades_gracefully_when_yesterday_fetch_fails(
+    tmp_path, monkeypatch
+):
+    """A transient ESPN failure on yesterday's call must NOT strand today's
+    live games. Today is the primary call; yesterday is best-effort.
+    """
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+    monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
+
+    from src.data.espn_api import ESPNAPIError
+
+    def fake_fetch(game_date: str):
+        if game_date == "2026-05-22":
+            return {"401_today_live": "STATUS_IN_PROGRESS"}
+        raise ESPNAPIError("simulated yesterday outage")
+
+    monkeypatch.setattr("src.api.app.fetch_today_game_statuses", fake_fetch)
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/live-status")
+    assert resp.status_code == 200
+    assert resp.json() == {"401_today_live": "STATUS_IN_PROGRESS"}
+
+
+def test_live_status_endpoint_502s_when_today_fetch_fails(tmp_path, monkeypatch):
+    """Today's call is the canary — failure surfaces as 502 so the
+    frontend backoff loop kicks in. Preserves the prior contract.
+    """
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+    monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
+
+    from src.data.espn_api import ESPNAPIError
+
+    def fake_fetch(game_date: str):
+        if game_date == "2026-05-22":
+            raise ESPNAPIError("simulated today outage")
+        return {}
+
+    monkeypatch.setattr("src.api.app.fetch_today_game_statuses", fake_fetch)
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/live-status")
+    assert resp.status_code == 502

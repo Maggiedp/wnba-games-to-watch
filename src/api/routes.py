@@ -21,6 +21,7 @@ class GameResponse(BaseModel):
 
     date: str
     time: str
+    time_utc: str | None = None
     team_a: str
     team_b: str
     team_a_abbr: str = ""
@@ -94,6 +95,7 @@ def format_games_response(
         key = (ranking.date, ranking.team_a_id, ranking.team_b_id)
         gf = fields.get(key)
         time_val = gf.time if gf else ""
+        time_utc_val = gf.time_utc if gf else None
         espn_id = gf.espn_id if gf else None
         final_score_a = gf.final_score_a if gf else None
         final_score_b = gf.final_score_b if gf else None
@@ -111,6 +113,7 @@ def format_games_response(
             GameResponse(
                 date=ranking.date,
                 time=time_val,
+                time_utc=time_utc_val,
                 team_a=team_a.name,
                 team_b=team_b.name,
                 team_a_abbr=team_a.abbreviation or "",
@@ -1534,9 +1537,11 @@ _HOMEPAGE_HTML = f"""
                 // Top pick is fixed to the next 7 days regardless of the user's date range.
                 const today = addDaysISO(0);
                 const weekOut = addDaysISO(7);
-                const featuredCandidates = allGames.filter(g =>
-                    inScope(g) && g.date >= today && g.date <= weekOut
-                );
+                const featuredCandidates = allGames.filter(g => {{
+                    if (!inScope(g)) return false;
+                    const d = localDateISO(g);
+                    return d >= today && d <= weekOut;
+                }});
                 const featured = featuredCandidates.length === 0
                     ? null
                     : featuredCandidates.reduce((best, g) => g.overall_score > best.overall_score ? g : best);
@@ -1544,8 +1549,9 @@ _HOMEPAGE_HTML = f"""
 
                 const games = allGames.filter(game => {{
                     if (!inScope(game)) return false;
-                    if (fromDate && game.date < fromDate) return false;
-                    if (toDate && game.date > toDate) return false;
+                    const d = localDateISO(game);
+                    if (fromDate && d < fromDate) return false;
+                    if (toDate && d > toDate) return false;
                     return true;
                 }});
 
@@ -1561,7 +1567,7 @@ _HOMEPAGE_HTML = f"""
                 if (sortBy === 'score') {{
                     rest.sort((a, b) => b.overall_score - a.overall_score);
                 }} else {{
-                    rest.sort((a, b) => a.date.localeCompare(b.date) || timeToMinutes(a.time) - timeToMinutes(b.time));
+                    rest.sort((a, b) => localDateISO(a).localeCompare(localDateISO(b)) || timeKey(a) - timeKey(b));
                 }}
                 renderGames(rest, featured, 'games-container', 'Overall');
                 if (isCompletedExpanded()) renderCompleted();
@@ -1642,7 +1648,10 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function sortCompleted(games) {{
-                const byDateDesc = (a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
+                const byDateDesc = (a, b) => {{
+                    const da = localDateISO(a), db = localDateISO(b);
+                    return da < db ? 1 : da > db ? -1 : 0;
+                }};
                 const byExciteDesc = (a, b) =>
                     (b.excitement_index ?? -Infinity) - (a.excitement_index ?? -Infinity);
                 const cmp = completedSortMode === 'date'
@@ -1682,7 +1691,7 @@ _HOMEPAGE_HTML = f"""
                     <div class="featured-eyebrow">Top pick &middot; Next 7 days</div>
                     <article class="featured" aria-label="Top pick game">
                         <div>
-                            <div class="featured-meta">${{formatDate(game.date, {{ weekday: 'long', month: 'long', day: 'numeric' }})}} &middot; ${{escapeHtml(game.time || 'TBD')}}</div>
+                            <div class="featured-meta">${{formatLocalDate(game, {{ weekday: 'long', month: 'long', day: 'numeric' }})}} &middot; ${{escapeHtml(formatLocalTime(game.time_utc, game.time))}}</div>
                             <div class="featured-teams">
                                 ${{renderTeam(game.team_a, game.team_a_logo)}}
                                 <span class="vs">vs</span>
@@ -1741,15 +1750,46 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
-            function timeToMinutes(t) {{
-                if (!t || t === 'TBD') return Infinity;
-                const m = t.match(/(\d+):(\d+)\s*(AM|PM)/i);
-                if (!m) return Infinity;
-                let h = parseInt(m[1], 10);
-                const min = parseInt(m[2], 10);
-                if (m[3].toUpperCase() === 'PM' && h !== 12) h += 12;
-                if (m[3].toUpperCase() === 'AM' && h === 12) h = 0;
-                return h * 60 + min;
+            function formatLocalTime(timeUtc, fallback) {{
+                if (!timeUtc) return fallback || 'TBD';
+                const d = new Date(timeUtc);
+                if (isNaN(d)) return fallback || 'TBD';
+                return d.toLocaleTimeString(undefined, {{
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    timeZoneName: 'short',
+                }});
+            }}
+
+            function timeKey(g) {{
+                const t = g.time_utc ? Date.parse(g.time_utc) : NaN;
+                return isNaN(t) ? Infinity : t;
+            }}
+
+            // Local-tz Date derived from time_utc, or null if unavailable.
+            // Shared by localDateISO and formatLocalDate. Both fall back to
+            // the ET schedule date when this returns null (transient during
+            // the first daily-update cycle after deploy).
+            function gameLocalDate(g) {{
+                if (!g.time_utc) return null;
+                const d = new Date(g.time_utc);
+                return isNaN(d) ? null : d;
+            }}
+
+            function localDateISO(g) {{
+                const d = gameLocalDate(g);
+                if (!d) return g.date;
+                return d.getFullYear() + '-' +
+                    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                    String(d.getDate()).padStart(2, '0');
+            }}
+
+            function formatLocalDate(g, opts) {{
+                const d = gameLocalDate(g);
+                if (!d) return formatDate(g.date, opts);
+                return d.toLocaleDateString(
+                    undefined, opts || {{ weekday: 'short', month: 'short', day: 'numeric' }}
+                );
             }}
 
             function formatDate(dateStr, opts) {{
@@ -1885,8 +1925,8 @@ _HOMEPAGE_HTML = f"""
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
                     <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
-                        <td class="col-date">${{formatDate(game.date)}}</td>
-                        <td class="col-time">${{escapeHtml(game.time || 'TBD')}}</td>
+                        <td class="col-date">${{formatLocalDate(game)}}</td>
+                        <td class="col-time">${{escapeHtml(formatLocalTime(game.time_utc, game.time))}}</td>
                         <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{primaryScore(game)}}</span></div></td>
                         <td>
                             ${{badge}}
@@ -1913,8 +1953,8 @@ _HOMEPAGE_HTML = f"""
             function renderGameCard(game, isTopPick) {{
                 const cls = primaryScoreClass(game);
                 const eyebrow = isTopPick ? '<div class="games-card-eyebrow">Top pick</div>' : '';
-                const dateStr = formatDate(game.date);
-                const timeStr = escapeHtml(game.time || 'TBD');
+                const dateStr = formatLocalDate(game);
+                const timeStr = escapeHtml(formatLocalTime(game.time_utc, game.time));
                 const hasBroadcaster = game.broadcaster && game.broadcaster !== 'TBD';
                 const broadcastSeg = hasBroadcaster ? ` &middot; ${{escapeHtml(game.broadcaster)}}` : '';
                 const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;

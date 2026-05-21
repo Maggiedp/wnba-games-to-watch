@@ -41,6 +41,7 @@ class Game(Base):
     team_b_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
     date = Column(String(10), nullable=False)  # YYYY-MM-DD
     time = Column(String(20), default="")
+    time_utc = Column(String(40), nullable=True)
     winner_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
     final_score_a = Column(Integer, nullable=True)
     final_score_b = Column(Integer, nullable=True)
@@ -130,6 +131,58 @@ def get_database_url() -> str:
         relative_part = db_url.replace("sqlite:///./", "")
         db_url = f"sqlite:///{os.path.join(base_path, relative_part)}"
     return db_url
+
+
+def backfill_time_utc_from_legacy(session) -> int:
+    """Derive `time_utc` for existing rows where it's NULL but `time` is known.
+
+    The daily ingest only fetches yesterday-forward, so games completed
+    before deploy keep NULL `time_utc` forever — leaving the completed-
+    games archive mixing ET-only display (legacy rows via fallback) and
+    localized display (new rows). This one-shot helper closes that gap
+    by converting the stored ET string + ET-keyed date back to UTC via
+    `zoneinfo` (DST-aware). Idempotent: skips rows already populated or
+    with empty `time` (genuine TBD).
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from src.data.espn_api import ET
+
+    # Probe first so a steady-state boot doesn't pay full-scan ORM
+    # hydration on every cold start. After backfill completes, every
+    # subsequent call returns 0 rows via this single LIMIT 1 query.
+    has_legacy = (
+        session.query(Game.id)
+        .filter(Game.time_utc.is_(None))
+        .filter(Game.time != "")
+        .limit(1)
+        .first()
+    )
+    if has_legacy is None:
+        return 0
+
+    utc = ZoneInfo("UTC")
+    rows = (
+        session.query(Game)
+        .filter(Game.time_utc.is_(None))
+        .filter(Game.time != "")
+        .all()
+    )
+    updated = 0
+    for game in rows:
+        time_str = (game.time or "").replace(" ET", "").strip()
+        try:
+            t = datetime.strptime(time_str, "%I:%M %p")
+            d = datetime.strptime(game.date, "%Y-%m-%d")
+        except ValueError:
+            continue
+        dt_et = d.replace(hour=t.hour, minute=t.minute, tzinfo=ET)
+        game.time_utc = dt_et.astimezone(utc).isoformat()
+        updated += 1
+    if updated:
+        session.commit()
+    return updated
 
 
 def _dedupe_games_by_espn_id(conn) -> int:
@@ -270,6 +323,7 @@ def init_db():
                 "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
                 "ALTER TABLE games ADD COLUMN excitement_computed_at DATETIME",
                 "ALTER TABLE games ADD COLUMN season_type INTEGER",
+                "ALTER TABLE games ADD COLUMN time_utc VARCHAR(40)",
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_semis_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_finals_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN win_championship_prob FLOAT",
@@ -360,6 +414,9 @@ def init_db():
                 text("ALTER TABLE games ADD COLUMN IF NOT EXISTS season_type INTEGER")
             )
             conn.execute(
+                text("ALTER TABLE games ADD COLUMN IF NOT EXISTS time_utc VARCHAR(40)")
+            )
+            conn.execute(
                 text(
                     "ALTER TABLE playoff_probabilities ADD COLUMN IF NOT EXISTS "
                     "reach_semis_prob FLOAT"
@@ -385,6 +442,16 @@ def init_db():
                 )
             )
             conn.commit()
+
+    # One-shot backfill for the time_utc column on pre-deploy rows. The
+    # daily ingest only sees yesterday-forward; without this, the
+    # completed-games archive would mix ET-only and localized display.
+    Session = sessionmaker(bind=engine)
+    backfill_session = Session()
+    try:
+        backfill_time_utc_from_legacy(backfill_session)
+    finally:
+        backfill_session.close()
     return engine
 
 

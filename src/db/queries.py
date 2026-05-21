@@ -63,6 +63,17 @@ def get_all_teams(session: Session) -> list[Team]:
     return session.query(Team).all()
 
 
+# Sentinel for upsert_game's time_utc kwarg so we can distinguish
+# "caller omitted the field" (preserve) from "caller explicitly says
+# TBD" (clear). ESPN's timeValid=False signal must clear a stale tip
+# time, not silently keep yesterday's value.
+class _Unset:
+    pass
+
+
+_UNSET = _Unset()
+
+
 def upsert_game(
     session: Session,
     team_a_id: int,
@@ -77,6 +88,7 @@ def upsert_game(
     excitement_index: float | None = None,
     is_complete: bool | None = None,
     season_type: int | None = None,
+    time_utc: str | None | _Unset = _UNSET,
     _retry: bool = False,
 ) -> Game:
     """Upsert a game (insert if not exists, update result if it has been played).
@@ -135,8 +147,15 @@ def upsert_game(
             game.final_score_b = None
         if broadcaster:
             game.broadcaster = broadcaster
+        # Combined TBD signal: empty `time` + explicit `time_utc=None`.
+        # `time` alone preserves (transient ESPN empties; CLAUDE.md gotcha).
+        explicit_tbd = time_utc is not _UNSET and time_utc is None and time == ""
         if time:
             game.time = time
+        elif explicit_tbd:
+            game.time = ""
+        if time_utc is not _UNSET:
+            game.time_utc = time_utc
         if espn_id:
             game.espn_id = espn_id
         if season_type is not None:
@@ -194,11 +213,16 @@ def upsert_game(
         session.commit()
         return game
 
+    # On insert, the sentinel means "caller didn't specify" — store NULL
+    # (same as an explicit None). The retry path forwards `time_utc`
+    # verbatim so the sentinel reaches us here for unspecified callers.
+    insert_time_utc = None if time_utc is _UNSET else time_utc
     game = Game(
         team_a_id=team_a_id,
         team_b_id=team_b_id,
         date=date,
         time=time,
+        time_utc=insert_time_utc,
         broadcaster=broadcaster,
         winner_id=winner_id,
         final_score_a=final_score_a,
@@ -231,6 +255,7 @@ def upsert_game(
             excitement_index=excitement_index,
             is_complete=is_complete,
             season_type=season_type,
+            time_utc=time_utc,
             _retry=True,
         )
     return game
@@ -287,6 +312,7 @@ class GameFields:
     DailyRanking.broadcaster freezes at scoring time."""
 
     time: str
+    time_utc: str | None
     espn_id: str | None
     final_score_a: int | None
     final_score_b: int | None
@@ -315,6 +341,7 @@ def get_game_fields(
     return {
         (g.date, g.team_a_id, g.team_b_id): GameFields(
             time=g.time or "",
+            time_utc=g.time_utc,
             espn_id=g.espn_id,
             final_score_a=g.final_score_a,
             final_score_b=g.final_score_b,

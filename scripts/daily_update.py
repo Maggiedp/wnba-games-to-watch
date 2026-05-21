@@ -171,6 +171,7 @@ def fetch_and_store_games(session) -> list[dict]:
             team_b_id=team_b_id,
             date=game.get("date", ""),
             time=game.get("time", ""),
+            time_utc=game.get("time_utc"),
             broadcaster=game.get("broadcaster", ""),
             winner_id=get_cached_team_id(winner_team) if winner_team else None,
             final_score_a=game.get("final_score_a"),
