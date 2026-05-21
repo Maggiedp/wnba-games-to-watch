@@ -288,20 +288,6 @@ def test_return_matrix_shape():
     assert len(champions) == 50
 
 
-def test_return_matrix_now_yields_five_tuple():
-    """return_matrix=True yields (round_probs, outcome_matrix, playoff_sets,
-    bracket_outcomes, champions)."""
-    import random; random.seed(0)
-    result = run_monte_carlo_simulation(_S3, _G2, num_simulations=50, return_matrix=True)
-    assert isinstance(result, tuple) and len(result) == 5
-    round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions = result
-    assert isinstance(round_probs, RoundProbabilities)
-    assert len(outcome_matrix) == 50
-    assert len(playoff_sets) == 50
-    assert len(bracket_outcomes) == 50
-    assert len(champions) == 50
-
-
 def test_bracket_outcomes_populated_when_eight_teams_seed():
     """When 8 teams reach the playoffs, bracket_outcomes for that sim is non-empty."""
     import random; random.seed(0)
