@@ -58,3 +58,17 @@ def compute_all_game_importance(
         importance_scores.append(score)
 
     return importance_scores
+
+
+# Theoretical max for postseason championship swing. A single bracket game that
+# cleanly flips the champion between two teams produces |Δ|=1.0 on each side
+# → Σ|Δ| = 2.0 across all teams. Game 7 of a Finals between evenly-matched
+# teams hits roughly that. Fixed ceiling keeps scores comparable across
+# postseasons; per-bracket calibration would distort with the draw.
+POSTSEASON_MAX_SWING = 2.0
+
+
+def normalize_postseason_importance(swing: float) -> float:
+    """Map a championship swing (0.0–2.0) to a 0–100 importance score."""
+    clamped = max(0.0, min(POSTSEASON_MAX_SWING, swing))
+    return (clamped / POSTSEASON_MAX_SWING) * 100.0
