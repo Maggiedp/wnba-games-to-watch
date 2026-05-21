@@ -702,6 +702,55 @@ def test_format_games_response_includes_time_utc(session, team_ids):
     assert resp.time_utc == "2026-06-01T23:00:00+00:00"
 
 
+def test_format_games_response_clears_both_time_fields_on_tbd(session, team_ids):
+    """Full path: ESPN-known game → ESPN withdraws to TBD → API serves neither.
+
+    Regression for the failure mode Codex flagged on PR #41 — clearing
+    only time_utc let the frontend keep rendering the stale ET fallback
+    via formatLocalTime(game.time_utc, game.time). The combined TBD
+    signal (time="" + explicit time_utc=None) must clear both columns
+    end-to-end so the response shows no tip-off time at all.
+    """
+    a_id, b_id = team_ids
+
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="7:00 PM ET",
+        time_utc="2026-06-01T23:00:00+00:00",
+        broadcaster="ESPN",
+        espn_id="401900001",
+    )
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.3,
+        overall_score=42.0,
+        broadcaster="ESPN",
+    )
+
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="",
+        time_utc=None,
+        broadcaster="ESPN",
+        espn_id="401900001",
+    )
+
+    [resp] = format_games_response([ranking], session)
+
+    assert resp.time == ""
+    assert resp.time_utc is None
+
+
 def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
     """GET /api/playoff-odds returns 4 round probs sorted by win_championship_prob desc."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")

@@ -143,12 +143,18 @@ def upsert_game(
             game.final_score_b = None
         if broadcaster:
             game.broadcaster = broadcaster
+        # Combined TBD signal from _parse_event: empty time string
+        # paired with an explicit time_utc=None. Both fields move
+        # together through the parser, so the pair is unambiguous —
+        # clear both, otherwise the frontend keeps rendering the stale
+        # ET string via the formatLocalTime fallback. A bare empty time
+        # without the time_utc signal still preserves (transient ESPN
+        # empties from other code paths; see CLAUDE.md gotcha).
+        explicit_tbd = time_utc is not _UNSET and time_utc is None and time == ""
         if time:
             game.time = time
-        # Sentinel check: only `_UNSET` (default) means "caller omitted";
-        # an explicit `None` from _parse_event's TBD path clears the stale
-        # tip time. `time` keeps its preserve-on-empty semantics
-        # intentionally (transient ESPN empties; see CLAUDE.md gotcha).
+        elif explicit_tbd:
+            game.time = ""
         if time_utc is not _UNSET:
             game.time_utc = time_utc
         if espn_id:
