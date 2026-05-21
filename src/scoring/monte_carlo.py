@@ -321,3 +321,50 @@ def compute_importance_from_matrix(
         swings.append(swing)
 
     return swings
+
+
+def compute_postseason_swing_from_matrix(
+    focal_slot: str,
+    focal_game_num: int,
+    bracket_outcomes: list[dict[tuple[str, int], bool]],
+    champions: list[str | None],
+    team_names: list[str],
+) -> float:
+    """Compute championship-swing for a specific bracket game.
+
+    Partitions the simulation set by who won the focal bracket game, then
+    computes Σ |P(team = champion | higher won) − P(team = champion | lower won)|
+    across all team names.
+
+    Args:
+        focal_slot: bracket slot id, e.g. "qf1", "sf2", "f".
+        focal_game_num: 1-indexed game number within the series.
+        bracket_outcomes: per-sim dict of (slot, game_num) -> did_higher_win.
+        champions: per-sim champion name (or None if no bracket played).
+        team_names: all team names to sum |Δ| across.
+
+    Returns:
+        Raw swing value (0.0–2.0). Normalize with `normalize_postseason_importance`.
+        Returns 0.0 if either partition bucket is empty (focal game didn't
+        happen in any sim, or all sims agree on the outcome).
+    """
+    higher_indices: list[int] = []
+    lower_indices: list[int] = []
+    for i, outcomes in enumerate(bracket_outcomes):
+        played = outcomes.get((focal_slot, focal_game_num))
+        if played is True:
+            higher_indices.append(i)
+        elif played is False:
+            lower_indices.append(i)
+        # None → missing key → focal game not played in this sim; skip.
+
+    if not higher_indices or not lower_indices:
+        return 0.0
+
+    def champ_rate(indices: list[int], team: str) -> float:
+        return sum(1 for i in indices if champions[i] == team) / len(indices)
+
+    swing = 0.0
+    for team in team_names:
+        swing += abs(champ_rate(higher_indices, team) - champ_rate(lower_indices, team))
+    return swing
