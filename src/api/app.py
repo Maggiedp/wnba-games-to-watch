@@ -88,23 +88,45 @@ async def get_upcoming_games_endpoint(days: int = Query(7, ge=1, le=30)):  # noq
 
 @app.get("/api/games/live-status")
 def get_live_game_statuses():
-    """Return {espn_id: status} for today's games.
+    """Return {espn_id: status} for today-ET and yesterday-ET games.
 
     Split off from /api/games/upcoming so a slow ESPN scoreboard call can't
     block the homepage's primary DB-backed response. The frontend fetches
     this in parallel and uses it to drive live-WP hydration. Sync `def` so
     FastAPI runs the blocking ESPN call in a threadpool.
 
-    Returns 502 on ESPN failure so the frontend can distinguish "ESPN is down"
-    from "no games today" (both would otherwise produce {}). The frontend
-    backs off and retries on 5xx so a transient outage doesn't strand the
-    page on stale pregame WP forever.
+    Widened by one ET day to match /api/games/upcoming. A late-ET game
+    keyed to yesterday-ET that's still in progress must be polled for
+    live WP from viewers west of Eastern; otherwise the frontend's
+    isLiveStatus(g.game_status) gate sees no status and the row stays
+    on stale pregame odds.
+
+    Today is the primary call (raises 502 on failure for the
+    frontend's backoff). Yesterday is best-effort: a transient ESPN
+    burp on the secondary call shouldn't strand today's live games.
+
+    Returns 502 on today-side ESPN failure so the frontend can distinguish
+    "ESPN is down" from "no games today" (both would otherwise produce {}).
+    The frontend backs off and retries on 5xx.
     """
+    from datetime import datetime, timedelta
+
+    today = today_et()
+    et_today = datetime.strptime(today, "%Y-%m-%d").date()
+    yesterday = (et_today - timedelta(days=1)).strftime("%Y-%m-%d")
     try:
-        return fetch_today_game_statuses(today_et())
+        statuses = fetch_today_game_statuses(today)
     except ESPNAPIError as e:
         logger.warning("Failed to fetch today's game statuses from ESPN: %s", e)
         raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
+    try:
+        yesterday_statuses = fetch_today_game_statuses(yesterday)
+    except ESPNAPIError as e:
+        logger.warning("Failed to fetch yesterday's game statuses (non-fatal): %s", e)
+        yesterday_statuses = {}
+    # Today's authoritative values win on espn_id collision (shouldn't
+    # happen — each game tips off on exactly one ET date — but defensive).
+    return {**yesterday_statuses, **statuses}
 
 
 @app.get("/api/games/completed", response_model=list[GameResponse])

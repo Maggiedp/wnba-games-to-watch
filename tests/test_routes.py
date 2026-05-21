@@ -876,3 +876,94 @@ def test_upcoming_endpoint_includes_yesterday_et_for_west_coast_viewers(
     assert dates == ["2026-05-21", "2026-05-22", "2026-05-23"]
     schema._engine = None
     schema._session_factory = None
+
+
+def test_live_status_endpoint_merges_yesterday_and_today_et(tmp_path, monkeypatch):
+    """Live-status must include yesterday-ET in-progress games.
+
+    Mirrors the upcoming-window widening. Without this, a late-ET game
+    still live after the UTC midnight rollover would appear in the
+    upcoming response but with no status — the frontend's isLiveStatus
+    gate would skip live-WP polling and render stale pregame odds.
+    """
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+
+    calls: list[str] = []
+
+    def fake_fetch(game_date: str):
+        calls.append(game_date)
+        if game_date == "2026-05-22":
+            return {"401_today": "STATUS_SCHEDULED"}
+        if game_date == "2026-05-21":
+            return {"401_yesterday_live": "STATUS_IN_PROGRESS"}
+        return {}
+
+    monkeypatch.setattr("src.api.app.fetch_today_game_statuses", fake_fetch)
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/live-status")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Both ET days fetched, both espn_ids surfaced.
+    assert set(calls) == {"2026-05-21", "2026-05-22"}
+    assert body["401_today"] == "STATUS_SCHEDULED"
+    assert body["401_yesterday_live"] == "STATUS_IN_PROGRESS"
+
+
+def test_live_status_endpoint_degrades_gracefully_when_yesterday_fetch_fails(
+    tmp_path, monkeypatch
+):
+    """A transient ESPN failure on yesterday's call must NOT strand today's
+    live games. Today is the primary call; yesterday is best-effort.
+    """
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+
+    from src.data.espn_api import ESPNAPIError
+
+    def fake_fetch(game_date: str):
+        if game_date == "2026-05-22":
+            return {"401_today_live": "STATUS_IN_PROGRESS"}
+        raise ESPNAPIError("simulated yesterday outage")
+
+    monkeypatch.setattr("src.api.app.fetch_today_game_statuses", fake_fetch)
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/live-status")
+    assert resp.status_code == 200
+    assert resp.json() == {"401_today_live": "STATUS_IN_PROGRESS"}
+
+
+def test_live_status_endpoint_502s_when_today_fetch_fails(tmp_path, monkeypatch):
+    """Today's call is the canary — failure surfaces as 502 so the
+    frontend backoff loop kicks in. Preserves the prior contract.
+    """
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
+
+    from src.data.espn_api import ESPNAPIError
+
+    def fake_fetch(game_date: str):
+        if game_date == "2026-05-22":
+            raise ESPNAPIError("simulated today outage")
+        return {}
+
+    monkeypatch.setattr("src.api.app.fetch_today_game_statuses", fake_fetch)
+
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    client = TestClient(app)
+    resp = client.get("/api/games/live-status")
+    assert resp.status_code == 502
