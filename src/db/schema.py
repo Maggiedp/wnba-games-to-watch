@@ -133,6 +133,44 @@ def get_database_url() -> str:
     return db_url
 
 
+def backfill_time_utc_from_legacy(session) -> int:
+    """Derive `time_utc` for existing rows where it's NULL but `time` is known.
+
+    The daily ingest only fetches yesterday-forward, so games completed
+    before deploy keep NULL `time_utc` forever — leaving the completed-
+    games archive mixing ET-only display (legacy rows via fallback) and
+    localized display (new rows). This one-shot helper closes that gap
+    by converting the stored ET string + ET-keyed date back to UTC via
+    `zoneinfo` (DST-aware). Idempotent: skips rows already populated or
+    with empty `time` (genuine TBD).
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    utc = ZoneInfo("UTC")
+    rows = (
+        session.query(Game)
+        .filter(Game.time_utc.is_(None))
+        .filter(Game.time != "")
+        .all()
+    )
+    updated = 0
+    for game in rows:
+        time_str = (game.time or "").replace(" ET", "").strip()
+        try:
+            t = datetime.strptime(time_str, "%I:%M %p")
+            d = datetime.strptime(game.date, "%Y-%m-%d")
+        except ValueError:
+            continue
+        dt_et = d.replace(hour=t.hour, minute=t.minute, tzinfo=et)
+        game.time_utc = dt_et.astimezone(utc).isoformat()
+        updated += 1
+    if updated:
+        session.commit()
+    return updated
+
+
 def _dedupe_games_by_espn_id(conn) -> int:
     """Merge duplicate non-null espn_id rows into a single survivor.
 
@@ -390,6 +428,16 @@ def init_db():
                 )
             )
             conn.commit()
+
+    # One-shot backfill for the time_utc column on pre-deploy rows. The
+    # daily ingest only sees yesterday-forward; without this, the
+    # completed-games archive would mix ET-only and localized display.
+    Session = sessionmaker(bind=engine)
+    backfill_session = Session()
+    try:
+        backfill_time_utc_from_legacy(backfill_session)
+    finally:
+        backfill_session.close()
     return engine
 
 
