@@ -194,3 +194,76 @@ def test_find_bracket_slot_skips_unseeded_slots():
         "sf1": SeriesState(games_needed=_GAMES_NEEDED_BO5),
     }
     assert _find_bracket_slot(state, "A", "B") is None
+
+
+from scripts.daily_update import _importance_for_game
+
+
+def test_importance_for_game_postseason_fallback_when_no_bracket_state():
+    """season_type=3 + no bracket_state → fallback 100.0."""
+    game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
+    assert _importance_for_game(
+        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
+        bracket_state=None, bracket_outcomes=None, champions=None, team_names=None,
+    ) == 100.0
+
+
+def test_importance_for_game_postseason_fallback_when_teams_not_in_bracket():
+    """season_type=3 + bracket_state without these teams → fallback 100.0."""
+    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+
+    state = {"qf1": SeriesState(higher="X", lower="Y", games_needed=_GAMES_NEEDED_BO3)}
+    game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
+    result = _importance_for_game(
+        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
+        bracket_state=state, bracket_outcomes=[], champions=[],
+        team_names=["A", "B"],
+    )
+    assert result == 100.0
+
+
+def test_importance_for_game_postseason_derives_from_swing():
+    """When all data is present, returns normalized swing."""
+    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO7
+
+    state = {
+        "f": SeriesState(
+            higher="A", lower="B",
+            higher_wins=3, lower_wins=3,
+            games_needed=_GAMES_NEEDED_BO7,
+        ),
+    }
+    # Construct synthetic sims where Finals Game 7 cleanly flips the champion.
+    bracket_outcomes = (
+        [{("f", 7): True}] * 500
+        + [{("f", 7): False}] * 500
+    )
+    champions = ["A"] * 500 + ["B"] * 500
+    game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
+    result = _importance_for_game(
+        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
+        bracket_state=state, bracket_outcomes=bracket_outcomes,
+        champions=champions, team_names=["A", "B", "C"],
+    )
+    # Swing = 2.0 → normalized = 100.
+    assert result == pytest.approx(100.0, abs=1e-6)
+
+
+def test_importance_for_game_regular_season_unchanged():
+    """Regular-season path still uses raw_swings + ceiling, ignoring new kwargs."""
+    game = {"season_type": 2, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
+    raw_swings = [0.375]  # half the default ceiling
+    remaining_event_index = {"evt-1": 0}
+    result = _importance_for_game(
+        game, raw_swings=raw_swings, remaining_event_index=remaining_event_index,
+        importance_ceiling=0.75,
+    )
+    assert result == pytest.approx(50.0, abs=1e-6)
+
+
+def test_importance_for_game_preseason_returns_zero():
+    """Preseason (season_type=1) returns 0 regardless of new kwargs."""
+    game = {"season_type": 1, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
+    assert _importance_for_game(
+        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
+    ) == 0.0

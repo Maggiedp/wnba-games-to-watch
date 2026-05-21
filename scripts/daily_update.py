@@ -46,7 +46,10 @@ from src.scoring.elo import (
     replay_games,
 )
 from src.scoring.excitement import compute_excitement
-from src.scoring.importance import normalize_importance_score
+from src.scoring.importance import (
+    normalize_importance_score,
+    normalize_postseason_importance,
+)
 from src.scoring.monte_carlo import (
     RoundProbabilities,
     compute_importance_from_matrix,
@@ -562,10 +565,18 @@ def _importance_for_game(
     raw_swings: list[float],
     remaining_event_index: dict[str, int],
     importance_ceiling: float,
+    bracket_state=None,
+    bracket_outcomes: list[dict[tuple[str, int], bool]] | None = None,
+    champions: list[str | None] | None = None,
+    team_names: list[str] | None = None,
 ) -> float | None:
     """Compute the importance score for one upcoming game.
 
-    Preseason: 0. Postseason: 100 (all playoff games are championship-stakes).
+    Preseason: 0. Postseason: championship-swing derived from the existing
+    MC run (sims partitioned by who won the focal bracket game), normalized
+    against POSTSEASON_MAX_SWING=2.0. Falls back to 100.0 when the game
+    can't be matched to an in-progress bracket slot (downstream rounds
+    where upstream hasn't resolved, TBD ESPN rows, or no bracket_state).
     Regular season: normalized bubble-swing from the MC run, or None if the
     event_id isn't in the sim universe.
     """
@@ -573,7 +584,23 @@ def _importance_for_game(
     if season_type == 1:
         return 0.0
     if season_type == 3:
-        return 100.0
+        if (
+            bracket_state is None
+            or bracket_outcomes is None
+            or champions is None
+            or team_names is None
+        ):
+            return 100.0
+        matched = _find_bracket_slot(bracket_state, game["team_a"], game["team_b"])
+        if matched is None:
+            return 100.0
+        slot_id, game_num = matched
+        from src.scoring.monte_carlo import compute_postseason_swing_from_matrix  # noqa: PLC0415
+
+        swing = compute_postseason_swing_from_matrix(
+            slot_id, game_num, bracket_outcomes, champions, team_names
+        )
+        return normalize_postseason_importance(swing)
     game_index = remaining_event_index.get(game.get("event_id", ""))
     if game_index is None:
         return None
@@ -698,7 +725,14 @@ def compute_daily_scores(
 
         game_date = game.get("date", today)
         importance = _importance_for_game(
-            game, raw_swings, remaining_event_index, importance_ceiling
+            game,
+            raw_swings,
+            remaining_event_index,
+            importance_ceiling,
+            bracket_state=bracket_state,
+            bracket_outcomes=bracket_outcomes,
+            champions=champions,
+            team_names=team_names,
         )
 
         importance_for_overall = importance if importance is not None else 0.0
