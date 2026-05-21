@@ -234,12 +234,18 @@ def simulate_playoffs(
     standings: dict[str, "TeamStanding"],
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     bracket_state: BracketState | None = None,
+    recorder: dict[tuple[str, int], bool] | None = None,
 ) -> dict[str, set[str] | str]:
     """Play the full 8-team WNBA bracket (no reseeding).
 
     If `bracket_state` is provided, decided series use the recorded winner
     and in-progress series resume from the recorded score. Otherwise the
     bracket plays out from scratch.
+
+    `recorder`, if provided, accumulates `(slot_id, game_num_in_series) -> bool`
+    entries for every game actually simulated inside this call. Game numbers
+    are 1-indexed and continue past the starting score for resumed series
+    (e.g. a series resumed at 1-1 records the next game as game 3).
 
     Returns:
         {
@@ -257,31 +263,39 @@ def simulate_playoffs(
     def play_or_resume(
         sid: str, higher: str, lower: str, pattern: tuple[str, ...]
     ) -> str:
-        if bracket_state is None:
-            return play_series(higher, lower, pattern, standings, home_advantage)
-        s = bracket_state.get(sid)
-        # Only trust the observed state when its unordered pair matches the
-        # simulated slot's participants — slot id alone is unsafe if a sim's
-        # seeded order has drifted from the one used to build bracket_state.
-        if s is None or s.higher is None or {s.higher, s.lower} != {higher, lower}:
-            return play_series(higher, lower, pattern, standings, home_advantage)
-        if s.winner is not None:
-            return s.winner
-        # Pair matches; swap win counts when the sim's higher seed is the
-        # observed state's lower seed.
-        if s.higher == higher:
-            sh, sl = s.higher_wins, s.lower_wins
+        s = bracket_state.get(sid) if bracket_state is not None else None
+        # Determine starting wins so the local-recorder offset matches the
+        # caller's expected game numbers.
+        if (
+            s is not None
+            and s.higher is not None
+            and {s.higher, s.lower} == {higher, lower}
+        ):
+            if s.higher == higher:
+                start_h, start_l = s.higher_wins, s.lower_wins
+            else:
+                start_h, start_l = s.lower_wins, s.higher_wins
+            if s.winner is not None:
+                return s.winner
         else:
-            sh, sl = s.lower_wins, s.higher_wins
-        return play_series(
+            start_h, start_l = 0, 0
+
+        local_recorder: list[bool] | None = [] if recorder is not None else None
+        winner = play_series(
             higher,
             lower,
             pattern,
             standings,
             home_advantage,
-            starting_higher_wins=sh,
-            starting_lower_wins=sl,
+            starting_higher_wins=start_h,
+            starting_lower_wins=start_l,
+            recorder=local_recorder,
         )
+        if recorder is not None and local_recorder is not None:
+            offset = start_h + start_l
+            for i, higher_won in enumerate(local_recorder):
+                recorder[(sid, offset + i + 1)] = higher_won
+        return winner
 
     made_playoffs: set[str] = set(seeded)
 
