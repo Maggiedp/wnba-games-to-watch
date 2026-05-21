@@ -42,12 +42,16 @@ def test_parse_event_populates_time_utc_when_time_valid():
 
 
 def test_parse_event_time_utc_none_when_time_tbd():
-    # ESPN midnight-UTC + timeValid=False is the TBD sentinel.
+    # ESPN's canonical TBD sentinel: midnight UTC of the scheduled ET
+    # date plus timeValid=False. The UTC calendar component IS the
+    # intended game date; we must NOT TZ-shift it (would silently move
+    # the row to the previous ET day).
     event = _base_event("2026-05-21T00:00:00Z", time_valid=False)
 
     result = _parse_event(event)
 
     assert result is not None
+    assert result["date"] == "2026-05-21"
     assert result["time"] == ""
     assert result["time_utc"] is None
 
@@ -67,11 +71,13 @@ def test_parse_event_populates_time_utc_when_genuine_midnight_et():
 def test_parse_event_time_utc_none_when_time_invalid_with_non_midnight_timestamp():
     # ESPN occasionally leaves a non-midnight placeholder in `date`
     # while flagging timeValid=False (schedule correction). The flag is
-    # authoritative — don't persist the placeholder.
+    # authoritative — don't persist the placeholder, and use the UTC
+    # calendar date directly (no TZ shift on a meaningless time-of-day).
     event = _base_event("2026-05-22T19:30:00Z", time_valid=False)
 
     result = _parse_event(event)
 
     assert result is not None
+    assert result["date"] == "2026-05-22"
     assert result["time"] == ""
     assert result["time_utc"] is None
