@@ -247,6 +247,19 @@ def simulate_playoffs(
     are 1-indexed and continue past the starting score for resumed series
     (e.g. a series resumed at 1-1 records the next game as game 3).
 
+    When `bracket_state` is provided AND a slot has a canonical pair
+    (`higher` and `lower` both set), the recorder writes entries for that
+    slot ONLY in sims where the sim's bracket participants match the
+    canonical pair. Sims where per-sim seeding has drifted from observed
+    (e.g. last regular-season games shuffled standings differently in this
+    sim) are excluded from the recorder for matched slots, so each
+    `(slot_id, game_num)` key references one consistent team pair across
+    sims and `compute_postseason_swing_from_matrix` produces a semantically
+    meaningful partition. Slots without a canonical pair (bracket_state
+    None, or slot's higher/lower still None because upstream is
+    unresolved) still record from every sim — those entries are never
+    queried, since `_find_bracket_slot` filters them out at lookup time.
+
     Returns:
         {
           "made_playoffs":    set of 8 team names,
@@ -264,13 +277,16 @@ def simulate_playoffs(
         sid: str, higher: str, lower: str, pattern: tuple[str, ...]
     ) -> str:
         s = bracket_state.get(sid) if bracket_state is not None else None
+        slot_pair_canonical = (
+            s is not None and s.higher is not None and s.lower is not None
+        )
+        observed_match = slot_pair_canonical and {s.higher, s.lower} == {
+            higher,
+            lower,
+        }
         # Determine starting wins so the local-recorder offset matches the
         # caller's expected game numbers.
-        if (
-            s is not None
-            and s.higher is not None
-            and {s.higher, s.lower} == {higher, lower}
-        ):
+        if observed_match:
             if s.higher == higher:
                 start_h, start_l = s.higher_wins, s.lower_wins
             else:
@@ -280,7 +296,14 @@ def simulate_playoffs(
         else:
             start_h, start_l = 0, 0
 
-        if recorder is None:
+        # Recorder gate: only record for slots whose canonical pair this
+        # sim matches. Slots without a canonical pair record from every
+        # sim (harmless — queries filter them out).
+        record_this_slot = recorder is not None and (
+            not slot_pair_canonical or observed_match
+        )
+
+        if not record_this_slot:
             return play_series(
                 higher,
                 lower,
