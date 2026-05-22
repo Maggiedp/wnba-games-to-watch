@@ -356,3 +356,214 @@ def test_simulate_playoffs_ignores_mismatched_bracket_state():
         # QF1 in scrambled is S2 vs S8 — winner must be one of those, not S1.
         # (We can't observe QF winners directly; the cardinality check above
         # is the load-bearing assertion here.)
+
+
+def test_play_series_recorder_none_is_noop():
+    """With recorder=None (default), play_series behaves as before."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import HOME_PATTERN_BO3, play_series
+
+    standings = {
+        "A": TS(name="A", wins=20, losses=10, elo=1600),
+        "B": TS(name="B", wins=10, losses=20, elo=1400),
+    }
+    random.seed(0)
+    winner = play_series("A", "B", HOME_PATTERN_BO3, standings)
+    assert winner in {"A", "B"}
+
+
+def test_play_series_recorder_captures_per_game_outcomes():
+    """With recorder provided, each played game appends a bool (did_higher_win)."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import HOME_PATTERN_BO3, play_series
+
+    standings = {
+        "A": TS(name="A", wins=20, losses=10, elo=1600),
+        "B": TS(name="B", wins=10, losses=20, elo=1400),
+    }
+    recorder: list[bool] = []
+    random.seed(0)
+    winner = play_series("A", "B", HOME_PATTERN_BO3, standings, recorder=recorder)
+    # Bo3 takes 2 or 3 games — recorder has one entry per game actually played.
+    assert 2 <= len(recorder) <= 3
+    assert all(isinstance(x, bool) for x in recorder)
+    # Series winner is consistent with the recorded outcomes.
+    higher_wins = sum(1 for r in recorder if r)
+    lower_wins = sum(1 for r in recorder if not r)
+    assert (higher_wins == 2 and winner == "A") or (lower_wins == 2 and winner == "B")
+
+
+def test_play_series_recorder_skips_pre_played_games():
+    """When resuming from starting wins, recorder only captures simulated games."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import HOME_PATTERN_BO3, play_series
+
+    standings = {
+        "A": TS(name="A", wins=20, losses=10, elo=1600),
+        "B": TS(name="B", wins=10, losses=20, elo=1400),
+    }
+    recorder: list[bool] = []
+    random.seed(0)
+    # Series is 1-1 going into game 3 → only one game is simulated.
+    play_series(
+        "A",
+        "B",
+        HOME_PATTERN_BO3,
+        standings,
+        starting_higher_wins=1,
+        starting_lower_wins=1,
+        recorder=recorder,
+    )
+    assert len(recorder) == 1
+
+
+def test_play_series_recorder_empty_when_series_already_decided():
+    """Starting wins that already decide the series → no games played → empty recorder."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import HOME_PATTERN_BO3, play_series
+
+    standings = {
+        "A": TS(name="A", wins=20, losses=10, elo=1600),
+        "B": TS(name="B", wins=10, losses=20, elo=1400),
+    }
+    recorder: list[bool] = []
+    winner = play_series(
+        "A",
+        "B",
+        HOME_PATTERN_BO3,
+        standings,
+        starting_higher_wins=2,
+        starting_lower_wins=0,
+        recorder=recorder,
+    )
+    assert winner == "A"
+    assert recorder == []
+
+
+def test_simulate_playoffs_recorder_captures_all_slots():
+    """recorder dict maps (slot_id, game_num) → bool for every game played."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import simulate_playoffs
+
+    seeded = [f"T{i}" for i in range(1, 9)]
+    standings = {n: TS(name=n, wins=20, losses=10, elo=1500) for n in seeded}
+    recorder: dict[tuple[str, int], bool] = {}
+    random.seed(0)
+    result = simulate_playoffs(seeded, standings, recorder=recorder)
+
+    # Bracket has 4 QFs + 2 SFs + 1 F = 7 series. Every series must have
+    # at least one game in the recorder.
+    slots_seen = {sid for sid, _ in recorder}
+    assert slots_seen == {"qf1", "qf2", "qf3", "qf4", "sf1", "sf2", "f"}
+    # Game numbers in a series are 1-indexed and contiguous from 1.
+    for sid in slots_seen:
+        nums = sorted(g for s, g in recorder if s == sid)
+        assert nums[0] == 1
+        assert nums == list(range(1, len(nums) + 1))
+    # All values are bools.
+    assert all(isinstance(v, bool) for v in recorder.values())
+    # Result still has the same shape as before.
+    assert result["won_championship"] in seeded
+
+
+def test_simulate_playoffs_recorder_none_default():
+    """Without recorder, simulate_playoffs returns the existing dict shape."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import simulate_playoffs
+
+    seeded = [f"T{i}" for i in range(1, 9)]
+    standings = {n: TS(name=n, wins=20, losses=10, elo=1500) for n in seeded}
+    random.seed(0)
+    result = simulate_playoffs(seeded, standings)
+    assert set(result.keys()) == {
+        "made_playoffs",
+        "reached_semis",
+        "reached_finals",
+        "won_championship",
+    }
+
+
+def test_simulate_playoffs_recorder_respects_bracket_state():
+    """With an in-progress bracket_state, recorder only captures games actually simulated."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import (
+        SeriesState,
+        empty_bracket_state,
+        simulate_playoffs,
+        _GAMES_NEEDED_BO3,
+    )
+
+    seeded = [f"T{i}" for i in range(1, 9)]
+    standings = {n: TS(name=n, wins=20, losses=10, elo=1500) for n in seeded}
+    state = empty_bracket_state(seeded)
+    # Lock in QF1 as decided: T1 swept T8 2-0.
+    state["qf1"] = SeriesState(
+        higher="T1",
+        lower="T8",
+        higher_wins=2,
+        lower_wins=0,
+        winner="T1",
+        games_needed=_GAMES_NEEDED_BO3,
+    )
+    recorder: dict[tuple[str, int], bool] = {}
+    random.seed(0)
+    simulate_playoffs(seeded, standings, bracket_state=state, recorder=recorder)
+    # qf1 is fully decided → recorder has no entries for it.
+    qf1_entries = [k for k in recorder if k[0] == "qf1"]
+    assert qf1_entries == []
+
+
+def test_simulate_playoffs_recorder_skips_drifted_sim_pair():
+    """When bracket_state has a slot with a canonical pair (higher, lower)
+    set but the sim's seeded[] produces a different pair at that slot,
+    the recorder must not write entries for that slot in this sim — the
+    boolean would otherwise reference a different team identity than other
+    sims' entries at the same key, polluting compute_postseason_swing_from_matrix's
+    partition."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import (
+        empty_bracket_state,
+        simulate_playoffs,
+    )
+
+    # Observed bracket: qf1 = (T1, T8). Sim's seeded drifts so qf1 ends up
+    # as (T1, T9) — different lower-seed identity than the canonical pair.
+    observed_seeded = [f"T{i}" for i in range(1, 9)]
+    state = empty_bracket_state(observed_seeded)
+    assert state["qf1"].higher == "T1" and state["qf1"].lower == "T8"
+
+    # Sim runs with T9 in slot 8 instead of T8. qf1 pair = {T1, T9},
+    # bracket_state.qf1 pair = {T1, T8} → mismatch.
+    sim_seeded = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T9"]
+    standings = {
+        n: TS(name=n, wins=20, losses=10, elo=1500)
+        for n in (set(observed_seeded) | set(sim_seeded))
+    }
+    recorder: dict[tuple[str, int], bool] = {}
+    random.seed(0)
+    simulate_playoffs(sim_seeded, standings, bracket_state=state, recorder=recorder)
+
+    # qf1's canonical pair doesn't match sim's pair → no qf1 entries.
+    qf1_entries = [k for k in recorder if k[0] == "qf1"]
+    assert qf1_entries == []
+    # qf2-qf4 in observed bracket_state have canonical pairs that DO match
+    # this sim's pairs → those slots still record normally.
+    assert any(k[0] == "qf2" for k in recorder)
+    assert any(k[0] == "qf3" for k in recorder)
+    assert any(k[0] == "qf4" for k in recorder)
+
+
+def test_simulate_playoffs_recorder_no_bracket_state_records_all_slots():
+    """Regression: without bracket_state (the historical PR #40 path), the
+    recorder must continue to capture every slot — no drift filter applies
+    because there is no canonical truth to filter against."""
+    from src.scoring.monte_carlo import TeamStanding as TS
+    from src.scoring.playoffs import simulate_playoffs
+
+    seeded = [f"T{i}" for i in range(1, 9)]
+    standings = {n: TS(name=n, wins=20, losses=10, elo=1500) for n in seeded}
+    recorder: dict[tuple[str, int], bool] = {}
+    random.seed(0)
+    simulate_playoffs(seeded, standings, recorder=recorder)
+    slots_seen = {sid for sid, _ in recorder}
+    assert slots_seen == {"qf1", "qf2", "qf3", "qf4", "sf1", "sf2", "f"}

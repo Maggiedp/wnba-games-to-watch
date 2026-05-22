@@ -62,6 +62,7 @@ def play_series(
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     starting_higher_wins: int = 0,
     starting_lower_wins: int = 0,
+    recorder: list[bool] | None = None,
 ) -> str:
     """Simulate a best-of-N. Returns the winning team name.
 
@@ -73,6 +74,10 @@ def play_series(
     series; the simulator skips the games already played in `home_pattern`.
     If the starting score already decides the series, returns the winner
     without simulating anything.
+
+    `recorder`, if provided, has one bool appended per game *actually
+    simulated* (True = higher seed won). Pre-played games (starting_*_wins)
+    are not appended — only the games this call simulates.
     """
     games_needed = len(home_pattern) // 2 + 1
     higher_wins = starting_higher_wins
@@ -98,6 +103,9 @@ def play_series(
             higher_won = not simulate_game(
                 lower_elo, higher_elo, home_advantage=home_advantage
             )
+
+        if recorder is not None:
+            recorder.append(higher_won)
 
         if higher_won:
             higher_wins += 1
@@ -226,12 +234,31 @@ def simulate_playoffs(
     standings: dict[str, "TeamStanding"],
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     bracket_state: BracketState | None = None,
+    recorder: dict[tuple[str, int], bool] | None = None,
 ) -> dict[str, set[str] | str]:
     """Play the full 8-team WNBA bracket (no reseeding).
 
     If `bracket_state` is provided, decided series use the recorded winner
     and in-progress series resume from the recorded score. Otherwise the
     bracket plays out from scratch.
+
+    `recorder`, if provided, accumulates `(slot_id, game_num_in_series) -> bool`
+    entries for every game actually simulated inside this call. Game numbers
+    are 1-indexed and continue past the starting score for resumed series
+    (e.g. a series resumed at 1-1 records the next game as game 3).
+
+    When `bracket_state` is provided AND a slot has a canonical pair
+    (`higher` and `lower` both set), the recorder writes entries for that
+    slot ONLY in sims where the sim's bracket participants match the
+    canonical pair. Sims where per-sim seeding has drifted from observed
+    (e.g. last regular-season games shuffled standings differently in this
+    sim) are excluded from the recorder for matched slots, so each
+    `(slot_id, game_num)` key references one consistent team pair across
+    sims and `compute_postseason_swing_from_matrix` produces a semantically
+    meaningful partition. Slots without a canonical pair (bracket_state
+    None, or slot's higher/lower still None because upstream is
+    unresolved) still record from every sim — those entries are never
+    queried, since `_find_bracket_slot` filters them out at lookup time.
 
     Returns:
         {
@@ -249,31 +276,59 @@ def simulate_playoffs(
     def play_or_resume(
         sid: str, higher: str, lower: str, pattern: tuple[str, ...]
     ) -> str:
-        if bracket_state is None:
-            return play_series(higher, lower, pattern, standings, home_advantage)
-        s = bracket_state.get(sid)
-        # Only trust the observed state when its unordered pair matches the
-        # simulated slot's participants — slot id alone is unsafe if a sim's
-        # seeded order has drifted from the one used to build bracket_state.
-        if s is None or s.higher is None or {s.higher, s.lower} != {higher, lower}:
-            return play_series(higher, lower, pattern, standings, home_advantage)
-        if s.winner is not None:
-            return s.winner
-        # Pair matches; swap win counts when the sim's higher seed is the
-        # observed state's lower seed.
-        if s.higher == higher:
-            sh, sl = s.higher_wins, s.lower_wins
+        s = bracket_state.get(sid) if bracket_state is not None else None
+        slot_pair_canonical = (
+            s is not None and s.higher is not None and s.lower is not None
+        )
+        observed_match = slot_pair_canonical and {s.higher, s.lower} == {
+            higher,
+            lower,
+        }
+        # Determine starting wins so the local-recorder offset matches the
+        # caller's expected game numbers.
+        if observed_match:
+            if s.higher == higher:
+                start_h, start_l = s.higher_wins, s.lower_wins
+            else:
+                start_h, start_l = s.lower_wins, s.higher_wins
+            if s.winner is not None:
+                return s.winner
         else:
-            sh, sl = s.lower_wins, s.higher_wins
-        return play_series(
+            start_h, start_l = 0, 0
+
+        # Recorder gate: only record for slots whose canonical pair this
+        # sim matches. Slots without a canonical pair record from every
+        # sim (harmless — queries filter them out).
+        record_this_slot = recorder is not None and (
+            not slot_pair_canonical or observed_match
+        )
+
+        if not record_this_slot:
+            return play_series(
+                higher,
+                lower,
+                pattern,
+                standings,
+                home_advantage,
+                starting_higher_wins=start_h,
+                starting_lower_wins=start_l,
+            )
+
+        local_recorder: list[bool] = []
+        winner = play_series(
             higher,
             lower,
             pattern,
             standings,
             home_advantage,
-            starting_higher_wins=sh,
-            starting_lower_wins=sl,
+            starting_higher_wins=start_h,
+            starting_lower_wins=start_l,
+            recorder=local_recorder,
         )
+        offset = start_h + start_l
+        for i, higher_won in enumerate(local_recorder):
+            recorder[(sid, offset + i + 1)] = higher_won
+        return winner
 
     made_playoffs: set[str] = set(seeded)
 

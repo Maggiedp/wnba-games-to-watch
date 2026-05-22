@@ -46,7 +46,10 @@ from src.scoring.elo import (
     replay_games,
 )
 from src.scoring.excitement import compute_excitement
-from src.scoring.importance import normalize_importance_score
+from src.scoring.importance import (
+    normalize_importance_score,
+    normalize_postseason_importance,
+)
 from src.scoring.monte_carlo import (
     RoundProbabilities,
     compute_importance_from_matrix,
@@ -467,7 +470,7 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
     remaining = [
         (g["team_a"], g["team_b"]) for g in all_games if g.get("season_type", 2) == 2
     ]
-    _, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
+    _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
         zero_standings, remaining, num_simulations=10000, return_matrix=True
     )
     team_names = list(zero_standings.keys())
@@ -478,7 +481,8 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
 
 
 def _build_current_bracket_state(session, standings: dict):
-    """Build the observed BracketState from completed postseason games.
+    """Build the observed BracketState from current seeding and completed
+    postseason games.
 
     Sources playoff history from the DB so games older than the rolling
     ESPN fetch window (yesterday-forward) are not forgotten. A Bo3 takes
@@ -486,14 +490,32 @@ def _build_current_bracket_state(session, standings: dict):
     by the time Game 3 is played, falsely re-opening already-decided
     series.
 
-    Returns None if no completed postseason games exist (pre-playoffs).
-    Otherwise the result respects actual playoff results: decided series
-    are locked, in-progress series resume from the current score.
+    Returns None if seeding can't resolve 8 teams (regular season hasn't
+    produced a full playoff field yet). Otherwise: when no postseason
+    games have completed, returns an empty bracket built from current
+    seeding — QF matchups are knowable from regular-season standings, so
+    Game 1 of each QF can be matched to a slot and scored. When games
+    have completed, decided series are locked and in-progress series
+    resume from the current score.
     """
+    # resolve_seeding expects TeamStanding objects; daily_update keeps plain dicts.
+    seeded = resolve_seeding(to_team_standings(standings))
+    if len(seeded) < PLAYOFF_TEAMS:
+        return None
+
+    from src.scoring.playoffs import (  # noqa: PLC0415
+        empty_bracket_state,
+        reconstruct_bracket_state,
+    )
+
     season_year = int(today_et()[:4])
     completed_post_rows = get_completed_postseason_games(session, season_year)
     if not completed_post_rows:
-        return None
+        # Pre-playoffs (or before the first opening-round game finalizes):
+        # the QF matchups are known from current seeding. Returning a
+        # populated empty bracket lets _importance_for_game match Game 1
+        # of each QF to a slot instead of falling back to flat 100.
+        return empty_bracket_state(seeded[:PLAYOFF_TEAMS])
 
     # Resolve team_id → team name once for the rows we have.
     team_ids = set()
@@ -520,16 +542,85 @@ def _build_current_bracket_state(session, standings: dict):
             }
         )
     if not completed_post:
-        return None
-
-    # resolve_seeding expects TeamStanding objects; daily_update keeps plain dicts.
-    seeded = resolve_seeding(to_team_standings(standings))
-    if len(seeded) < PLAYOFF_TEAMS:
-        return None
-
-    from src.scoring.playoffs import reconstruct_bracket_state  # noqa: PLC0415
+        return empty_bracket_state(seeded[:PLAYOFF_TEAMS])
 
     return reconstruct_bracket_state(seeded[:PLAYOFF_TEAMS], completed_post)
+
+
+def _find_bracket_slot(
+    bracket_state, team_a: str, team_b: str
+) -> tuple[str, int] | None:
+    """Locate the in-progress bracket slot whose participants match {team_a, team_b}.
+
+    Returns (slot_id, next_game_number_in_series), where game number is
+    1-indexed and includes already-played games. Returns None if no slot
+    matches — e.g. the teams aren't seeded yet (downstream rounds), the
+    series is already decided, or the slot's `higher`/`lower` are still
+    None (upstream round unresolved).
+    """
+    if bracket_state is None:
+        return None
+    pair = {team_a, team_b}
+    for slot_id, s in bracket_state.items():
+        if (
+            s.higher is not None
+            and s.lower is not None
+            and s.winner is None
+            and {s.higher, s.lower} == pair
+        ):
+            return slot_id, s.higher_wins + s.lower_wins + 1
+    return None
+
+
+def _assign_postseason_slot_lookup(
+    upcoming_games: list[dict], bracket_state
+) -> dict[str, tuple[str, int]]:
+    """Map each upcoming postseason game's event_id to (slot_id, game_num).
+
+    `_find_bracket_slot` alone returns the *next* game in a slot, so when
+    ESPN lists multiple unplayed games of the same series (e.g. Game 1 and
+    Game 2 of a QF before Game 1 is played), they'd all map to the same
+    game_num. This helper sorts scheduled games within each slot by
+    (date, time_utc, time, event_id) and assigns sequential game numbers
+    starting at `higher_wins + lower_wins + 1`, so each scheduled game
+    gets its own ordinal within the series and therefore its own swing
+    when partitioned through `compute_postseason_swing_from_matrix`.
+
+    Games whose slot can't be identified (TBD downstream, decided series,
+    no bracket_state) are omitted; callers should fall back to flat 100
+    for those.
+    """
+    if bracket_state is None:
+        return {}
+    by_slot: dict[str, list[dict]] = {}
+    for g in upcoming_games:
+        if g.get("season_type") != 3:
+            continue
+        matched = _find_bracket_slot(
+            bracket_state, g.get("team_a", ""), g.get("team_b", "")
+        )
+        if matched is None:
+            continue
+        slot_id, _ = matched
+        by_slot.setdefault(slot_id, []).append(g)
+
+    lookup: dict[str, tuple[str, int]] = {}
+    for slot_id, games_in_slot in by_slot.items():
+        s = bracket_state[slot_id]
+        base = s.higher_wins + s.lower_wins + 1
+        games_in_slot.sort(
+            key=lambda g: (
+                g.get("date", ""),
+                g.get("time_utc") or "",
+                g.get("time", ""),
+                g.get("event_id", ""),
+            )
+        )
+        for offset, g in enumerate(games_in_slot):
+            event_id = g.get("event_id", "")
+            if event_id:
+                lookup[event_id] = (slot_id, base + offset)
+    return lookup
 
 
 def _importance_for_game(
@@ -537,18 +628,57 @@ def _importance_for_game(
     raw_swings: list[float],
     remaining_event_index: dict[str, int],
     importance_ceiling: float,
+    bracket_state=None,
+    bracket_outcomes: list[dict[tuple[str, int], bool]] | None = None,
+    champions: list[str | None] | None = None,
+    team_names: list[str] | None = None,
+    postseason_slot_lookup: dict[str, tuple[str, int]] | None = None,
 ) -> float | None:
     """Compute the importance score for one upcoming game.
 
-    Preseason: 0. Postseason: 100 (all playoff games are championship-stakes).
+    Preseason: 0. Postseason: championship-swing derived from the existing
+    MC run (sims partitioned by who won the focal bracket game), normalized
+    against POSTSEASON_MAX_SWING=2.0. Falls back to 100.0 when the game
+    can't be matched to an in-progress bracket slot (downstream rounds
+    where upstream hasn't resolved, TBD ESPN rows, or no bracket_state).
     Regular season: normalized bubble-swing from the MC run, or None if the
     event_id isn't in the sim universe.
+
+    When `postseason_slot_lookup` is provided, its `(slot_id, game_num)` is
+    authoritative for the game's series ordinal — needed so multiple
+    upcoming games in the same series get distinct game numbers. Without
+    it, falls back to `_find_bracket_slot`'s next-game-in-series result
+    (correct only when at most one unplayed game per series is being
+    scored).
     """
     season_type = game.get("season_type", 2)
     if season_type == 1:
         return 0.0
     if season_type == 3:
-        return 100.0
+        if (
+            bracket_state is None
+            or bracket_outcomes is None
+            or champions is None
+            or team_names is None
+        ):
+            return 100.0
+        event_id = game.get("event_id", "")
+        if postseason_slot_lookup is not None:
+            located = postseason_slot_lookup.get(event_id)
+            if located is None:
+                return 100.0
+            slot_id, game_num = located
+        else:
+            matched = _find_bracket_slot(bracket_state, game["team_a"], game["team_b"])
+            if matched is None:
+                return 100.0
+            slot_id, game_num = matched
+        from src.scoring.monte_carlo import compute_postseason_swing_from_matrix  # noqa: PLC0415
+
+        swing = compute_postseason_swing_from_matrix(
+            slot_id, game_num, bracket_outcomes, champions, team_names
+        )
+        return normalize_postseason_importance(swing)
     game_index = remaining_event_index.get(game.get("event_id", ""))
     if game_index is None:
         return None
@@ -618,12 +748,14 @@ def compute_daily_scores(
     logger.info(
         f"Running 10k Monte Carlo over {len(remaining_games)} remaining games..."
     )
-    round_probs, outcome_matrix, playoff_sets = run_monte_carlo_simulation(
-        standings,
-        remaining_games,
-        num_simulations=10000,
-        return_matrix=True,
-        bracket_state=bracket_state,
+    round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions = (
+        run_monte_carlo_simulation(
+            standings,
+            remaining_games,
+            num_simulations=10000,
+            return_matrix=True,
+            bracket_state=bracket_state,
+        )
     )
 
     if not upcoming_games:
@@ -633,6 +765,12 @@ def compute_daily_scores(
     team_names = list(standings.keys())
     raw_swings = compute_importance_from_matrix(
         outcome_matrix, playoff_sets, remaining_games, team_names
+    )
+    # Pre-compute (slot, game_num) per upcoming postseason game so multiple
+    # scheduled games in the same series get distinct ordinals (Game 1, 2, 3...
+    # rather than all mapped to "next game").
+    postseason_slot_lookup = _assign_postseason_slot_lookup(
+        upcoming_games, bracket_state
     )
     logger.info(f"Computed importance swings for {len(raw_swings)} remaining games")
 
@@ -671,7 +809,15 @@ def compute_daily_scores(
 
         game_date = game.get("date", today)
         importance = _importance_for_game(
-            game, raw_swings, remaining_event_index, importance_ceiling
+            game,
+            raw_swings,
+            remaining_event_index,
+            importance_ceiling,
+            bracket_state=bracket_state,
+            bracket_outcomes=bracket_outcomes,
+            champions=champions,
+            team_names=team_names,
+            postseason_slot_lookup=postseason_slot_lookup,
         )
 
         importance_for_overall = importance if importance is not None else 0.0

@@ -85,7 +85,13 @@ def run_monte_carlo_simulation(
     bracket_state=None,
 ) -> (
     RoundProbabilities
-    | tuple[RoundProbabilities, list[list[bool | None]], list[set[str]]]
+    | tuple[
+        RoundProbabilities,
+        list[list[bool | None]],
+        list[set[str]],
+        list[dict[tuple[str, int], bool]],
+        list[str | None],
+    ]
 ):
     """Run Monte Carlo simulations to compute round-by-round playoff probabilities.
 
@@ -98,16 +104,22 @@ def run_monte_carlo_simulation(
         remaining_games: list of (home_team, away_team) tuples.
         num_simulations: Number of simulations to run.
         home_advantage: Elo-point bonus for the home team.
-        return_matrix: When True, also return the per-sim outcome matrix and
-            playoff sets (needed for compute_importance_from_matrix).
+        return_matrix: When True, also return the per-sim outcome matrix,
+            playoff sets, bracket outcomes, and champions.
 
     Returns:
         If return_matrix=False: RoundProbabilities with per-team probs for each round.
-        If return_matrix=True: (RoundProbabilities, outcome_matrix, playoff_sets)
+        If return_matrix=True: 5-tuple
+            (round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions)
             outcome_matrix: list[list[bool]] shape (num_sims, num_remaining_games),
                 True = team_a won that game in that sim.
             playoff_sets: list[set[str]] shape (num_sims,),
                 set of team names that made the playoffs in that sim.
+            bracket_outcomes: list[dict[(slot_id, game_num), bool]] shape (num_sims,),
+                per-sim record of every bracket game simulated. Empty dict for sims
+                where fewer than 8 teams seeded (no bracket played).
+            champions: list[str | None] shape (num_sims,),
+                champion team name per sim, or None if no bracket was played.
     """
     assert_all_teams_have_conferences(current_standings)
     made_counts: dict[str, int] = defaultdict(int)
@@ -116,6 +128,8 @@ def run_monte_carlo_simulation(
     champ_counts: dict[str, int] = defaultdict(int)
     outcome_matrix: list[list[bool]] = []
     playoff_sets: list[set[str]] = []
+    bracket_outcomes_per_sim: list[dict[tuple[str, int], bool]] = []
+    champions_per_sim: list[str | None] = []
 
     for _ in range(num_simulations):
         standings = to_team_standings(current_standings)
@@ -146,6 +160,9 @@ def run_monte_carlo_simulation(
         for team_name in playoff_team_set:
             made_counts[team_name] += 1
 
+        sim_bracket_outcomes: dict[tuple[str, int], bool] = {}
+        sim_champion: str | None = None
+
         if len(playoff_team_set) == PLAYOFF_TEAMS:
             # Local import avoids circular dependency (playoffs imports simulate_game).
             from src.scoring.playoffs import simulate_playoffs  # noqa: PLC0415
@@ -155,16 +172,20 @@ def run_monte_carlo_simulation(
                 standings,
                 home_advantage=home_advantage,
                 bracket_state=bracket_state,
+                recorder=sim_bracket_outcomes if return_matrix else None,
             )
             for t in bracket["reached_semis"]:
                 semi_counts[t] += 1
             for t in bracket["reached_finals"]:
                 final_counts[t] += 1
             champ_counts[bracket["won_championship"]] += 1
+            sim_champion = bracket["won_championship"]
 
         if return_matrix:
             outcome_matrix.append(game_outcomes)
             playoff_sets.append(playoff_team_set)
+            bracket_outcomes_per_sim.append(sim_bracket_outcomes)
+            champions_per_sim.append(sim_champion)
 
     all_teams = list(current_standings.keys())
 
@@ -179,7 +200,13 @@ def run_monte_carlo_simulation(
     )
 
     if return_matrix:
-        return result, outcome_matrix, playoff_sets
+        return (
+            result,
+            outcome_matrix,
+            playoff_sets,
+            bracket_outcomes_per_sim,
+            champions_per_sim,
+        )
     return result
 
 
@@ -294,3 +321,50 @@ def compute_importance_from_matrix(
         swings.append(swing)
 
     return swings
+
+
+def compute_postseason_swing_from_matrix(
+    focal_slot: str,
+    focal_game_num: int,
+    bracket_outcomes: list[dict[tuple[str, int], bool]],
+    champions: list[str | None],
+    team_names: list[str],
+) -> float:
+    """Compute championship-swing for a specific bracket game.
+
+    Partitions the simulation set by who won the focal bracket game, then
+    computes Σ |P(team = champion | higher won) − P(team = champion | lower won)|
+    across all team names.
+
+    Args:
+        focal_slot: bracket slot id, e.g. "qf1", "sf2", "f".
+        focal_game_num: 1-indexed game number within the series.
+        bracket_outcomes: per-sim dict of (slot, game_num) -> did_higher_win.
+        champions: per-sim champion name (or None if no bracket played).
+        team_names: all team names to sum |Δ| across.
+
+    Returns:
+        Raw swing value (0.0–2.0). Normalize with `normalize_postseason_importance`.
+        Returns 0.0 if either partition bucket is empty (focal game didn't
+        happen in any sim, or all sims agree on the outcome).
+    """
+    higher_indices: list[int] = []
+    lower_indices: list[int] = []
+    for i, outcomes in enumerate(bracket_outcomes):
+        played = outcomes.get((focal_slot, focal_game_num))
+        if played is True:
+            higher_indices.append(i)
+        elif played is False:
+            lower_indices.append(i)
+        # None → missing key → focal game not played in this sim; skip.
+
+    if not higher_indices or not lower_indices:
+        return 0.0
+
+    def champ_rate(indices: list[int], team: str) -> float:
+        return sum(1 for i in indices if champions[i] == team) / len(indices)
+
+    swing = 0.0
+    for team in team_names:
+        swing += abs(champ_rate(higher_indices, team) - champ_rate(lower_indices, team))
+    return swing
