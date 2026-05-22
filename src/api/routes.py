@@ -1534,7 +1534,10 @@ _HOMEPAGE_HTML = f"""
                 const team = document.getElementById('team-filter').value;
                 const inScope = (g) => matchesScope(g, team);
 
-                // Top pick is fixed to the next 7 days regardless of the user's date range.
+                // Top pick is computed against the next 7 days regardless of the
+                // user's date range, but suppressed below when it falls outside
+                // the active filter window (otherwise a "Top pick · Next 7 days"
+                // hero card can promote a game the table doesn't list).
                 const today = addDaysISO(0);
                 const weekOut = addDaysISO(7);
                 const featuredCandidates = allGames.filter(g => {{
@@ -1542,15 +1545,29 @@ _HOMEPAGE_HTML = f"""
                     const d = localDateISO(g);
                     return d >= today && d <= weekOut;
                 }});
-                const featured = featuredCandidates.length === 0
+                // Backend widens by one ET day for late-ET crossover viewers
+                // (see /api/games/upcoming). Floor the list at today-local so
+                // yesterday's games don't leak into "upcoming" once the
+                // viewer's local calendar has rolled over. An explicit
+                // fromDate (user-picked) overrides the floor.
+                const lowerBound = fromDate || today;
+                let featured = featuredCandidates.length === 0
                     ? null
                     : featuredCandidates.reduce((best, g) => g.overall_score > best.overall_score ? g : best);
+                if (featured) {{
+                    const fd = localDateISO(featured);
+                    if (fd < lowerBound || (toDate && fd > toDate)) featured = null;
+                }}
                 renderFeatured(featured);
 
                 const games = allGames.filter(game => {{
                     if (!inScope(game)) return false;
                     const d = localDateISO(game);
-                    if (fromDate && d < fromDate) return false;
+                    // Live games bypass the implicit today-floor so a late-ET
+                    // game still in progress for a west-coast viewer past local
+                    // midnight doesn't vanish from the page. An explicit
+                    // user-picked fromDate still wins.
+                    if (d < lowerBound && !(!fromDate && isLiveStatus(game.game_status))) return false;
                     if (toDate && d > toDate) return false;
                     return true;
                 }});
