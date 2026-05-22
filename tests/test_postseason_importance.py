@@ -307,3 +307,75 @@ def test_importance_for_game_preseason_returns_zero():
     assert _importance_for_game(
         game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
     ) == 0.0
+
+
+def test_build_current_bracket_state_no_completed_postseason_yields_empty_bracket(
+    monkeypatch,
+):
+    """When no postseason games have completed but seeding resolves 8 teams,
+    return an empty bracket built from the seeding so opening-round Game 1
+    can match a slot. Regression for the 'first playoff games always show
+    importance=100' Codex finding."""
+    from scripts.daily_update import _build_current_bracket_state
+
+    monkeypatch.setattr(
+        "scripts.daily_update.get_completed_postseason_games",
+        lambda session, season_year: [],
+    )
+
+    standings = {
+        n: {"wins": 30 - i, "losses": i, "bpi": 0.0, "elo": 1700 - i * 25, "h2h": {}}
+        for i, n in enumerate(
+            [
+                "Las Vegas Aces",
+                "New York Liberty",
+                "Minnesota Lynx",
+                "Indiana Fever",
+                "Connecticut Sun",
+                "Seattle Storm",
+                "Atlanta Dream",
+                "Chicago Sky",
+                "Phoenix Mercury",
+                "Dallas Wings",
+                "Washington Mystics",
+                "Los Angeles Sparks",
+                "Golden State Valkyries",
+                "Portland Fire",
+                "Toronto Tempo",
+            ]
+        )
+    }
+
+    state = _build_current_bracket_state(session=None, standings=standings)
+    assert state is not None
+    # All 7 slots present, QFs populated, SF/F unseeded.
+    assert set(state.keys()) == {"qf1", "qf2", "qf3", "qf4", "sf1", "sf2", "f"}
+    for sid in ("qf1", "qf2", "qf3", "qf4"):
+        assert state[sid].higher is not None
+        assert state[sid].lower is not None
+        assert state[sid].higher_wins == 0
+        assert state[sid].lower_wins == 0
+        assert state[sid].winner is None
+
+
+def test_find_bracket_slot_matches_opening_round_game_one():
+    """Game 1 of an opening-round QF is matchable via the empty bracket
+    state. Without this, _importance_for_game falls back to flat 100."""
+    from scripts.daily_update import _find_bracket_slot
+    from src.scoring.playoffs import empty_bracket_state
+
+    seeded = [
+        "Las Vegas Aces",
+        "New York Liberty",
+        "Minnesota Lynx",
+        "Indiana Fever",
+        "Connecticut Sun",
+        "Seattle Storm",
+        "Atlanta Dream",
+        "Chicago Sky",
+    ]
+    state = empty_bracket_state(seeded)
+    # QF1 = #1 vs #8 → Aces vs Sky. Game 1 is the next game (0 + 0 + 1).
+    assert _find_bracket_slot(state, "Las Vegas Aces", "Chicago Sky") == ("qf1", 1)
+    # QF2 = #4 vs #5 → Fever vs Sun.
+    assert _find_bracket_slot(state, "Indiana Fever", "Connecticut Sun") == ("qf2", 1)

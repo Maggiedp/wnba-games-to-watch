@@ -481,7 +481,8 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
 
 
 def _build_current_bracket_state(session, standings: dict):
-    """Build the observed BracketState from completed postseason games.
+    """Build the observed BracketState from current seeding and completed
+    postseason games.
 
     Sources playoff history from the DB so games older than the rolling
     ESPN fetch window (yesterday-forward) are not forgotten. A Bo3 takes
@@ -489,14 +490,32 @@ def _build_current_bracket_state(session, standings: dict):
     by the time Game 3 is played, falsely re-opening already-decided
     series.
 
-    Returns None if no completed postseason games exist (pre-playoffs).
-    Otherwise the result respects actual playoff results: decided series
-    are locked, in-progress series resume from the current score.
+    Returns None if seeding can't resolve 8 teams (regular season hasn't
+    produced a full playoff field yet). Otherwise: when no postseason
+    games have completed, returns an empty bracket built from current
+    seeding — QF matchups are knowable from regular-season standings, so
+    Game 1 of each QF can be matched to a slot and scored. When games
+    have completed, decided series are locked and in-progress series
+    resume from the current score.
     """
+    # resolve_seeding expects TeamStanding objects; daily_update keeps plain dicts.
+    seeded = resolve_seeding(to_team_standings(standings))
+    if len(seeded) < PLAYOFF_TEAMS:
+        return None
+
+    from src.scoring.playoffs import (  # noqa: PLC0415
+        empty_bracket_state,
+        reconstruct_bracket_state,
+    )
+
     season_year = int(today_et()[:4])
     completed_post_rows = get_completed_postseason_games(session, season_year)
     if not completed_post_rows:
-        return None
+        # Pre-playoffs (or before the first opening-round game finalizes):
+        # the QF matchups are known from current seeding. Returning a
+        # populated empty bracket lets _importance_for_game match Game 1
+        # of each QF to a slot instead of falling back to flat 100.
+        return empty_bracket_state(seeded[:PLAYOFF_TEAMS])
 
     # Resolve team_id → team name once for the rows we have.
     team_ids = set()
@@ -523,14 +542,7 @@ def _build_current_bracket_state(session, standings: dict):
             }
         )
     if not completed_post:
-        return None
-
-    # resolve_seeding expects TeamStanding objects; daily_update keeps plain dicts.
-    seeded = resolve_seeding(to_team_standings(standings))
-    if len(seeded) < PLAYOFF_TEAMS:
-        return None
-
-    from src.scoring.playoffs import reconstruct_bracket_state  # noqa: PLC0415
+        return empty_bracket_state(seeded[:PLAYOFF_TEAMS])
 
     return reconstruct_bracket_state(seeded[:PLAYOFF_TEAMS], completed_post)
 
