@@ -38,6 +38,7 @@ from src.db.queries import (
     upsert_playoff_probability,
     upsert_team,
 )
+from scripts.backfill_preseason_season_type import backfill_legacy_preseason
 from src.db.schema import get_session, init_db
 from src.scoring.elo import (
     DEFAULT_HOME_ADVANTAGE,
@@ -913,7 +914,24 @@ def main() -> int:
             try:
                 backfill_missing_season_types(session)
             except Exception as e:
+                # Rollback so downstream queries don't inherit a failed
+                # transaction or autoflush partially-staged mutations.
+                session.rollback()
                 logger.warning(f"season_type backfill failed (non-fatal): {e}")
+            # Reclassify pre-espn_id-column legacy rows as preseason. The
+            # event_id-joined backfill above can't reach them (their espn_id
+            # is NULL), so they stay NULL-season_type forever and leak into
+            # the user-facing completed archive. Idempotent: matches zero
+            # rows once cleared. The helper self-commits.
+            try:
+                n = backfill_legacy_preseason(session)
+                if n:
+                    logger.info(f"Reclassified {n} legacy preseason rows")
+            except Exception as e:
+                # Rollback so downstream queries don't inherit a failed
+                # transaction or autoflush partially-staged mutations.
+                session.rollback()
+                logger.warning(f"Legacy preseason backfill failed (non-fatal): {e}")
             elo_ratings = compute_elo_ratings()
             standings = compute_standings(session, elo_ratings)
             scored, round_probs = compute_daily_scores(session, games, standings)
