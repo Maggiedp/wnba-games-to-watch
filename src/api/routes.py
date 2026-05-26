@@ -1586,7 +1586,7 @@ _HOMEPAGE_HTML = f"""
                 }} else {{
                     rest.sort((a, b) => localDateISO(a).localeCompare(localDateISO(b)) || timeKey(a) - timeKey(b));
                 }}
-                renderGames(rest, featured, 'games-container', 'Overall');
+                renderGames(rest, featured, 'games-container', SCORE_MODES.OVERALL);
                 if (isCompletedExpanded()) renderCompleted();
                 renderedEspnIds = new Set(
                     rest.concat(featured ? [featured] : [])
@@ -1682,7 +1682,7 @@ _HOMEPAGE_HTML = f"""
                 if (!container) return;
                 const team = document.getElementById('team-filter').value;
                 const filtered = sortCompleted(allCompleted.filter(g => matchesScope(g, team)));
-                renderGames(filtered, null, 'completed-games-container', 'Excitement');
+                renderGames(filtered, null, 'completed-games-container', SCORE_MODES.EXCITEMENT);
                 filtered.forEach(g => {{
                     if (!g.espn_id) return;
                     const eyebrow = container.querySelector(`[data-espn-id="${{g.espn_id}}"] .excitement-eyebrow`);
@@ -1761,9 +1761,9 @@ _HOMEPAGE_HTML = f"""
                                 <th>Watch on</th>
                             </tr>
                         </thead>
-                        <tbody>${{games.map(g => renderGameRow(g, g === featured)).join('')}}</tbody>
+                        <tbody>${{games.map(g => renderGameRow(g, g === featured, scoreHeader)).join('')}}</tbody>
                     </table>
-                    <div class="games-cards">${{games.map(g => renderGameCard(g, g === featured)).join('')}}</div>
+                    <div class="games-cards">${{games.map(g => renderGameCard(g, g === featured, scoreHeader)).join('')}}</div>
                 `;
             }}
 
@@ -1839,19 +1839,40 @@ _HOMEPAGE_HTML = f"""
                 return score == null ? '—' : score.toFixed(0);
             }}
 
-            // Show excitement_index so the visible Score matches the archive's sort key.
-            function primaryScore(game) {{
-                if (game.excitement_index != null) return game.excitement_index.toFixed(1);
-                return formatScore(game.overall_score);
+            // scoreHeader matches the column label so the rendered value matches the
+            // column's scale: 'Excitement' renders excitement_index (~0-12, em dash when
+            // missing — older games without espn_id can't be backfilled from PBP);
+            // 'Overall' renders overall_score (0-100). Mixing scales in one column makes
+            // the higher-scale value look like a "great" game when it's unrelated.
+            // SCORE_MODES is the source of truth; an unknown scoreHeader is a caller
+            // bug that surfaces as an em-dash + console.error rather than silently
+            // mis-rendering against the wrong scale.
+            const SCORE_MODES = {{ OVERALL: 'Overall', EXCITEMENT: 'Excitement' }};
+
+            function primaryScore(game, scoreHeader) {{
+                if (scoreHeader === SCORE_MODES.EXCITEMENT) {{
+                    return game.excitement_index != null
+                        ? game.excitement_index.toFixed(1)
+                        : '—';
+                }}
+                if (scoreHeader === SCORE_MODES.OVERALL) {{
+                    return formatScore(game.overall_score);
+                }}
+                console.error('primaryScore: unknown scoreHeader:', scoreHeader);
+                return '—';
             }}
 
-            function primaryScoreClass(game) {{
-                if (game.excitement_index != null) {{
+            function primaryScoreClass(game, scoreHeader) {{
+                if (scoreHeader === SCORE_MODES.EXCITEMENT) {{
+                    if (game.excitement_index == null) return 'empty';
                     if (game.excitement_index >= EXCITEMENT_THRILLER) return 'high';
                     if (game.excitement_index >= EXCITEMENT_CLOSE) return 'medium';
                     return 'low';
                 }}
-                return getScoreClass(game.overall_score);
+                if (scoreHeader === SCORE_MODES.OVERALL) {{
+                    return getScoreClass(game.overall_score);
+                }}
+                return 'empty';
             }}
 
             // Pass homePctOverride (0..1) for live data; omit for pregame (uses game.win_prob_a).
@@ -1936,15 +1957,15 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
-            function renderGameRow(game, isTopPick) {{
-                const cls = primaryScoreClass(game);
+            function renderGameRow(game, isTopPick, scoreHeader) {{
+                const cls = primaryScoreClass(game, scoreHeader);
                 const impTitle = game.importance_score == null ? 'Not simulated' : '';
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
                     <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
                         <td class="col-date">${{formatLocalDate(game)}}</td>
                         <td class="col-time">${{escapeHtml(formatLocalTime(game.time_utc, game.time))}}</td>
-                        <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{primaryScore(game)}}</span></div></td>
+                        <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{primaryScore(game, scoreHeader)}}</span></div></td>
                         <td>
                             ${{badge}}
                             <div class="matchup">
@@ -1967,8 +1988,8 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
-            function renderGameCard(game, isTopPick) {{
-                const cls = primaryScoreClass(game);
+            function renderGameCard(game, isTopPick, scoreHeader) {{
+                const cls = primaryScoreClass(game, scoreHeader);
                 const eyebrow = isTopPick ? '<div class="games-card-eyebrow">Top pick</div>' : '';
                 const dateStr = formatLocalDate(game);
                 const timeStr = escapeHtml(formatLocalTime(game.time_utc, game.time));
@@ -1977,7 +1998,7 @@ _HOMEPAGE_HTML = f"""
                 const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;
                 return `
                     <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
-                        <div class="games-card-score ${{cls}}">${{primaryScore(game)}}</div>
+                        <div class="games-card-score ${{cls}}">${{primaryScore(game, scoreHeader)}}</div>
                         <div class="games-card-stack">
                             ${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}
                             ${{eyebrow}}

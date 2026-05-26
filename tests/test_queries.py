@@ -1180,7 +1180,7 @@ def test_standings_query_degrades_gracefully_with_unrepaired_nulls(
             Game(
                 team_a_id=1,
                 team_b_id=2,
-                date="2026-05-05",
+                date="2026-04-29",
                 time="",
                 broadcaster="ION",
                 winner_id=1,
@@ -1256,7 +1256,7 @@ def test_backfill_season_type_repairs_legacy_nulls(tmp_path, monkeypatch):
             Game(
                 team_a_id=1,
                 team_b_id=2,
-                date="2026-05-05",
+                date="2026-04-29",
                 time="",
                 broadcaster="ION",
                 winner_id=1,
@@ -1331,7 +1331,7 @@ def test_get_completed_games_uses_strict_filter_after_backfill(tmp_path, monkeyp
 
         # No NULL rows — backfill is complete.
         for date, espn_id, st in [
-            ("2026-05-05", "pre", 1),
+            ("2026-04-29", "pre", 1),
             ("2026-05-20", "reg", 2),
             ("2026-09-25", "post", 3),
         ]:
@@ -1384,7 +1384,7 @@ def test_completed_archive_excludes_preseason_games(tmp_path, monkeypatch):
         # Preseason (excluded), regular (included), postseason (included),
         # legacy NULL (included).
         for date, espn_id, st in [
-            ("2026-05-05", "pre", 1),
+            ("2026-04-29", "pre", 1),
             ("2026-05-20", "reg", 2),
             ("2026-09-25", "post", 3),
             ("2026-05-21", "legacy", None),
@@ -1409,7 +1409,7 @@ def test_completed_archive_excludes_preseason_games(tmp_path, monkeypatch):
         rankings = get_completed_rankings(session, season_year=2026)
         dates = {r.date for r in rankings}
         assert dates == {"2026-05-20", "2026-09-25", "2026-05-21"}
-        assert "2026-05-05" not in dates  # preseason excluded
+        assert "2026-04-29" not in dates  # preseason excluded
 
         # Same filter on the backfill-finder. Clear one excitement to make
         # it eligible, then re-check.
@@ -2985,6 +2985,188 @@ def test_backfill_time_utc_skips_already_populated(session, team_ids):
     refreshed = session.query(Game).filter_by(espn_id="legacy_already").one()
     # Untouched — backfill only fills gaps, never overwrites.
     assert refreshed.time_utc == "2026-06-01T22:00:00+00:00"
+
+
+def test_backfill_legacy_preseason_reclassifies_in_range(session, team_ids):
+    """Legacy 2026 preseason rows (NULL espn_id + NULL season_type, dated before
+    the regular-season opener) get season_type=1. Rows outside the window or
+    with espn_id/season_type already set are untouched. Idempotent."""
+    from scripts.backfill_preseason_season_type import backfill_legacy_preseason
+    from src.db.queries import get_completed_rankings, upsert_daily_ranking
+
+    a_id, b_id = team_ids
+
+    # Should match: legacy preseason (NULL espn_id, NULL season_type, in range).
+    legacy_pre = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-04-29",
+        time="",
+        broadcaster="ION",
+        espn_id=None,
+        season_type=None,
+        winner_id=a_id,
+        final_score_a=80,
+        final_score_b=70,
+    )
+    # Shouldn't match: out-of-range date.
+    out_of_range = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-01",
+        time="",
+        broadcaster="ESPN",
+        espn_id=None,
+        season_type=None,
+        winner_id=a_id,
+        final_score_a=90,
+        final_score_b=85,
+    )
+    # Shouldn't match: regular-season with espn_id set.
+    regular = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-20",
+        time="",
+        broadcaster="ESPN",
+        espn_id="401900001",
+        season_type=2,
+        winner_id=a_id,
+        final_score_a=92,
+        final_score_b=88,
+    )
+    session.add_all([legacy_pre, out_of_range, regular])
+    session.commit()
+    # Archive needs a DailyRanking row for non-transient lookup.
+    upsert_daily_ranking(
+        session,
+        date="2026-05-20",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=50.0,
+        overall_score=50.0,
+        broadcaster="ESPN",
+    )
+
+    n = backfill_legacy_preseason(session)
+    session.commit()
+    assert n == 1
+
+    session.expire_all()
+    assert session.query(Game).filter_by(date="2026-04-29").one().season_type == 1
+    assert session.query(Game).filter_by(date="2026-06-01").one().season_type is None
+    assert session.query(Game).filter_by(date="2026-05-20").one().season_type == 2
+
+    # Idempotent: a second run finds nothing.
+    assert backfill_legacy_preseason(session) == 0
+
+    # After backfill, the archive no longer includes the legacy preseason row.
+    dates = {r.date for r in get_completed_rankings(session, season_year=2026)}
+    assert "2026-04-29" not in dates
+
+
+def test_backfill_legacy_preseason_excludes_regular_season_dates(session, team_ids):
+    """NULL-espn_id, NULL-season_type rows outside the verified preseason
+    window (2026-04-01 through 2026-05-03 inclusive) must NOT be reclassified.
+
+    Covers two distinct risks:
+      - Confirmed regular-season dates (2026-05-08 opener, 2026-05-10 mid,
+        2026-05-13 last pre-espn_id day): silently marking these preseason
+        would permanently drop real games from standings.
+      - Unverified May 4-7 window: ESPN's calendar has no games here, but
+        the predicate must stay strict — a rescheduled regular-season game
+        backfilled into that window would otherwise be silently misclassified.
+        Stays NULL by design — visible in archive as em-dash is the safer
+        failure than corrupted standings.
+    """
+    from scripts.backfill_preseason_season_type import backfill_legacy_preseason
+
+    a_id, b_id = team_ids
+    excluded_dates = [
+        "2026-05-04",  # unverified window
+        "2026-05-05",  # unverified window
+        "2026-05-07",  # unverified window
+        "2026-05-08",  # regular-season opener
+        "2026-05-10",  # mid-window regular season
+        "2026-05-13",  # last pre-espn_id regular-season day
+    ]
+    for game_date in excluded_dates:
+        session.add(
+            Game(
+                team_a_id=a_id,
+                team_b_id=b_id,
+                date=game_date,
+                time="",
+                broadcaster="ION",
+                espn_id=None,
+                season_type=None,
+                winner_id=a_id,
+                final_score_a=80,
+                final_score_b=70,
+            )
+        )
+    session.commit()
+
+    n = backfill_legacy_preseason(session)
+    assert n == 0
+
+    session.expire_all()
+    for game_date in excluded_dates:
+        st = session.query(Game).filter_by(date=game_date).one().season_type
+        assert st is None, (
+            f"{game_date} should not be reclassified, got season_type={st}"
+        )
+
+
+def test_daily_update_rollback_clears_failed_backfill(session, team_ids):
+    """The daily-update non-fatal except block must rollback so downstream
+    work on the same session can proceed. Simulates a helper that mutates
+    the session then raises before the caller commits; asserts the mutation
+    is discarded and a subsequent commit works."""
+    a_id, b_id = team_ids
+    legacy = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-04-29",
+        time="",
+        broadcaster="ION",
+        espn_id=None,
+        season_type=None,
+        winner_id=a_id,
+        final_score_a=80,
+        final_score_b=70,
+    )
+    session.add(legacy)
+    session.commit()
+
+    # Mirror the daily_update except-block contract.
+    try:
+        legacy.season_type = 1  # pending mutation, not yet committed
+        raise RuntimeError("simulated backfill failure post-mutate")
+    except Exception:
+        session.rollback()
+
+    # The mutation is discarded.
+    session.expire_all()
+    assert session.query(Game).filter_by(date="2026-04-29").one().season_type is None
+
+    # Session is healthy: a new write/commit succeeds (no failed-tx state).
+    fresh = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-20",
+        time="",
+        broadcaster="ESPN",
+        espn_id="401900002",
+        season_type=2,
+        winner_id=a_id,
+        final_score_a=90,
+        final_score_b=85,
+    )
+    session.add(fresh)
+    session.commit()
+    assert session.query(Game).filter_by(date="2026-05-20").one().season_type == 2
 
 
 def test_backfill_time_utc_dst_aware(session, team_ids):
