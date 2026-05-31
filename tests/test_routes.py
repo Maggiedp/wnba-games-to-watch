@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.api.routes import format_games_response
+from src.api.routes import format_games_response, render_game_detail
 from src.data.espn_api import today_et
 from src.db.queries import (
     upsert_daily_ranking,
@@ -971,3 +971,40 @@ def test_live_status_endpoint_502s_when_today_fetch_fails(tmp_path, monkeypatch)
     client = TestClient(app)
     resp = client.get("/api/games/live-status")
     assert resp.status_code == 502
+
+
+def test_render_game_detail_unknown_espn_id_returns_none(session, team_ids):
+    assert render_game_detail(session, "does-not-exist") is None
+
+
+def test_render_game_detail_known_game_renders_core_fields(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_daily_ranking(
+        session,
+        date=date,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=78.0,
+        importance_score=64.0,
+        overall_score=72.0,
+        broadcaster="ION",
+        win_prob_a=0.58,
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+
+    assert html is not None
+    assert "Team A" in html and "Team B" in html
+    assert "72" in html  # overall score
+    assert "back to rankings" in html

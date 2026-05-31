@@ -1,5 +1,6 @@
 """API routes and response models for WNBA Games to Watch."""
 
+import html as _html
 import logging
 
 from pydantic import BaseModel, ConfigDict
@@ -8,10 +9,16 @@ from sqlalchemy.orm import Session
 from src.data.espn_api import today_et
 from src.db.queries import (
     get_game_fields,
+    get_head_to_head,
     get_playoff_probabilities,
     get_teams_by_ids,
 )
 from src.db.schema import DailyRanking
+
+
+def escape_html(s: object) -> str:
+    return _html.escape(str(s), quote=True)
+
 
 logger = logging.getLogger(__name__)
 
@@ -2393,6 +2400,53 @@ _HOMEPAGE_HTML = f"""
     </body>
     </html>
     """
+
+
+def render_game_detail(session: Session, espn_id: str) -> str | None:
+    """Render the detail page for one game, or None if the espn_id is unknown."""
+    from src.db.schema import Game
+
+    game = session.query(Game).filter(Game.espn_id == espn_id).first()
+    if game is None:
+        return None
+
+    teams = get_teams_by_ids(session, {game.team_a_id, game.team_b_id})
+    team_a = teams.get(game.team_a_id)
+    team_b = teams.get(game.team_b_id)
+    if team_a is None or team_b is None:
+        return None
+
+    ranking = (
+        session.query(DailyRanking)
+        .filter(
+            DailyRanking.date == game.date,
+            DailyRanking.team_a_id == game.team_a_id,
+            DailyRanking.team_b_id == game.team_b_id,
+        )
+        .first()
+    )
+
+    h2h = get_head_to_head(session, game.team_a_id, game.team_b_id, season_year=2026)
+
+    return _render_game_detail_html(game, team_a, team_b, ranking, h2h)
+
+
+def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
+    # Minimal skeleton — a later task fleshes out sections and styling.
+    overall = (
+        "—"
+        if ranking is None or ranking.overall_score is None
+        else f"{ranking.overall_score:.0f}"
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{escape_html(team_a.name)} vs {escape_html(team_b.name)} — Wumbers</title>
+</head><body>
+<a href="/">← back to rankings</a>
+<h1>{escape_html(team_a.name)} ╱ {escape_html(team_b.name)}</h1>
+<div>{overall} overall</div>
+</body></html>"""
 
 
 def render_homepage() -> str:
