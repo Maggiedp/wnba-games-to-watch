@@ -1,6 +1,7 @@
 """API routes and response models for WNBA Games to Watch."""
 
 import html as _html
+import json
 import logging
 
 from pydantic import BaseModel, ConfigDict
@@ -190,6 +191,60 @@ _SHARED_HEAD = """\
                 font-size: 16px;
                 line-height: 1.45;
             }\
+"""
+
+# SVG win-probability line-chart builder for the game detail page. Plain string
+# (not f-string) — braces are SINGLE. Defined exactly once here; interpolated via
+# {_WP_CHART_JS} into the detail page's <script> (the homepage no longer renders
+# the chart). Self-contained: only uses local vars + the .wp-chart-svg CSS class.
+_WP_CHART_JS = """
+            function buildWpSvg(plays, homeAbbr, awayAbbr) {
+                if (!plays || plays.length < 2) return '';
+                const W = 500, H = 150;
+                const padL = 36, padR = 8, padT = 8, padB = 8;
+                const cW = W - padL - padR;
+                const cH = H - padT - padB;
+                const midY = padT + cH / 2;
+                const N = plays.length;
+
+                const pts = plays.map((p, i) => [
+                    padL + (i / (N - 1)) * cW,
+                    padT + (1 - p.home_pct) * cH
+                ]);
+
+                const periodBounds = [];
+                for (let i = 1; i < plays.length; i++) {
+                    if (plays[i].period !== plays[i - 1].period) {
+                        periodBounds.push(pts[i][0].toFixed(1));
+                    }
+                }
+
+                const firstX = pts[0][0].toFixed(1);
+                const lastX = pts[N - 1][0].toFixed(1);
+                const botY = (H - padB).toFixed(1);
+
+                // Home fill: always below the line (orange)
+                const homePoly = [[firstX, botY],
+                    ...pts.map(p => [p[0].toFixed(1), p[1].toFixed(1)]),
+                    [lastX, botY]].map(p => `${p[0]},${p[1]}`).join(' ');
+
+                const linePath = 'M ' + pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' L ');
+                const [dotX, dotY] = pts[N - 1];
+                const pBounds = periodBounds.map(x =>
+                    `<line x1="${x}" y1="${padT}" x2="${x}" y2="${H - padB}" stroke="#e7e2d8" stroke-width="1" stroke-dasharray="2,2"/>`
+                ).join('');
+
+                return `<svg class="wp-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Win probability chart">
+                    <text x="${padL - 4}" y="${padT + 5}" text-anchor="end" font-size="9" fill="#8a929d">${awayAbbr}</text>
+                    <text x="${padL - 4}" y="${midY + 3}" text-anchor="end" font-size="9" fill="#8a929d">50%</text>
+                    <text x="${padL - 4}" y="${H - padB}" text-anchor="end" font-size="9" fill="#8a929d">${homeAbbr}</text>
+                    <polygon points="${homePoly}" fill="rgba(255,107,0,0.15)"/>
+                    <line x1="${padL}" y1="${midY.toFixed(1)}" x2="${W - padR}" y2="${midY.toFixed(1)}" stroke="#c8c2b8" stroke-width="1" stroke-dasharray="3,3"/>
+                    ${pBounds}
+                    <path d="${linePath}" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-linejoin="round"/>
+                    <circle cx="${dotX.toFixed(1)}" cy="${dotY.toFixed(1)}" r="3" fill="var(--orange)"/>
+                </svg>`;
+            }
 """
 
 _HOMEPAGE_HTML = f"""
@@ -1085,17 +1140,6 @@ _HOMEPAGE_HTML = f"""
             /* ---------- WP Chart ---------- */
             [data-espn-id] {{ cursor: pointer; }}
             .games-card[data-espn-id]:hover {{ border-color: var(--navy-3); }}
-            .wp-swatch {{
-                display: inline-block;
-                width: 8px;
-                height: 8px;
-                border-radius: 50%;
-                margin-right: 4px;
-                vertical-align: middle;
-                position: relative;
-                top: -1px;
-            }}
-            .wp-swatch-home {{ background: var(--orange); }}
             .wp-chart-svg {{
                 width: 100%;
                 height: 150px;
@@ -2091,54 +2135,6 @@ _HOMEPAGE_HTML = f"""
                 }}, 30000);
             }}
 
-            function buildWpSvg(plays, homeAbbr, awayAbbr) {{
-                if (!plays || plays.length < 2) return '';
-                const W = 500, H = 150;
-                const padL = 36, padR = 8, padT = 8, padB = 8;
-                const cW = W - padL - padR;
-                const cH = H - padT - padB;
-                const midY = padT + cH / 2;
-                const N = plays.length;
-
-                const pts = plays.map((p, i) => [
-                    padL + (i / (N - 1)) * cW,
-                    padT + (1 - p.home_pct) * cH
-                ]);
-
-                const periodBounds = [];
-                for (let i = 1; i < plays.length; i++) {{
-                    if (plays[i].period !== plays[i - 1].period) {{
-                        periodBounds.push(pts[i][0].toFixed(1));
-                    }}
-                }}
-
-                const firstX = pts[0][0].toFixed(1);
-                const lastX = pts[N - 1][0].toFixed(1);
-                const botY = (H - padB).toFixed(1);
-
-                // Home fill: always below the line (orange)
-                const homePoly = [[firstX, botY],
-                    ...pts.map(p => [p[0].toFixed(1), p[1].toFixed(1)]),
-                    [lastX, botY]].map(p => `${{p[0]}},${{p[1]}}`).join(' ');
-
-                const linePath = 'M ' + pts.map(p => `${{p[0].toFixed(1)}},${{p[1].toFixed(1)}}`).join(' L ');
-                const [dotX, dotY] = pts[N - 1];
-                const pBounds = periodBounds.map(x =>
-                    `<line x1="${{x}}" y1="${{padT}}" x2="${{x}}" y2="${{H - padB}}" stroke="#e7e2d8" stroke-width="1" stroke-dasharray="2,2"/>`
-                ).join('');
-
-                return `<svg class="wp-chart-svg" viewBox="0 0 ${{W}} ${{H}}" role="img" aria-label="Win probability chart">
-                    <text x="${{padL - 4}}" y="${{padT + 5}}" text-anchor="end" font-size="9" fill="#8a929d">${{awayAbbr}}</text>
-                    <text x="${{padL - 4}}" y="${{midY + 3}}" text-anchor="end" font-size="9" fill="#8a929d">50%</text>
-                    <text x="${{padL - 4}}" y="${{H - padB}}" text-anchor="end" font-size="9" fill="#8a929d">${{homeAbbr}}</text>
-                    <polygon points="${{homePoly}}" fill="rgba(255,107,0,0.15)"/>
-                    <line x1="${{padL}}" y1="${{midY.toFixed(1)}}" x2="${{W - padR}}" y2="${{midY.toFixed(1)}}" stroke="#c8c2b8" stroke-width="1" stroke-dasharray="3,3"/>
-                    ${{pBounds}}
-                    <path d="${{linePath}}" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-linejoin="round"/>
-                    <circle cx="${{dotX.toFixed(1)}}" cy="${{dotY.toFixed(1)}}" r="3" fill="var(--orange)"/>
-                </svg>`;
-            }}
-
             // Elapsed game seconds for a play; regulation = 2400s (4×10 min), each OT = 300s.
             // Returns >2400 for OT plays, which correctly weights them as higher-leverage.
             // ESPN's clock is "M:SS" most of the time but switches to "S.S" (decimal seconds)
@@ -2501,6 +2497,18 @@ _DETAIL_STYLE = """
             /* ---------- WP chart slot ---------- */
             #wp-chart { margin-top: 4px; min-height: 1px; }
             .chart-placeholder { color: var(--text-subtle); font-style: italic; font-size: 0.95rem; }
+            .wp-chart-header {
+                font-size: 0.95rem;
+                color: var(--text);
+                margin-bottom: 6px;
+            }
+            .wp-chart-header .wp-chart-status { color: var(--text-muted); }
+            .wp-chart-svg {
+                width: 100%;
+                height: 150px;
+                display: block;
+                overflow: visible;
+            }
 """
 
 
@@ -2650,6 +2658,8 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
     breakdown_section = _detail_breakdown_section(ranking, team_a, team_b)
     h2h_section = _detail_h2h_section(game, team_a, team_b, h2h)
     espn_id = escape_html(game.espn_id or "")
+    home_abbr_js = json.dumps(team_a.abbreviation or "")
+    away_abbr_js = json.dumps(team_b.abbreviation or "")
 
     return f"""<!DOCTYPE html>
     <html lang="en">
@@ -2705,6 +2715,110 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
                 <p class="chart-placeholder">Appears once the game tips off.</p>
             </section>
         </main>
+        <script>
+{_WP_CHART_JS}
+
+            function escapeHtml(s) {{
+                return String(s).replace(/[&<>"']/g, c => ({{
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                }})[c]);
+            }}
+
+            function isLiveStatus(status) {{
+                return status === 'STATUS_IN_PROGRESS'
+                    || status === 'STATUS_HALFTIME'
+                    || status === 'STATUS_END_PERIOD';
+            }}
+
+            (function () {{
+                const HOME_ABBR = {home_abbr_js};
+                const AWAY_ABBR = {away_abbr_js};
+                const chartEl = document.getElementById('wp-chart');
+                const placeholderEl = document.querySelector('.chart-placeholder');
+                if (!chartEl) return;
+                const espnId = chartEl.dataset.espnId;
+                if (!espnId) return;
+
+                let pollTimer = null;
+
+                function showPlaceholder() {{
+                    chartEl.innerHTML = '';
+                    if (placeholderEl) placeholderEl.style.display = '';
+                }}
+
+                function showMessage(msg) {{
+                    if (placeholderEl) placeholderEl.style.display = 'none';
+                    chartEl.innerHTML = `<p class="chart-placeholder" style="display:block">${{escapeHtml(msg)}}</p>`;
+                }}
+
+                function stopPoll() {{
+                    if (pollTimer) {{ clearInterval(pollTimer); pollTimer = null; }}
+                }}
+
+                // On any fetch/parse failure, stop polling too — a transient ESPN
+                // blip during a live game must not leave the 30s interval running.
+                function fail() {{
+                    stopPoll();
+                    showMessage('Chart unavailable.');
+                }}
+
+                // Header line: away score / home score, then period+clock (live) or "Final".
+                function headerHtml(data) {{
+                    const away = `${{escapeHtml(AWAY_ABBR)}} ${{escapeHtml(String(data.away_score))}}`;
+                    const home = `${{escapeHtml(HOME_ABBR)}} ${{escapeHtml(String(data.home_score))}}`;
+                    let status;
+                    if (isLiveStatus(data.status)) {{
+                        const last = data.plays[data.plays.length - 1];
+                        const period = last && last.period ? `Q${{escapeHtml(String(last.period))}}` : '';
+                        const clock = last && last.clock ? escapeHtml(String(last.clock)) : '';
+                        status = [period, clock].filter(Boolean).join(' ');
+                    }} else {{
+                        status = 'Final';
+                    }}
+                    const statusHtml = status ? ` <span class="wp-chart-status">&middot; ${{status}}</span>` : '';
+                    return `<div class="wp-chart-header">${{away}} &nbsp; ${{home}}${{statusHtml}}</div>`;
+                }}
+
+                function render(data) {{
+                    const plays = (data && data.plays) || [];
+                    if (!data || !data.status || data.status === 'STATUS_SCHEDULED' || plays.length === 0) {{
+                        showPlaceholder();
+                        return;
+                    }}
+                    if (placeholderEl) placeholderEl.style.display = 'none';
+                    chartEl.innerHTML = headerHtml(data) + buildWpSvg(plays, HOME_ABBR, AWAY_ABBR);
+                }}
+
+                async function load() {{
+                    let resp;
+                    try {{
+                        resp = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
+                    }} catch (e) {{
+                        fail();
+                        return;
+                    }}
+                    if (!resp.ok) {{
+                        fail();
+                        return;
+                    }}
+                    let data;
+                    try {{
+                        data = await resp.json();
+                    }} catch (e) {{
+                        fail();
+                        return;
+                    }}
+                    render(data);
+                    if (isLiveStatus(data.status)) {{
+                        if (!pollTimer) pollTimer = setInterval(load, 30000);
+                    }} else {{
+                        stopPoll();
+                    }}
+                }}
+
+                load();
+            }})();
+        </script>
     </body>
     </html>"""
 
