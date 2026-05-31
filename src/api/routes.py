@@ -1289,7 +1289,7 @@ _HOMEPAGE_HTML = f"""
             }};
 
             const EXCITEMENT_CLOSE = 4.0;
-            const EXCITEMENT_THRILLER = 6.0;
+            const EXCITEMENT_THRILLER = 7.5;
             const EXCITEMENT_FUTURE_WEIGHT = 2.5;
 
             function addDaysISO(days) {{

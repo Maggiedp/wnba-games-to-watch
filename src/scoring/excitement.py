@@ -18,7 +18,7 @@ src/api/routes.py — tests/test_excitement.py asserts this.
 """
 
 EXCITEMENT_CLOSE = 4.0
-EXCITEMENT_THRILLER = 6.0
+EXCITEMENT_THRILLER = 7.5
 EXCITEMENT_FUTURE_WEIGHT = 2.5
 
 REGULATION_SECONDS = 2400  # 4 × 10 min
