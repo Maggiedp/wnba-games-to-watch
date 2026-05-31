@@ -1008,3 +1008,60 @@ def test_render_game_detail_known_game_renders_core_fields(session, team_ids):
     assert "Team A" in html and "Team B" in html
     assert "72" in html  # overall score
     assert "back to rankings" in html
+
+
+def test_render_game_detail_shows_blurbs_and_h2h_empty_state(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    # Re-upsert by name to set BPI ratings that drive the quality blurb
+    # (team_ids fixture created them with bpi 0.0). upsert_team updates in place.
+    upsert_team(session, name="Team A", abbreviation="TMA", logo_url="", bpi_rating=6.2)
+    upsert_team(session, name="Team B", abbreviation="TMB", logo_url="", bpi_rating=4.8)
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_daily_ranking(
+        session,
+        date=date,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=78.0,
+        importance_score=64.0,
+        overall_score=72.0,
+        broadcaster="ION",
+        win_prob_a=0.58,
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+
+    assert "How this is scored" in html
+    assert "BPI" in html  # quality uses BPI
+    assert "Elo" in html  # win prob uses Elo
+    assert "First meeting of the season" in html  # no completed H2H yet
+
+
+def test_render_game_detail_not_simulated_when_no_ranking(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="",
+        espn_id="401736211",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736211")
+
+    assert html is not None
+    assert "Not simulated" in html  # graceful, no crash

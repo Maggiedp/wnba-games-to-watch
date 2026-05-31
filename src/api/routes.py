@@ -6,6 +6,7 @@ import logging
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from src.api import blurbs
 from src.data.espn_api import today_et
 from src.db.queries import (
     get_game_fields,
@@ -13,7 +14,7 @@ from src.db.queries import (
     get_playoff_probabilities,
     get_teams_by_ids,
 )
-from src.db.schema import DailyRanking
+from src.db.schema import DailyRanking, Game
 
 
 def escape_html(s: object) -> str:
@@ -2411,8 +2412,6 @@ _HOMEPAGE_HTML = f"""
 
 def render_game_detail(session: Session, espn_id: str) -> str | None:
     """Render the detail page for one game, or None if the espn_id is unknown."""
-    from src.db.schema import Game
-
     game = session.query(Game).filter(Game.espn_id == espn_id).first()
     if game is None:
         return None
@@ -2438,22 +2437,409 @@ def render_game_detail(session: Session, espn_id: str) -> str | None:
     return _render_game_detail_html(game, team_a, team_b, ranking, h2h)
 
 
-def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
-    # Minimal skeleton — a later task fleshes out sections and styling.
-    overall = (
-        "—"
-        if ranking is None or ranking.overall_score is None
-        else f"{ranking.overall_score:.0f}"
+_DETAIL_STYLE = """
+            /* ---------- Header ---------- */
+            .header {
+                background: var(--navy);
+                color: white;
+                padding: 22px 32px 24px;
+                border-bottom: 4px solid var(--orange);
+            }
+            .header-inner { max-width: 760px; margin: 0 auto; }
+            .back-link {
+                font-family: var(--body);
+                font-size: 0.82rem;
+                font-weight: 500;
+                letter-spacing: 0.04em;
+                color: #b9c4d4;
+                text-decoration: none;
+            }
+            .back-link:hover { color: white; }
+
+            /* ---------- Page shell ---------- */
+            main {
+                max-width: 760px;
+                margin: 0 auto;
+                padding: 36px 24px 80px;
+                width: 100%;
+                flex: 1;
+            }
+            .eyebrow {
+                font-family: var(--body);
+                font-size: 0.74rem;
+                font-weight: 600;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                color: var(--text-subtle);
+            }
+            h1.matchup {
+                font-family: var(--display);
+                font-variation-settings: 'opsz' 144;
+                font-weight: 900;
+                font-size: clamp(2rem, 6vw, 3.1rem);
+                line-height: 1.04;
+                letter-spacing: -0.02em;
+                margin: 10px 0 0;
+            }
+            h1.matchup .slash { color: var(--orange); font-weight: 500; }
+
+            /* ---------- Overall score + summary ---------- */
+            .overall-block {
+                display: flex;
+                align-items: baseline;
+                gap: 16px;
+                margin: 28px 0 6px;
+            }
+            .overall-num {
+                font-family: var(--display);
+                font-variation-settings: 'opsz' 144;
+                font-weight: 900;
+                font-size: 4rem;
+                line-height: 0.9;
+                color: var(--orange);
+                font-feature-settings: 'tnum' on;
+            }
+            .overall-num.empty { color: var(--text-subtle); }
+            .overall-label {
+                font-family: var(--body);
+                font-size: 0.74rem;
+                font-weight: 600;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                color: var(--text-muted);
+            }
+            .summary {
+                font-size: 1.05rem;
+                color: var(--text-muted);
+                max-width: 60ch;
+                margin-bottom: 8px;
+            }
+
+            /* ---------- Sections ---------- */
+            section { margin-top: 40px; }
+            .section-title {
+                font-family: var(--display);
+                font-variation-settings: 'opsz' 72;
+                font-weight: 700;
+                font-size: 1.4rem;
+                letter-spacing: -0.01em;
+                margin-bottom: 16px;
+            }
+
+            /* ---------- Win-prob tug-of-war ---------- */
+            .wp-bar {
+                display: flex;
+                height: 44px;
+                border-radius: 10px;
+                overflow: hidden;
+                border: 1px solid var(--line);
+            }
+            .wp-seg {
+                display: flex;
+                align-items: center;
+                color: white;
+                font-family: var(--body);
+                font-weight: 600;
+                font-size: 0.9rem;
+                white-space: nowrap;
+                overflow: hidden;
+            }
+            .wp-seg.a { background: var(--orange); padding-left: 14px; }
+            .wp-seg.b { background: var(--navy); justify-content: flex-end; padding-right: 14px; }
+            .wp-seg.neutral { background: var(--navy-3); }
+            .wp-note {
+                margin-top: 12px;
+                color: var(--text-muted);
+                font-size: 0.98rem;
+            }
+            .wp-note.muted { color: var(--text-subtle); font-style: italic; }
+
+            /* ---------- Breakdown mini-bars ---------- */
+            .breakdown-block { margin-bottom: 24px; }
+            .mini-bar-label {
+                font-family: var(--body);
+                font-size: 0.74rem;
+                font-weight: 600;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                color: var(--text-muted);
+            }
+            .mini-bar-track {
+                display: block;
+                height: 9px;
+                background: var(--line-soft);
+                border-radius: 999px;
+                overflow: hidden;
+                margin: 8px 0 10px;
+            }
+            .mini-bar-fill {
+                display: block;
+                height: 100%;
+                border-radius: 999px;
+            }
+            .mini-bar-fill.quality { background: linear-gradient(90deg, #ff6b00, #ff9540); }
+            .mini-bar-fill.importance { background: linear-gradient(90deg, #2b3a52, #5a6573); }
+            .breakdown-text { color: var(--text-muted); font-size: 0.98rem; }
+
+            /* ---------- How this is scored ---------- */
+            details.scored {
+                margin-top: 28px;
+                border-top: 1px solid var(--line);
+                padding-top: 16px;
+            }
+            details.scored summary {
+                cursor: pointer;
+                font-family: var(--body);
+                font-size: 0.74rem;
+                font-weight: 600;
+                letter-spacing: 0.12em;
+                text-transform: uppercase;
+                color: var(--text-muted);
+                list-style: none;
+            }
+            details.scored summary::-webkit-details-marker { display: none; }
+            details.scored summary::before { content: '+ '; color: var(--orange); }
+            details.scored[open] summary::before { content: '– '; }
+            details.scored p {
+                margin-top: 14px;
+                color: var(--text-muted);
+                font-size: 0.95rem;
+                max-width: 64ch;
+            }
+            details.scored p + p { margin-top: 10px; }
+
+            /* ---------- Head-to-head ---------- */
+            .h2h-row {
+                display: grid;
+                grid-template-columns: 110px 1fr auto;
+                gap: 12px;
+                align-items: baseline;
+                padding: 12px 0;
+                border-bottom: 1px solid var(--line-soft);
+            }
+            .h2h-row:last-child { border-bottom: none; }
+            .h2h-date { color: var(--text-subtle); font-size: 0.85rem; }
+            .h2h-score {
+                font-family: var(--display);
+                font-weight: 600;
+                font-feature-settings: 'tnum' on;
+            }
+            .h2h-excite {
+                font-size: 0.8rem;
+                color: var(--text-subtle);
+                font-style: italic;
+            }
+            .h2h-empty { color: var(--text-muted); font-style: italic; }
+
+            /* ---------- WP chart slot ---------- */
+            #wp-chart { margin-top: 4px; min-height: 1px; }
+            .chart-placeholder { color: var(--text-subtle); font-style: italic; font-size: 0.95rem; }
+"""
+
+
+def _detail_meta_line(game) -> str:
+    """Uppercase eyebrow: DATE · TIME · BROADCASTER (broadcaster optional)."""
+    parts = []
+    if game.date:
+        parts.append(escape_html(game.date))
+    if game.time:
+        parts.append(escape_html(game.time))
+    broadcaster = (game.broadcaster or "").strip()
+    if broadcaster and broadcaster.upper() != "TBD":
+        parts.append(escape_html(broadcaster))
+    return " · ".join(parts)
+
+
+def _detail_win_prob_section(ranking, team_a, team_b) -> str:
+    """Tug-of-war bar + Elo blurb. Neutral 50/50 when not simulated."""
+    abbr_a = escape_html(team_a.abbreviation or team_a.name)
+    abbr_b = escape_html(team_b.abbreviation or team_b.name)
+    win_prob_a = None if ranking is None else ranking.win_prob_a
+
+    if win_prob_a is None:
+        return f"""
+                <div class="wp-bar" role="img" aria-label="Win probability not simulated">
+                    <span class="wp-seg neutral a" style="width: 50%">{abbr_a}</span>
+                    <span class="wp-seg neutral b" style="width: 50%">{abbr_b}</span>
+                </div>
+                <p class="wp-note muted">Not simulated.</p>"""
+
+    pct_a = win_prob_a * 100
+    pct_b = 100 - pct_a
+    note = escape_html(blurbs.win_prob_blurb(win_prob_a, team_a.name, team_b.name))
+    return f"""
+                <div class="wp-bar" role="img" aria-label="{abbr_a} {pct_a:.0f} percent, {abbr_b} {pct_b:.0f} percent">
+                    <span class="wp-seg a" style="width: {pct_a:.1f}%">{abbr_a} {pct_a:.0f}%</span>
+                    <span class="wp-seg b" style="width: {pct_b:.1f}%">{pct_b:.0f}% {abbr_b}</span>
+                </div>
+                <p class="wp-note">{note}</p>"""
+
+
+def _detail_breakdown_section(ranking, team_a, team_b) -> str:
+    """Quality (orange) + Importance (navy) mini-bars with blurbs."""
+    if ranking is None:
+        return """
+                <div class="breakdown-block">
+                    <span class="mini-bar-label">Quality — not simulated · 60% of score</span>
+                    <span class="mini-bar-track" aria-hidden="true"></span>
+                    <p class="breakdown-text">Not simulated, so there's no quality score for this game.</p>
+                </div>
+                <div class="breakdown-block">
+                    <span class="mini-bar-label">Importance — not simulated · 40% of score</span>
+                    <span class="mini-bar-track" aria-hidden="true"></span>
+                    <p class="breakdown-text">Not simulated, so there's no importance score for this game.</p>
+                </div>"""
+
+    quality = ranking.quality_score
+    importance = ranking.importance_score
+    q_pct = 0.0 if quality is None else max(0.0, min(100.0, quality))
+    q_label = "not simulated" if quality is None else f"{quality:.0f}"
+    q_text = escape_html(
+        blurbs.quality_blurb(
+            quality or 0.0,
+            team_a.bpi_rating or 0.0,
+            team_b.bpi_rating or 0.0,
+            team_a.name,
+            team_b.name,
+        )
     )
+
+    if importance is None:
+        i_label = "Importance — not simulated · 40% of score"
+        i_track = '<span class="mini-bar-track" aria-hidden="true"></span>'
+    else:
+        i_pct = max(0.0, min(100.0, importance))
+        i_label = f"Importance — {importance:.0f} · 40% of score"
+        i_track = (
+            '<span class="mini-bar-track" aria-hidden="true">'
+            f'<span class="mini-bar-fill importance" style="width: {i_pct:.1f}%"></span></span>'
+        )
+    i_text = escape_html(blurbs.importance_blurb(importance))
+
+    return f"""
+                <div class="breakdown-block">
+                    <span class="mini-bar-label">Quality — {q_label} · 60% of score</span>
+                    <span class="mini-bar-track" aria-hidden="true"><span class="mini-bar-fill quality" style="width: {q_pct:.1f}%"></span></span>
+                    <p class="breakdown-text">{q_text}</p>
+                </div>
+                <div class="breakdown-block">
+                    <span class="mini-bar-label">{escape_html(i_label)}</span>
+                    {i_track}
+                    <p class="breakdown-text">{i_text}</p>
+                </div>"""
+
+
+def _detail_h2h_section(game, team_a, team_b, h2h) -> str:
+    """Ledger of completed season meetings; 'First meeting' when empty."""
+    if not h2h:
+        return '<p class="h2h-empty">First meeting of the season.</p>'
+
+    name_by_id = {game.team_a_id: team_a, game.team_b_id: team_b}
+    rows = []
+    for g in h2h:
+        ta = name_by_id.get(g.team_a_id)
+        tb = name_by_id.get(g.team_b_id)
+        abbr_a = (ta.abbreviation or ta.name) if ta else "?"
+        abbr_b = (tb.abbreviation or tb.name) if tb else "?"
+        sa = "" if g.final_score_a is None else g.final_score_a
+        sb = "" if g.final_score_b is None else g.final_score_b
+        score = f"{escape_html(abbr_a)} {escape_html(sa)} – {escape_html(sb)} {escape_html(abbr_b)}"
+        excite = ""
+        if g.excitement_index is not None:
+            excite = (
+                f'<span class="h2h-excite">excitement {g.excitement_index:.0f}</span>'
+            )
+        rows.append(
+            f"""
+                <div class="h2h-row">
+                    <span class="h2h-date">{escape_html(g.date or "")}</span>
+                    <span class="h2h-score">{score}</span>
+                    {excite}
+                </div>"""
+        )
+    return "".join(rows)
+
+
+def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
+    name_a = escape_html(team_a.name)
+    name_b = escape_html(team_b.name)
+    title = f"{name_a} vs {name_b} — {_SITE_TITLE}"
+
+    meta_line = _detail_meta_line(game)
+
+    if ranking is None or ranking.overall_score is None:
+        overall_html = '<span class="overall-num empty">—</span>'
+        summary = "Not simulated — no overall score for this game yet."
+    else:
+        overall_html = f'<span class="overall-num">{ranking.overall_score:.0f}</span>'
+        summary = (
+            f"{team_a.name} vs {team_b.name} scores "
+            f"{ranking.overall_score:.0f} out of 100 overall — "
+            "60% matchup quality, 40% playoff importance."
+        )
+    summary = escape_html(summary)
+
+    wp_section = _detail_win_prob_section(ranking, team_a, team_b)
+    breakdown_section = _detail_breakdown_section(ranking, team_a, team_b)
+    h2h_section = _detail_h2h_section(game, team_a, team_b, h2h)
+    espn_id = escape_html(game.espn_id or "")
+
     return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{escape_html(team_a.name)} vs {escape_html(team_b.name)} — Wumbers</title>
-</head><body>
-<a href="/">← back to rankings</a>
-<h1>{escape_html(team_a.name)} ╱ {escape_html(team_b.name)}</h1>
-<div>{overall} overall</div>
-</body></html>"""
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{title}</title>
+{_SHARED_HEAD}
+{_DETAIL_STYLE}
+        </style>
+    </head>
+    <body>
+        <header class="header">
+            <div class="header-inner">
+                <a class="back-link" href="/">&larr; back to rankings</a>
+            </div>
+        </header>
+        <main>
+            <p class="eyebrow">{meta_line}</p>
+            <h1 class="matchup">{name_a} <span class="slash">&#9585;</span> {name_b}</h1>
+
+            <div class="overall-block">
+                {overall_html}
+                <span class="overall-label">Overall</span>
+            </div>
+            <p class="summary">{summary}</p>
+
+            <section>
+                <h2 class="section-title">Win probability</h2>
+                {wp_section}
+            </section>
+
+            <section>
+                <h2 class="section-title">Why it's ranked here</h2>
+                {breakdown_section}
+                <details class="scored">
+                    <summary>How this is scored</summary>
+                    <p>Overall is a weighted blend: 60% matchup quality plus 40% playoff importance.</p>
+                    <p>Quality is the harmonic mean of the two teams' ESPN BPI ratings, normalized on the live &plusmn;8 BPI spread — it rewards games where both teams are strong, not just one.</p>
+                    <p>Importance is the swing in playoff odds this game produces in a Monte Carlo simulation, measured against a season-start ceiling.</p>
+                    <p>Win probability is separate from quality: it's an Elo rating (with a +50 home-court bump), not BPI.</p>
+                </details>
+            </section>
+
+            <section>
+                <h2 class="section-title">Head-to-head &middot; 2026</h2>
+                {h2h_section}
+            </section>
+
+            <section>
+                <h2 class="section-title">Win-probability chart</h2>
+                <div id="wp-chart" data-espn-id="{espn_id}"></div>
+                <p class="chart-placeholder">Appears once the game tips off.</p>
+            </section>
+        </main>
+    </body>
+    </html>"""
 
 
 def render_homepage() -> str:
