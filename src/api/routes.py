@@ -364,6 +364,13 @@ _HOMEPAGE_HTML = f"""
             .controls {{
                 background: var(--surface);
                 border-bottom: 1px solid var(--line);
+                position: sticky;
+                top: 0;
+                z-index: 20;
+                transition: box-shadow 0.18s ease;
+            }}
+            .controls.is-stuck {{
+                box-shadow: 0 4px 16px rgba(13, 27, 42, 0.10);
             }}
             .controls-inner {{
                 max-width: 1100px;
@@ -1166,6 +1173,7 @@ _HOMEPAGE_HTML = f"""
             </div>
         </div>
 
+        <div id="controls-sentinel" aria-hidden="true"></div>
         <div class="controls">
             <div class="controls-inner">
                 <div class="filter-row">
@@ -2371,6 +2379,15 @@ _HOMEPAGE_HTML = f"""
                 }};
                 document.getElementById('games-container').addEventListener('click', handleEspnRowClick);
                 document.getElementById('completed-games-container').addEventListener('click', handleEspnRowClick);
+
+                // Add a shadow to the filter bar only once it pins to the top.
+                const sentinel = document.getElementById('controls-sentinel');
+                const controls = document.querySelector('.controls');
+                if (sentinel && controls && 'IntersectionObserver' in window) {{
+                    new IntersectionObserver(([entry]) => {{
+                        controls.classList.toggle('is-stuck', !entry.isIntersecting);
+                    }}).observe(sentinel);
+                }}
             }});
         </script>
     </body>
