@@ -1082,32 +1082,9 @@ _HOMEPAGE_HTML = f"""
                 margin-top: 2px;
             }}
 
-            /* ---------- WP Chart Panel ---------- */
+            /* ---------- WP Chart ---------- */
             [data-espn-id] {{ cursor: pointer; }}
             .games-card[data-espn-id]:hover {{ border-color: var(--navy-3); }}
-            .wp-panel-row:hover {{ background: transparent !important; }}
-            .wp-panel {{
-                padding: 16px 20px;
-                background: var(--surface);
-                border-top: 1px solid var(--line-soft);
-                animation: wpFadeIn 0.15s ease;
-            }}
-            @keyframes wpFadeIn {{
-                from {{ opacity: 0; transform: translateY(-4px); }}
-                to {{ opacity: 1; transform: translateY(0); }}
-            }}
-            .wp-panel-header {{
-                font-size: 0.82rem;
-                color: var(--text-muted);
-                margin-bottom: 10px;
-                font-weight: 500;
-            }}
-            .wp-panel-msg {{
-                font-size: 0.88rem;
-                color: var(--text-subtle);
-                font-style: italic;
-                padding: 4px 0;
-            }}
             .wp-swatch {{
                 display: inline-block;
                 width: 8px;
@@ -1551,7 +1528,6 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function applyFilters() {{
-                collapsePanel();
                 const fromDate = document.getElementById('from-date').value;
                 const toDate = document.getElementById('to-date').value;
                 const team = document.getElementById('team-filter').value;
@@ -1985,7 +1961,7 @@ _HOMEPAGE_HTML = f"""
                 const impTitle = game.importance_score == null ? 'Not simulated' : '';
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
-                    <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
+                    <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}" role="link" tabindex="0"` : ''}}>
                         <td class="col-date">${{formatLocalDate(game)}}</td>
                         <td class="col-time">${{escapeHtml(formatLocalTime(game.time_utc, game.time))}}</td>
                         <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{primaryScore(game, scoreHeader)}}</span></div></td>
@@ -2020,7 +1996,7 @@ _HOMEPAGE_HTML = f"""
                 const broadcastSeg = hasBroadcaster ? ` &middot; ${{escapeHtml(game.broadcaster)}}` : '';
                 const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;
                 return `
-                    <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
+                    <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}" role="link" tabindex="0"` : ''}}>
                         <div class="games-card-score ${{cls}}">${{primaryScore(game, scoreHeader)}}</div>
                         <div class="games-card-stack">
                             ${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}
@@ -2044,10 +2020,6 @@ _HOMEPAGE_HTML = f"""
                     </div>
                 `;
             }}
-
-            // ---------- WP Chart ----------
-            let openEspnId = null;
-            let pollInterval = null;
 
             // ESPN reports STATUS_HALFTIME between halves and STATUS_END_PERIOD
             // between quarters. Both are "live" for rendering and polling.
@@ -2093,6 +2065,12 @@ _HOMEPAGE_HTML = f"""
                     const text = winProbText(game, last.home_pct);
                     const sel = `[data-row-wp-id="${{CSS.escape(game.espn_id)}}"]`;
                     document.querySelectorAll(sel).forEach(el => {{ el.innerHTML = text; }});
+                    // Paint excitement eyebrow for this live game from play-by-play data.
+                    const excitementLabel = computeExcitement(plays);
+                    document.querySelectorAll(`[data-espn-id="${{CSS.escape(game.espn_id)}}"]`).forEach(row => {{
+                        const eyebrow = row.querySelector('.excitement-eyebrow');
+                        if (eyebrow) applyExcitementClass(eyebrow, excitementLabel);
+                    }});
                 }} catch (e) {{
                     console.warn('Live WP hydration failed:', e);
                 }}
@@ -2111,120 +2089,6 @@ _HOMEPAGE_HTML = f"""
                     if (liveGamesInList().length === 0) {{ clearLiveWpPoll(); return; }}
                     hydrateLiveWp();
                 }}, 30000);
-            }}
-
-            function collapsePanel() {{
-                if (pollInterval) {{ clearInterval(pollInterval); pollInterval = null; }}
-                document.querySelectorAll('.wp-panel-row').forEach(el => el.remove());
-                document.querySelectorAll('.wp-panel-card').forEach(el => el.remove());
-                openEspnId = null;
-            }}
-
-            async function expandPanel(espnId, game) {{
-                collapsePanel();
-                openEspnId = espnId;
-                document.querySelectorAll(`[data-espn-id="${{espnId}}"]`).forEach(el => {{
-                    const panelHtml = `<div class="wp-panel">
-                        <div class="wp-panel-header" data-wp-id="${{espnId}}">Loading…</div>
-                        <div class="wp-chart-content" data-wp-id="${{espnId}}"></div>
-                    </div>`;
-                    if (el.tagName === 'TR') {{
-                        const cols = el.querySelectorAll('td').length;
-                        el.insertAdjacentHTML('afterend', `<tr class="wp-panel-row"><td colspan="${{cols}}">${{panelHtml}}</td></tr>`);
-                    }} else {{
-                        el.insertAdjacentHTML('afterend', `<div class="wp-panel-card">${{panelHtml}}</div>`);
-                    }}
-                }});
-                await fetchAndRenderChart(espnId, game);
-            }}
-
-            async function fetchAndRenderChart(espnId, game) {{
-                try {{
-                    const resp = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
-                    if (!resp.ok) {{
-                        const msg = resp.status === 404 ? 'Game not found.' : 'Chart unavailable.';
-                        setWpContent(espnId, msg, `<div class="wp-panel-msg">${{msg}}</div>`);
-                        return;
-                    }}
-                    const data = await resp.json();
-                    renderChartData(espnId, data, game);
-                    if (isLiveStatus(data.status) && openEspnId === espnId) {{
-                        if (pollInterval) clearInterval(pollInterval);
-                        pollInterval = setInterval(async () => {{
-                            if (openEspnId !== espnId) {{ clearInterval(pollInterval); pollInterval = null; return; }}
-                            try {{
-                                const r = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
-                                if (!r.ok) return;
-                                const d = await r.json();
-                                renderChartData(espnId, d, game);
-                                if (!isLiveStatus(d.status)) {{ clearInterval(pollInterval); pollInterval = null; }}
-                            }} catch (e) {{ console.warn('WP poll failed:', e); }}
-                        }}, 30000);
-                    }}
-                }} catch (e) {{
-                    setWpContent(espnId, 'Chart unavailable.', '<div class="wp-panel-msg">Chart unavailable.</div>');
-                }}
-            }}
-
-            function renderChartData(espnId, data, game) {{
-                const plays = data.plays || [];
-                const homeAbbr = escapeHtml(game.team_a_abbr || game.team_a);
-                const awayAbbr = escapeHtml(game.team_b_abbr || game.team_b);
-                let header = '';
-                let chart = '';
-                const homeSwatch = `<span class="wp-swatch wp-swatch-home"></span>`;
-                if (plays.length === 0) {{
-                    const msg = (data.status === 'STATUS_SCHEDULED' || !data.status || data.status === 'STATUS_UNKNOWN')
-                        ? "Game hasn't started yet."
-                        : 'No chart data available.';
-                    header = msg;
-                    chart = `<div class="wp-panel-msg">${{msg}}</div>`;
-                }} else {{
-                    const last = plays[plays.length - 1];
-                    const hp = Math.round(last.home_pct * 100);
-                    const ap = 100 - hp;
-                    const homeLabel = `${{homeSwatch}}${{homeAbbr}} ${{hp}}%`;
-                    const awayLabel = `${{awayAbbr}} ${{ap}}%`;
-                    const wpLabel = `${{homeLabel}} &middot; ${{awayLabel}} win probability`;
-                    const hs = data.home_score != null && data.home_score !== '' ? escapeHtml(String(data.home_score)) : null;
-                    const as_ = data.away_score != null && data.away_score !== '' ? escapeHtml(String(data.away_score)) : null;
-                    const scoreStr = (hs && as_) ? `${{homeAbbr}} ${{hs}}&ndash;${{as_}} ${{awayAbbr}}` : '';
-                    if (data.status === 'STATUS_FINAL') {{
-                        header = scoreStr ? `${{scoreStr}} &mdash; Final &middot; ${{wpLabel}}` : `Final &middot; ${{wpLabel}}`;
-                    }} else if (isLiveStatus(data.status)) {{
-                        let gameLabel;
-                        if (data.status === 'STATUS_HALFTIME') {{
-                            gameLabel = 'Halftime';
-                        }} else if (data.status === 'STATUS_END_PERIOD') {{
-                            gameLabel = last.period <= 4 ? `End Q${{last.period}}` : `End OT`;
-                        }} else {{
-                            const q = last.period <= 4 ? `Q${{last.period}}` : `OT`;
-                            const clk = last.clock ? ` ${{escapeHtml(last.clock)}}` : '';
-                            gameLabel = `${{q}}${{clk}}`;
-                        }}
-                        const gameState = scoreStr ? `${{scoreStr}} &middot; ${{gameLabel}}` : gameLabel;
-                        header = `${{gameState}} &mdash; ${{wpLabel}}`;
-                    }} else {{
-                        header = wpLabel;
-                    }}
-                    chart = buildWpSvg(plays, homeAbbr, awayAbbr);
-                }}
-                setWpContent(espnId, header, chart);
-
-                const excitementLabel = computeExcitement(plays);
-                document.querySelectorAll(`[data-espn-id="${{espnId}}"]`).forEach(row => {{
-                    const eyebrow = row.querySelector('.excitement-eyebrow');
-                    if (eyebrow) applyExcitementClass(eyebrow, excitementLabel);
-                }});
-            }}
-
-            function setWpContent(espnId, header, chart) {{
-                document.querySelectorAll(`.wp-panel-header[data-wp-id="${{espnId}}"]`).forEach(el => {{
-                    el.innerHTML = header;
-                }});
-                document.querySelectorAll(`.wp-chart-content[data-wp-id="${{espnId}}"]`).forEach(el => {{
-                    el.innerHTML = chart || '';
-                }});
             }}
 
             function buildWpSvg(plays, homeAbbr, awayAbbr) {{
@@ -2385,15 +2249,18 @@ _HOMEPAGE_HTML = f"""
                 const handleEspnRowClick = (e) => {{
                     const target = e.target.closest('[data-espn-id]');
                     if (!target || !target.dataset.espnId) return;
-                    const espnId = target.dataset.espnId;
-                    if (openEspnId === espnId) {{ collapsePanel(); return; }}
-                    const game = allGames.find(g => g.espn_id === espnId)
-                        || allCompleted.find(g => g.espn_id === espnId);
-                    if (!game) return;
-                    expandPanel(espnId, game);
+                    window.location.href = '/game/' + encodeURIComponent(target.dataset.espnId);
                 }};
                 document.getElementById('games-container').addEventListener('click', handleEspnRowClick);
                 document.getElementById('completed-games-container').addEventListener('click', handleEspnRowClick);
+                const handleEspnRowKey = (e) => {{
+                    if (e.key !== 'Enter') return;
+                    const target = e.target.closest('[data-espn-id]');
+                    if (!target || !target.dataset.espnId) return;
+                    window.location.href = '/game/' + encodeURIComponent(target.dataset.espnId);
+                }};
+                document.getElementById('games-container').addEventListener('keydown', handleEspnRowKey);
+                document.getElementById('completed-games-container').addEventListener('keydown', handleEspnRowKey);
 
                 // Add a shadow to the filter bar only once it pins to the top.
                 const sentinel = document.getElementById('controls-sentinel');
