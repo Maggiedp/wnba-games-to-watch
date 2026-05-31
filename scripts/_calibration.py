@@ -1,6 +1,6 @@
 """Shared calibration metrics for win-probability validation scripts.
 
-Used by validate_bpi.py and validate_elo.py. Kept in scripts/ (not src/)
+Used by validate_elo.py. Kept in scripts/ (not src/)
 because these are offline analysis helpers, not production code.
 """
 
