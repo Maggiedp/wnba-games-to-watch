@@ -152,6 +152,45 @@ _SITE_DESCRIPTION = (
     "playoff stakes. Filter by where you can watch."
 )
 
+# Shared <head> design tokens: fonts + CSS custom properties + base resets.
+# Plain string (not f-string) — braces are literal, no escaping needed.
+# Used by the homepage; intended for reuse by the game detail page.
+_SHARED_HEAD = """\
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,500&family=Albert+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+
+        <style>
+            :root {
+                --navy: #0d1b2a;
+                --navy-3: #2b3a52;
+                --orange: #ff6b00;
+                --orange-deep: #a03c00;
+                --bg: #f7f5f0;
+                --surface: #ffffff;
+                --text: #0d1b2a;
+                --text-muted: #5a6573;
+                --text-subtle: #8a929d;
+                --line: #e7e2d8;
+                --line-soft: #f0ebe1;
+
+                --display: 'Fraunces', Georgia, 'Times New Roman', serif;
+                --body: 'Albert Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+            body {
+                font-family: var(--body);
+                background: var(--bg);
+                color: var(--text);
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                font-size: 16px;
+                line-height: 1.45;
+            }\
+"""
+
 _HOMEPAGE_HTML = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -171,39 +210,7 @@ _HOMEPAGE_HTML = f"""
 
         <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23ff6b00'/><path d='M2 16 h28 M16 2 v28' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 7 C 11 12 21 12 27 7' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 25 C 11 20 21 20 27 25' stroke='%230d1b2a' stroke-width='2' fill='none'/></svg>">
 
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,500&family=Albert+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-
-        <style>
-            :root {{
-                --navy: #0d1b2a;
-                --navy-3: #2b3a52;
-                --orange: #ff6b00;
-                --orange-deep: #a03c00;
-                --bg: #f7f5f0;
-                --surface: #ffffff;
-                --text: #0d1b2a;
-                --text-muted: #5a6573;
-                --text-subtle: #8a929d;
-                --line: #e7e2d8;
-                --line-soft: #f0ebe1;
-
-                --display: 'Fraunces', Georgia, 'Times New Roman', serif;
-                --body: 'Albert Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            }}
-            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            html {{ -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }}
-            body {{
-                font-family: var(--body);
-                background: var(--bg);
-                color: var(--text);
-                min-height: 100vh;
-                display: flex;
-                flex-direction: column;
-                font-size: 16px;
-                line-height: 1.45;
-            }}
+{_SHARED_HEAD}
 
             /* ---------- Header ---------- */
             .header {{
