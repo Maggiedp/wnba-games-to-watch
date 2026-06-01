@@ -94,6 +94,24 @@ class DailyRanking(Base):
     )
 
 
+class EloHistory(Base):
+    """Per-team Elo rating entering each game, reconstructed from the
+    deterministic replay each daily run and rewritten per season. Read-only
+    source for the /transparency Elo-over-time chart. No unique constraint on
+    (team_id, date): the rewrite is whole-season delete-and-insert, and a team
+    could in principle appear twice on one date."""
+
+    __tablename__ = "elo_history"
+
+    id = Column(Integer, primary_key=True)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
+    date = Column(String(10), nullable=False)  # YYYY-MM-DD game date
+    rating = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=func.now())
+
+    __table_args__ = (Index("idx_elo_history_date", "date"),)
+
+
 class PlayoffProbability(Base):
     __tablename__ = "playoff_probabilities"
 
