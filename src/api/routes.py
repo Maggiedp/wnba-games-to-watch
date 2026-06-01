@@ -2698,6 +2698,14 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{title}</title>
+        <meta name="description" content="{summary}">
+        <meta property="og:title" content="{title}">
+        <meta property="og:description" content="{summary}">
+        <meta property="og:type" content="article">
+        <meta property="og:url" content="{_SITE_URL}/game/{espn_id}">
+        <meta name="twitter:card" content="summary">
+        <meta name="twitter:title" content="{title}">
+        <meta name="twitter:description" content="{summary}">
 {_SHARED_HEAD}
 {_DETAIL_STYLE}
         </style>
