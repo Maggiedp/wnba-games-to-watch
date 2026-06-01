@@ -3,6 +3,15 @@
 Deterministic templates keyed off score bands — no LLM, no I/O. Thresholds
 are named constants so they can be recalibrated against the live score
 distribution in one place (see scripts/inspect_score_distribution.py).
+
+Calibrated 2026-05-31 against the live API (271 upcoming + 62 completed games):
+- Importance HIGH=65 / MID=35 splits upcoming games ~35% high / ~45% mid / ~20%
+  low (upcoming p25=40, med=58, p75=72) — a healthy, non-degenerate spread; kept.
+- Quality BPI cutoffs sit sensibly on the documented ±8 BPI normalization range
+  (quality_score spans the full 0–100, med≈53); kept.
+- Win-prob coin-flip margin tightened 0.04→0.03: at 0.04 (46–54%) ~22% of games
+  read as "dead even," which overstates evenness; 0.03 (47–53%) earns the label.
+Re-run the inspect script at season end (more data) to re-validate.
 """
 
 # Quality bands (quality_score is 0-100). Lopsided matchups are detected
@@ -17,8 +26,8 @@ IMPORTANCE_HIGH = 65.0
 IMPORTANCE_MID = 35.0
 
 # win_prob_a is a 0–1 fraction (Elo probability). |win_prob_a - 0.5|
-# below this margin = "coin flip".
-WIN_PROB_COIN_FLIP_MARGIN = 0.04
+# below this margin = "coin flip" (47–53%; see calibration note above).
+WIN_PROB_COIN_FLIP_MARGIN = 0.03
 
 
 def quality_blurb(
