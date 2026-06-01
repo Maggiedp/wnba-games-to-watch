@@ -7,7 +7,14 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.db.schema import DailyRanking, Game, PlayoffProbability, SeasonConfig, Team
+from src.db.schema import (
+    DailyRanking,
+    EloHistory,
+    Game,
+    PlayoffProbability,
+    SeasonConfig,
+    Team,
+)
 
 # Reused predicate: include regular-season (2) + postseason (3) + legacy
 # NULL season_type rows; exclude only known preseason (1). Used by the
@@ -716,6 +723,35 @@ def upsert_daily_ranking(
         session.add(ranking)
     session.commit()
     return ranking
+
+
+def replace_elo_history(
+    session: Session,
+    season_prefix: str,
+    rows: list[tuple[int, str, float]],
+) -> None:
+    """Delete-and-rewrite all elo_history rows for one season.
+
+    `rows` is (team_id, date, rating). The trajectory is a deterministic replay,
+    so rewriting the whole season each run is idempotent and avoids stale rows.
+    The delete is scoped by date prefix so other seasons are untouched.
+    """
+    session.query(EloHistory).filter(EloHistory.date.like(f"{season_prefix}-%")).delete(
+        synchronize_session=False
+    )
+    for team_id, d, rating in rows:
+        session.add(EloHistory(team_id=team_id, date=d, rating=rating))
+    session.commit()
+
+
+def get_elo_history(session: Session, season_prefix: str) -> list[EloHistory]:
+    """All elo_history rows for a season, date ascending."""
+    return (
+        session.query(EloHistory)
+        .filter(EloHistory.date.like(f"{season_prefix}-%"))
+        .order_by(EloHistory.date)
+        .all()
+    )
 
 
 @dataclass
