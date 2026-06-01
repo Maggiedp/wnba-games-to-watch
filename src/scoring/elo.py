@@ -217,3 +217,28 @@ def replay_games(
         )
 
     return EloReplay(final_ratings=ratings, history=history)
+
+
+def build_elo_timeline(
+    history: list[dict], season_prefix: str
+) -> dict[str, list[dict]]:
+    """Per-team rating-entering-each-game timeline for one season.
+
+    `history` is `EloReplay.history` (already chronological). For each game whose
+    `date` starts with `season_prefix` (e.g. "2026"), record the pre-game rating
+    each team carried into that game (`pre_a` for team_a, `pre_b` for team_b).
+    The result is `{team_name: [{"date", "rating"}, ...]}` in date order — each
+    team's rating trajectory across the season. We plot the rating a team *enters*
+    each game with; the post-game update shows up as the next game's entry point.
+    """
+    timeline: dict[str, list[dict]] = {}
+    for g in history:
+        if not g["date"].startswith(season_prefix):
+            continue
+        timeline.setdefault(g["team_a"], []).append(
+            {"date": g["date"], "rating": g["pre_a"]}
+        )
+        timeline.setdefault(g["team_b"], []).append(
+            {"date": g["date"], "rating": g["pre_b"]}
+        )
+    return timeline
