@@ -1067,6 +1067,71 @@ def test_render_game_detail_not_simulated_when_no_ranking(session, team_ids):
     assert "Not simulated" in html  # graceful, no crash
 
 
+def test_site_url_is_canonical_domain():
+    from src.api.routes import _SITE_URL
+
+    assert _SITE_URL == "https://wumbers.com"
+
+
+def test_render_game_detail_has_og_meta_tags(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_daily_ranking(
+        session,
+        date=date,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=78.0,
+        importance_score=64.0,
+        overall_score=72.0,
+        broadcaster="ION",
+        win_prob_a=0.58,
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+
+    assert '<meta name="description"' in html
+    assert 'property="og:title" content="Team A vs Team B' in html
+    assert 'property="og:description"' in html
+    assert 'property="og:type" content="article"' in html
+    assert 'property="og:url" content="https://wumbers.com/game/401736210"' in html
+    assert 'name="twitter:card" content="summary"' in html
+    assert 'name="twitter:title"' in html
+    assert 'name="twitter:description"' in html
+    assert "60% matchup quality" in html
+
+
+def test_render_game_detail_og_description_uses_not_simulated_fallback(
+    session, team_ids
+):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="",
+        espn_id="401736211",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736211")
+
+    assert 'property="og:description" content="Not simulated' in html
+
+
 def test_buildwpsvg_escapes_team_abbreviations(session, team_ids):
     """The client-side WP chart drops team abbreviations into innerHTML, so they
     must be escaped — team names/abbreviations are external ESPN/DB data. There is

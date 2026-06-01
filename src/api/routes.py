@@ -148,7 +148,7 @@ def format_games_response(
     return results
 
 
-_SITE_URL = "https://wnba-games-to-watch-1068218371131.us-central1.run.app"
+_SITE_URL = "https://wumbers.com"
 _SITE_TITLE = "WNBA Games to Watch"
 _SITE_DESCRIPTION = (
     "A nightly ranking of the best WNBA matchups, weighing team quality and "
@@ -2669,6 +2669,7 @@ def _detail_h2h_section(game, team_a, team_b, h2h) -> str:
 def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
     name_a = escape_html(team_a.name)
     name_b = escape_html(team_b.name)
+    # name_a/name_b are already escape_html'd; title is safe in attribute position.
     title = f"{name_a} vs {name_b} — {_SITE_TITLE}"
 
     meta_line = _detail_meta_line(game)
@@ -2698,6 +2699,14 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{title}</title>
+        <meta name="description" content="{summary}">
+        <meta property="og:title" content="{title}">
+        <meta property="og:description" content="{summary}">
+        <meta property="og:type" content="article">
+        <meta property="og:url" content="{_SITE_URL}/game/{espn_id}">
+        <meta name="twitter:card" content="summary">
+        <meta name="twitter:title" content="{title}">
+        <meta name="twitter:description" content="{summary}">
 {_SHARED_HEAD}
 {_DETAIL_STYLE}
         </style>
