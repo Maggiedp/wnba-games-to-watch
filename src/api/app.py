@@ -24,6 +24,7 @@ from src.db.queries import (
     get_all_known_espn_ids,
     get_completed_rankings,
     get_daily_rankings,
+    get_elo_history,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_teams_by_ids,
@@ -327,6 +328,30 @@ async def get_playoff_odds(date: str = Query(default=None)):
             if tid in teams
         ]
         return sorted(rows, key=lambda x: (-x.win_championship_prob, x.team))
+    finally:
+        session.close()
+
+
+@app.get("/api/elo-history")
+async def get_elo_history_endpoint(season: str = Query(default=None)):
+    """Per-team Elo trajectory for a season (DB-only; never calls ESPN)."""
+    if season is None:
+        season = today_et()[:4]
+    session = get_session()
+    try:
+        rows = get_elo_history(session, season)
+        if not rows:
+            return {"season": season, "teams": {}}
+        teams = get_teams_by_ids(session, {r.team_id for r in rows})
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            t = teams.get(r.team_id)
+            if t is None:
+                continue
+            out.setdefault(t.name, []).append(
+                {"date": r.date, "rating": round(r.rating, 1)}
+            )
+        return {"season": season, "teams": out}
     finally:
         session.close()
 
