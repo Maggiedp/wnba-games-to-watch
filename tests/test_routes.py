@@ -1067,7 +1067,7 @@ def test_render_game_detail_not_simulated_when_no_ranking(session, team_ids):
     assert "Not simulated" in html  # graceful, no crash
 
 
-def test_homepage_og_url_uses_canonical_domain():
+def test_site_url_is_canonical_domain():
     from src.api.routes import _SITE_URL
 
     assert _SITE_URL == "https://wumbers.com"
@@ -1101,7 +1101,7 @@ def test_render_game_detail_has_og_meta_tags(session, team_ids):
     html = render_game_detail(session, "401736210")
 
     assert '<meta name="description"' in html
-    assert 'property="og:title"' in html
+    assert 'property="og:title" content="Team A vs Team B' in html
     assert 'property="og:description"' in html
     assert 'property="og:type" content="article"' in html
     assert 'property="og:url" content="https://wumbers.com/game/401736210"' in html

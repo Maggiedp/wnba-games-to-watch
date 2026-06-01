@@ -2669,6 +2669,7 @@ def _detail_h2h_section(game, team_a, team_b, h2h) -> str:
 def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
     name_a = escape_html(team_a.name)
     name_b = escape_html(team_b.name)
+    # name_a/name_b are already escape_html'd; title is safe in attribute position.
     title = f"{name_a} vs {name_b} — {_SITE_TITLE}"
 
     meta_line = _detail_meta_line(game)
