@@ -2740,6 +2740,22 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
                 if (!espnId) return;
 
                 let pollTimer = null;
+                let backoffIdx = 0;
+                let hasChart = false;  // true once a real chart has been drawn
+
+                const LIVE_INTERVAL = 30000;
+                // Backoff for transient failures, mirroring the homepage
+                // live-status poll (30s → 60s → 120s → 300s, then holds).
+                const BACKOFF_MS = [30000, 60000, 120000, 300000];
+
+                function stopPoll() {{
+                    if (pollTimer) {{ clearTimeout(pollTimer); pollTimer = null; }}
+                }}
+
+                function scheduleNext(delayMs) {{
+                    stopPoll();
+                    pollTimer = setTimeout(load, delayMs);
+                }}
 
                 function showPlaceholder() {{
                     chartEl.innerHTML = '';
@@ -2751,15 +2767,15 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
                     chartEl.innerHTML = `<p class="chart-placeholder" style="display:block">${{escapeHtml(msg)}}</p>`;
                 }}
 
-                function stopPoll() {{
-                    if (pollTimer) {{ clearInterval(pollTimer); pollTimer = null; }}
-                }}
-
-                // On any fetch/parse failure, stop polling too — a transient ESPN
-                // blip during a live game must not leave the 30s interval running.
-                function fail() {{
-                    stopPoll();
-                    showMessage('Chart unavailable.');
+                // Transient ESPN/API blip (network error, 5xx, or bad JSON):
+                // /api/live-wp returns 502 on ESPN failure by design, so a single
+                // hiccup must NOT kill the chart. Keep any chart already drawn and
+                // retry with backoff instead of replacing it with an error.
+                function transientFail() {{
+                    if (!hasChart) showPlaceholder();
+                    const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)];
+                    backoffIdx++;
+                    scheduleNext(delay);
                 }}
 
                 // Header line: away score / home score, then period+clock (live) or "Final".
@@ -2787,6 +2803,7 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
                     }}
                     if (placeholderEl) placeholderEl.style.display = 'none';
                     chartEl.innerHTML = headerHtml(data) + buildWpSvg(plays, HOME_ABBR, AWAY_ABBR);
+                    hasChart = true;
                 }}
 
                 async function load() {{
@@ -2794,25 +2811,33 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
                     try {{
                         resp = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
                     }} catch (e) {{
-                        fail();
+                        transientFail();  // network error — retry with backoff
+                        return;
+                    }}
+                    if (resp.status === 404) {{
+                        // Terminal: unknown/removed id. Stop; show the message only
+                        // if we never managed to draw a chart.
+                        stopPoll();
+                        if (!hasChart) showMessage('Chart unavailable.');
                         return;
                     }}
                     if (!resp.ok) {{
-                        fail();
+                        transientFail();  // 5xx etc. — retry with backoff
                         return;
                     }}
                     let data;
                     try {{
                         data = await resp.json();
                     }} catch (e) {{
-                        fail();
+                        transientFail();  // bad JSON — retry with backoff
                         return;
                     }}
+                    backoffIdx = 0;  // success resets the backoff sequence
                     render(data);
                     if (isLiveStatus(data.status)) {{
-                        if (!pollTimer) pollTimer = setInterval(load, 30000);
+                        scheduleNext(LIVE_INTERVAL);
                     }} else {{
-                        stopPoll();
+                        stopPoll();  // final / scheduled — nothing more to poll
                     }}
                 }}
 

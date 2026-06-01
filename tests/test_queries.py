@@ -3271,3 +3271,53 @@ def test_get_head_to_head_returns_only_same_season_completed_meetings(
 def test_get_head_to_head_empty_when_no_meetings(session, team_ids):
     a_id, b_id = team_ids
     assert get_head_to_head(session, a_id, b_id, season_year=2026) == []
+
+
+def test_get_head_to_head_excludes_preseason_keeps_legacy_null(session, team_ids):
+    """H2H must exclude preseason meetings (season_type=1) like the rest of the
+    site's completed-game queries, while legacy NULL season_type rows still pass."""
+    a_id, b_id = team_ids
+
+    # Regular-season completed meeting (season_type=2) — included.
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-20",
+        time="7:00 PM ET",
+        broadcaster="ION",
+        winner_id=a_id,
+        season_type=2,
+    )
+    # Preseason completed meeting (season_type=1) — must be EXCLUDED.
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-04-15",
+        time="7:00 PM ET",
+        broadcaster="",
+        winner_id=b_id,
+        season_type=1,
+    )
+    # Legacy completed meeting with NULL season_type (reversed home/away) — included.
+    upsert_game(
+        session,
+        team_a_id=b_id,
+        team_b_id=a_id,
+        date="2026-05-25",
+        time="7:00 PM ET",
+        broadcaster="",
+        winner_id=b_id,
+        season_type=None,
+    )
+    session.commit()
+
+    results = get_head_to_head(session, a_id, b_id, season_year=2026)
+
+    dates = [g.date for g in results]
+    assert "2026-04-15" not in dates  # preseason excluded
+    assert dates == [
+        "2026-05-20",
+        "2026-05-25",
+    ]  # reg-season + legacy NULL, chronological
