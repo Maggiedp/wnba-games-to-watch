@@ -2897,3 +2897,108 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
 
 def render_homepage() -> str:
     return _HOMEPAGE_HTML
+
+
+def render_transparency() -> str:
+    """Server-rendered /transparency page. Data is fetched client-side from
+    /api/elo-history and /api/calibration so this stays a thin shell."""
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Behind the numbers · Wumbers</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0;
+         background: #f7f7f5; color: #0d1b2a; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .sub { color: #5a6472; margin: 0 0 28px; }
+  section { background: #fff; border: 1px solid #e3e3df; border-radius: 12px;
+            padding: 20px; margin-bottom: 24px; }
+  h2 { font-size: 1.15rem; margin: 0 0 4px; }
+  .desc { color: #5a6472; font-size: .9rem; margin: 0 0 16px; }
+  .chart { width: 100%; overflow-x: auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px;
+            font-size: .8rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 11px; height: 3px; border-radius: 2px; display: inline-block; }
+  .empty { color: #8a8f98; font-style: italic; }
+  a.back { color: #1b6ca8; text-decoration: none; font-size: .9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">&larr; Back to games</a>
+  <h1>Behind the numbers</h1>
+  <p class="sub">How the model moves, and how accurate it has been.</p>
+
+  <section>
+    <h2>Elo ratings over time</h2>
+    <p class="desc">Each team's Elo rating entering every game this season.
+       Replayed from results — higher is stronger.</p>
+    <div id="elo-chart" class="chart"><p class="empty">Loading…</p></div>
+    <div id="elo-legend" class="legend"></div>
+  </section>
+  <!-- STAGE2-CALIBRATION-SECTION -->
+</div>
+
+<script>
+const PALETTE = ['#e6194B','#3cb44b','#4363d8','#f58231','#911eb4','#42d4f4',
+  '#f032e6','#bfef45','#fabed4','#469990','#9A6324','#800000','#000075','#a9a9a9'];
+
+function buildLineChartSvg(series, opts) {
+  // series: [{label, color, points:[{x:Number, y:Number}]}]
+  const W = opts.width, H = opts.height, P = 40;
+  const xs = series.flatMap(s => s.points.map(p => p.x));
+  const ys = series.flatMap(s => s.points.map(p => p.y));
+  if (!xs.length) return '<p class="empty">No data yet.</p>';
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const ymin = Math.min(...ys), ymax = Math.max(...ys);
+  const sx = x => P + (xmax === xmin ? 0 : (x - xmin) / (xmax - xmin)) * (W - 2*P);
+  const sy = y => H - P - (ymax === ymin ? 0 : (y - ymin) / (ymax - ymin)) * (H - 2*P);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img">`;
+  // y gridlines + labels (4 steps)
+  for (let i = 0; i <= 4; i++) {
+    const val = ymin + (ymax - ymin) * i / 4;
+    const y = sy(val);
+    svg += `<line x1="${P}" y1="${y}" x2="${W-P}" y2="${y}" stroke="#eee"/>`;
+    svg += `<text x="${P-6}" y="${y+3}" text-anchor="end" font-size="10" fill="#999">${Math.round(val)}</text>`;
+  }
+  for (const s of series) {
+    if (!s.points.length) continue;
+    const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ');
+    svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6"/>`;
+  }
+  svg += '</svg>';
+  return svg;
+}
+
+async function loadElo() {
+  const mount = document.getElementById('elo-chart');
+  const legend = document.getElementById('elo-legend');
+  try {
+    const res = await fetch('/api/elo-history');
+    const data = await res.json();
+    const names = Object.keys(data.teams || {});
+    if (!names.length) { mount.innerHTML = '<p class="empty">No Elo history yet.</p>'; return; }
+    // x = day index from the earliest date across all teams.
+    const allDates = [...new Set(names.flatMap(n => data.teams[n].map(p => p.date)))].sort();
+    const dayIndex = Object.fromEntries(allDates.map((d, i) => [d, i]));
+    const series = names.map((n, i) => ({
+      label: n, color: PALETTE[i % PALETTE.length],
+      points: data.teams[n].map(p => ({ x: dayIndex[p.date], y: p.rating })),
+    }));
+    mount.innerHTML = buildLineChartSvg(series, { width: 860, height: 360 });
+    legend.innerHTML = series.map(s =>
+      `<span><i style="background:${s.color}"></i>${s.label}</span>`).join('');
+  } catch (e) {
+    mount.innerHTML = '<p class="empty">Could not load Elo history.</p>';
+  }
+}
+
+loadElo();
+// loadCalibration() is added in Stage 2.
+</script>
+</body>
+</html>"""
