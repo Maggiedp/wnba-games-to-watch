@@ -2940,7 +2940,14 @@ def render_transparency() -> str:
     <div id="elo-chart" class="chart"><p class="empty">Loading…</p></div>
     <div id="elo-legend" class="legend"></div>
   </section>
-  <!-- STAGE2-CALIBRATION-SECTION -->
+  <section>
+    <h2>Win-probability calibration</h2>
+    <p class="desc">For completed games, our predicted win probability vs. how
+       often that team actually won. Points on the dashed line = perfectly
+       calibrated.</p>
+    <div id="calibration-chart" class="chart"><p class="empty">Loading…</p></div>
+    <div id="calibration-summary" class="desc"></div>
+  </section>
 </div>
 
 <script>
@@ -2998,7 +3005,46 @@ async function loadElo() {
 }
 
 loadElo();
-// loadCalibration() is added in Stage 2.
+function buildReliabilitySvg(buckets) {
+  const W = 360, H = 360, P = 44;
+  const sx = v => P + v * (W - 2*P);
+  const sy = v => H - P - v * (H - 2*P);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img">`;
+  // axes box
+  svg += `<rect x="${P}" y="${P}" width="${W-2*P}" height="${H-2*P}" fill="none" stroke="#eee"/>`;
+  // perfect-calibration diagonal
+  svg += `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(1)}" y2="${sy(1)}" stroke="#bbb" stroke-dasharray="4 4"/>`;
+  // axis labels
+  svg += `<text x="${W/2}" y="${H-8}" text-anchor="middle" font-size="11" fill="#5a6472">Predicted win probability</text>`;
+  svg += `<text x="14" y="${H/2}" text-anchor="middle" font-size="11" fill="#5a6472" transform="rotate(-90 14 ${H/2})">Actual win rate</text>`;
+  const maxN = Math.max(1, ...buckets.map(b => b.count));
+  for (const b of buckets) {
+    const cx = sx(b.predicted_mean), cy = sy(b.actual_rate);
+    const rad = 3 + 7 * (b.count / maxN);  // point size ~ sample count
+    svg += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="#1b6ca8" fill-opacity="0.7"/>`;
+  }
+  svg += '</svg>';
+  return svg;
+}
+
+async function loadCalibration() {
+  const mount = document.getElementById('calibration-chart');
+  const summary = document.getElementById('calibration-summary');
+  try {
+    const res = await fetch('/api/calibration');
+    const data = await res.json();
+    if (!data.n) {
+      mount.innerHTML = '<p class="empty">Not enough completed games yet.</p>';
+      return;
+    }
+    mount.innerHTML = buildReliabilitySvg(data.buckets || []);
+    summary.textContent = `Brier score ${data.brier} across ${data.n} completed games (lower is better; 0 = perfect, 0.25 = a coin flip).`;
+  } catch (e) {
+    mount.innerHTML = '<p class="empty">Could not load calibration.</p>';
+  }
+}
+
+loadCalibration();
 </script>
 </body>
 </html>"""

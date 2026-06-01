@@ -67,8 +67,9 @@ def test_transparency_page_renders():
     r = TestClient(app).get("/transparency")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
-    # Page scaffold + the Elo chart mount point the JS targets.
     assert 'id="elo-chart"' in r.text
+    assert 'id="calibration-chart"' in r.text
+    assert "loadCalibration" in r.text
     assert "Behind the numbers" in r.text
 
 
