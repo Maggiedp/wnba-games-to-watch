@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.db.queries import (
     get_completed_postseason_games,
+    get_head_to_head,
     get_playoff_probabilities,
     upsert_daily_ranking,
     upsert_game,
@@ -3193,3 +3194,130 @@ def test_backfill_time_utc_dst_aware(session, team_ids):
     session.expire_all()
     refreshed = session.query(Game).filter_by(espn_id="legacy_est").one()
     assert refreshed.time_utc == "2026-11-16T00:00:00+00:00"
+
+
+def test_get_head_to_head_returns_only_same_season_completed_meetings(
+    session, team_ids
+):
+    """H2H returns completed games between exactly these two teams, this season,
+    in chronological order — regardless of which team was home/away."""
+    a_id, b_id = team_ids
+    c = upsert_team(
+        session, name="Team C", abbreviation="TMC", logo_url="", bpi_rating=0.0
+    )
+
+    # Completed A-vs-B meeting (A home). `broadcaster` is required;
+    # completion is driven by winner_id, per upsert_game's docstring.
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-10",
+        time="7:00 PM ET",
+        broadcaster="ION",
+        winner_id=a_id,
+        final_score_a=90,
+        final_score_b=85,
+        excitement_index=5.2,
+    )
+    # Completed B-vs-A meeting (reversed home/away)
+    upsert_game(
+        session,
+        team_a_id=b_id,
+        team_b_id=a_id,
+        date="2026-05-20",
+        time="8:00 PM ET",
+        broadcaster="ESPN",
+        winner_id=b_id,
+        final_score_a=77,
+        final_score_b=70,
+    )
+    # Unplayed A-vs-B meeting (must be excluded — no winner)
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-02",
+        time="7:00 PM ET",
+        broadcaster="",
+    )
+    # A-vs-C completed meeting (different opponent, must be excluded)
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=c.id,
+        date="2026-05-15",
+        time="7:00 PM ET",
+        broadcaster="",
+        winner_id=a_id,
+    )
+    # Prior-season meeting (must be excluded by season_year)
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2025-05-10",
+        time="7:00 PM ET",
+        broadcaster="",
+        winner_id=b_id,
+    )
+    session.commit()
+
+    results = get_head_to_head(session, a_id, b_id, season_year=2026)
+
+    assert [g.date for g in results] == ["2026-05-10", "2026-05-20"]
+
+
+def test_get_head_to_head_empty_when_no_meetings(session, team_ids):
+    a_id, b_id = team_ids
+    assert get_head_to_head(session, a_id, b_id, season_year=2026) == []
+
+
+def test_get_head_to_head_excludes_preseason_keeps_legacy_null(session, team_ids):
+    """H2H must exclude preseason meetings (season_type=1) like the rest of the
+    site's completed-game queries, while legacy NULL season_type rows still pass."""
+    a_id, b_id = team_ids
+
+    # Regular-season completed meeting (season_type=2) — included.
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-20",
+        time="7:00 PM ET",
+        broadcaster="ION",
+        winner_id=a_id,
+        season_type=2,
+    )
+    # Preseason completed meeting (season_type=1) — must be EXCLUDED.
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-04-15",
+        time="7:00 PM ET",
+        broadcaster="",
+        winner_id=b_id,
+        season_type=1,
+    )
+    # Legacy completed meeting with NULL season_type (reversed home/away) — included.
+    upsert_game(
+        session,
+        team_a_id=b_id,
+        team_b_id=a_id,
+        date="2026-05-25",
+        time="7:00 PM ET",
+        broadcaster="",
+        winner_id=b_id,
+        season_type=None,
+    )
+    session.commit()
+
+    results = get_head_to_head(session, a_id, b_id, season_year=2026)
+
+    dates = [g.date for g in results]
+    assert "2026-04-15" not in dates  # preseason excluded
+    assert dates == [
+        "2026-05-20",
+        "2026-05-25",
+    ]  # reg-season + legacy NULL, chronological

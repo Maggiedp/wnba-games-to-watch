@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.api.routes import format_games_response
+from src.api.routes import format_games_response, render_game_detail
 from src.data.espn_api import today_et
 from src.db.queries import (
     upsert_daily_ranking,
@@ -971,3 +971,129 @@ def test_live_status_endpoint_502s_when_today_fetch_fails(tmp_path, monkeypatch)
     client = TestClient(app)
     resp = client.get("/api/games/live-status")
     assert resp.status_code == 502
+
+
+def test_render_game_detail_unknown_espn_id_returns_none(session, team_ids):
+    assert render_game_detail(session, "does-not-exist") is None
+
+
+def test_render_game_detail_known_game_renders_core_fields(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_daily_ranking(
+        session,
+        date=date,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=78.0,
+        importance_score=64.0,
+        overall_score=72.0,
+        broadcaster="ION",
+        win_prob_a=0.58,
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+
+    assert html is not None
+    assert "Team A" in html and "Team B" in html
+    assert "72" in html  # overall score
+    assert "back to rankings" in html
+
+
+def test_render_game_detail_shows_blurbs_and_h2h_empty_state(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    # Re-upsert by name to set BPI ratings that drive the quality blurb
+    # (team_ids fixture created them with bpi 0.0). upsert_team updates in place.
+    upsert_team(session, name="Team A", abbreviation="TMA", logo_url="", bpi_rating=6.2)
+    upsert_team(session, name="Team B", abbreviation="TMB", logo_url="", bpi_rating=4.8)
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_daily_ranking(
+        session,
+        date=date,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=78.0,
+        importance_score=64.0,
+        overall_score=72.0,
+        broadcaster="ION",
+        win_prob_a=0.58,
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+
+    assert "How this is scored" in html
+    assert "BPI" in html  # quality uses BPI
+    assert "Elo" in html  # win prob uses Elo
+    assert "First meeting of the season" in html  # no completed H2H yet
+
+
+def test_render_game_detail_not_simulated_when_no_ranking(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="",
+        espn_id="401736211",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736211")
+
+    assert html is not None
+    assert "Not simulated" in html  # graceful, no crash
+
+
+def test_buildwpsvg_escapes_team_abbreviations(session, team_ids):
+    """The client-side WP chart drops team abbreviations into innerHTML, so they
+    must be escaped — team names/abbreviations are external ESPN/DB data. There is
+    no JS runtime in this suite, so guard at the source level: the SVG <text>
+    labels must use the escaped variables and the escape helper must be present,
+    not the raw params interpolated directly."""
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736212",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736212")
+
+    # buildWpSvg escapes both labels via the shared escapeHtml helper.
+    assert "function escapeHtml" in html
+    assert "const homeLbl = escapeHtml(homeAbbr)" in html
+    assert "const awayLbl = escapeHtml(awayAbbr)" in html
+    # SVG labels use the escaped vars; the raw, unescaped params are gone.
+    assert "${awayLbl}</text>" in html
+    assert "${homeLbl}</text>" in html
+    assert "${awayAbbr}</text>" not in html
+    assert "${homeAbbr}</text>" not in html

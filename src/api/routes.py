@@ -1,17 +1,27 @@
 """API routes and response models for WNBA Games to Watch."""
 
+import html as _html
+import json
 import logging
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from src.api import blurbs
 from src.data.espn_api import today_et
 from src.db.queries import (
     get_game_fields,
+    get_head_to_head,
     get_playoff_probabilities,
     get_teams_by_ids,
 )
-from src.db.schema import DailyRanking
+from src.db.schema import DailyRanking, Game
+
+
+def escape_html(s: object) -> str:
+    return _html.escape(str(s), quote=True)
+
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +155,124 @@ _SITE_DESCRIPTION = (
     "playoff stakes. Filter by where you can watch."
 )
 
+# Shared <head> design tokens: fonts + CSS custom properties + base resets.
+# Plain string (not f-string) — braces are literal, no escaping needed.
+# Used by the homepage; intended for reuse by the game detail page.
+_SHARED_HEAD = """\
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,500&family=Albert+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+
+        <style>
+            :root {
+                --navy: #0d1b2a;
+                --navy-3: #2b3a52;
+                --orange: #ff6b00;
+                --orange-deep: #a03c00;
+                --bg: #f7f5f0;
+                --surface: #ffffff;
+                --text: #0d1b2a;
+                --text-muted: #5a6573;
+                --text-subtle: #8a929d;
+                --line: #e7e2d8;
+                --line-soft: #f0ebe1;
+
+                --display: 'Fraunces', Georgia, 'Times New Roman', serif;
+                --body: 'Albert Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+            body {
+                font-family: var(--body);
+                background: var(--bg);
+                color: var(--text);
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                font-size: 16px;
+                line-height: 1.45;
+            }\
+"""
+
+# SVG win-probability line-chart builder for the game detail page. Plain string
+# (not f-string) — braces are SINGLE. Defined exactly once here; interpolated via
+# {_WP_CHART_JS} into the detail page's <script> (the homepage no longer renders
+# the chart). Self-contained: only uses local vars + the .wp-chart-svg CSS class.
+_WP_CHART_JS = """
+            function buildWpSvg(plays, homeAbbr, awayAbbr) {
+                if (!plays || plays.length < 2) return '';
+                // The labels are dropped into innerHTML below, and team
+                // abbreviations are external ESPN/DB data — escape them (via the
+                // shared escapeHtml) so a poisoned value can't inject markup.
+                const homeLbl = escapeHtml(homeAbbr);
+                const awayLbl = escapeHtml(awayAbbr);
+                const W = 500, H = 150;
+                const padL = 36, padR = 8, padT = 8, padB = 8;
+                const cW = W - padL - padR;
+                const cH = H - padT - padB;
+                const midY = padT + cH / 2;
+                const N = plays.length;
+
+                const pts = plays.map((p, i) => [
+                    padL + (i / (N - 1)) * cW,
+                    padT + (1 - p.home_pct) * cH
+                ]);
+
+                const periodBounds = [];
+                for (let i = 1; i < plays.length; i++) {
+                    if (plays[i].period !== plays[i - 1].period) {
+                        periodBounds.push(pts[i][0].toFixed(1));
+                    }
+                }
+
+                const firstX = pts[0][0].toFixed(1);
+                const lastX = pts[N - 1][0].toFixed(1);
+                const botY = (H - padB).toFixed(1);
+
+                // Home fill: always below the line (orange)
+                const homePoly = [[firstX, botY],
+                    ...pts.map(p => [p[0].toFixed(1), p[1].toFixed(1)]),
+                    [lastX, botY]].map(p => `${p[0]},${p[1]}`).join(' ');
+
+                const linePath = 'M ' + pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' L ');
+                const [dotX, dotY] = pts[N - 1];
+                const pBounds = periodBounds.map(x =>
+                    `<line x1="${x}" y1="${padT}" x2="${x}" y2="${H - padB}" stroke="#e7e2d8" stroke-width="1" stroke-dasharray="2,2"/>`
+                ).join('');
+
+                return `<svg class="wp-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Win probability chart">
+                    <text x="${padL - 4}" y="${padT + 5}" text-anchor="end" font-size="9" fill="#8a929d">${awayLbl}</text>
+                    <text x="${padL - 4}" y="${midY + 3}" text-anchor="end" font-size="9" fill="#8a929d">50%</text>
+                    <text x="${padL - 4}" y="${H - padB}" text-anchor="end" font-size="9" fill="#8a929d">${homeLbl}</text>
+                    <polygon points="${homePoly}" fill="rgba(255,107,0,0.15)"/>
+                    <line x1="${padL}" y1="${midY.toFixed(1)}" x2="${W - padR}" y2="${midY.toFixed(1)}" stroke="#c8c2b8" stroke-width="1" stroke-dasharray="3,3"/>
+                    ${pBounds}
+                    <path d="${linePath}" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-linejoin="round"/>
+                    <circle cx="${dotX.toFixed(1)}" cy="${dotY.toFixed(1)}" r="3" fill="var(--orange)"/>
+                </svg>`;
+            }
+"""
+
+# Shared client-side JS helpers used by both the homepage and the detail page.
+# Plain string (not f-string) — braces are SINGLE. Interpolated via
+# {_SHARED_JS} into each page's <script> so the XSS-escaping table and the
+# live-status check are single-sourced and can't drift between pages.
+_SHARED_JS = """
+            function escapeHtml(s) {
+                return String(s).replace(/[&<>"']/g, c => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                })[c]);
+            }
+
+            // ESPN reports STATUS_HALFTIME between halves and STATUS_END_PERIOD
+            // between quarters. Both are "live" for rendering and polling.
+            function isLiveStatus(status) {
+                return status === 'STATUS_IN_PROGRESS'
+                    || status === 'STATUS_HALFTIME'
+                    || status === 'STATUS_END_PERIOD';
+            }
+"""
+
 _HOMEPAGE_HTML = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -164,39 +292,7 @@ _HOMEPAGE_HTML = f"""
 
         <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23ff6b00'/><path d='M2 16 h28 M16 2 v28' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 7 C 11 12 21 12 27 7' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 25 C 11 20 21 20 27 25' stroke='%230d1b2a' stroke-width='2' fill='none'/></svg>">
 
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;0,9..144,900;1,9..144,500&family=Albert+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-
-        <style>
-            :root {{
-                --navy: #0d1b2a;
-                --navy-3: #2b3a52;
-                --orange: #ff6b00;
-                --orange-deep: #a03c00;
-                --bg: #f7f5f0;
-                --surface: #ffffff;
-                --text: #0d1b2a;
-                --text-muted: #5a6573;
-                --text-subtle: #8a929d;
-                --line: #e7e2d8;
-                --line-soft: #f0ebe1;
-
-                --display: 'Fraunces', Georgia, 'Times New Roman', serif;
-                --body: 'Albert Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            }}
-            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            html {{ -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }}
-            body {{
-                font-family: var(--body);
-                background: var(--bg);
-                color: var(--text);
-                min-height: 100vh;
-                display: flex;
-                flex-direction: column;
-                font-size: 16px;
-                line-height: 1.45;
-            }}
+{_SHARED_HEAD}
 
             /* ---------- Header ---------- */
             .header {{
@@ -1067,43 +1163,9 @@ _HOMEPAGE_HTML = f"""
                 margin-top: 2px;
             }}
 
-            /* ---------- WP Chart Panel ---------- */
+            /* ---------- WP Chart ---------- */
             [data-espn-id] {{ cursor: pointer; }}
             .games-card[data-espn-id]:hover {{ border-color: var(--navy-3); }}
-            .wp-panel-row:hover {{ background: transparent !important; }}
-            .wp-panel {{
-                padding: 16px 20px;
-                background: var(--surface);
-                border-top: 1px solid var(--line-soft);
-                animation: wpFadeIn 0.15s ease;
-            }}
-            @keyframes wpFadeIn {{
-                from {{ opacity: 0; transform: translateY(-4px); }}
-                to {{ opacity: 1; transform: translateY(0); }}
-            }}
-            .wp-panel-header {{
-                font-size: 0.82rem;
-                color: var(--text-muted);
-                margin-bottom: 10px;
-                font-weight: 500;
-            }}
-            .wp-panel-msg {{
-                font-size: 0.88rem;
-                color: var(--text-subtle);
-                font-style: italic;
-                padding: 4px 0;
-            }}
-            .wp-swatch {{
-                display: inline-block;
-                width: 8px;
-                height: 8px;
-                border-radius: 50%;
-                margin-right: 4px;
-                vertical-align: middle;
-                position: relative;
-                top: -1px;
-            }}
-            .wp-swatch-home {{ background: var(--orange); }}
             .wp-chart-svg {{
                 width: 100%;
                 height: 150px;
@@ -1536,7 +1598,6 @@ _HOMEPAGE_HTML = f"""
             }}
 
             function applyFilters() {{
-                collapsePanel();
                 const fromDate = document.getElementById('from-date').value;
                 const toDate = document.getElementById('to-date').value;
                 const team = document.getElementById('team-filter').value;
@@ -1824,11 +1885,7 @@ _HOMEPAGE_HTML = f"""
                 );
             }}
 
-            function escapeHtml(s) {{
-                return String(s).replace(/[&<>"']/g, c => ({{
-                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-                }})[c]);
-            }}
+{_SHARED_JS}
 
             function renderTeam(name, logo) {{
                 const safeName = escapeHtml(name);
@@ -1970,7 +2027,7 @@ _HOMEPAGE_HTML = f"""
                 const impTitle = game.importance_score == null ? 'Not simulated' : '';
                 const badge = isTopPick ? '<div class="top-pick-badge">Top pick</div>' : '';
                 return `
-                    <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
+                    <tr${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}" role="link" tabindex="0"` : ''}}>
                         <td class="col-date">${{formatLocalDate(game)}}</td>
                         <td class="col-time">${{escapeHtml(formatLocalTime(game.time_utc, game.time))}}</td>
                         <td class="score-cell"><div class="score-stack">${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}<span class="score-num ${{cls}}">${{primaryScore(game, scoreHeader)}}</span></div></td>
@@ -2005,7 +2062,7 @@ _HOMEPAGE_HTML = f"""
                 const broadcastSeg = hasBroadcaster ? ` &middot; ${{escapeHtml(game.broadcaster)}}` : '';
                 const meta = `${{dateStr}} &middot; ${{timeStr}}${{broadcastSeg}}`;
                 return `
-                    <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}"` : ''}}>
+                    <div class="games-card"${{game.espn_id ? ` data-espn-id="${{escapeHtml(game.espn_id)}}" role="link" tabindex="0"` : ''}}>
                         <div class="games-card-score ${{cls}}">${{primaryScore(game, scoreHeader)}}</div>
                         <div class="games-card-stack">
                             ${{game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${{escapeHtml(game.espn_id)}}"></span>` : ''}}
@@ -2028,18 +2085,6 @@ _HOMEPAGE_HTML = f"""
                         </div>
                     </div>
                 `;
-            }}
-
-            // ---------- WP Chart ----------
-            let openEspnId = null;
-            let pollInterval = null;
-
-            // ESPN reports STATUS_HALFTIME between halves and STATUS_END_PERIOD
-            // between quarters. Both are "live" for rendering and polling.
-            function isLiveStatus(status) {{
-                return status === 'STATUS_IN_PROGRESS'
-                    || status === 'STATUS_HALFTIME'
-                    || status === 'STATUS_END_PERIOD';
             }}
 
             // ---------- Live WP hydration (collapsed row) ----------
@@ -2078,6 +2123,12 @@ _HOMEPAGE_HTML = f"""
                     const text = winProbText(game, last.home_pct);
                     const sel = `[data-row-wp-id="${{CSS.escape(game.espn_id)}}"]`;
                     document.querySelectorAll(sel).forEach(el => {{ el.innerHTML = text; }});
+                    // Paint excitement eyebrow for this live game from play-by-play data.
+                    const excitementLabel = computeExcitement(plays);
+                    document.querySelectorAll(`[data-espn-id="${{CSS.escape(game.espn_id)}}"]`).forEach(row => {{
+                        const eyebrow = row.querySelector('.excitement-eyebrow');
+                        if (eyebrow) applyExcitementClass(eyebrow, excitementLabel);
+                    }});
                 }} catch (e) {{
                     console.warn('Live WP hydration failed:', e);
                 }}
@@ -2096,168 +2147,6 @@ _HOMEPAGE_HTML = f"""
                     if (liveGamesInList().length === 0) {{ clearLiveWpPoll(); return; }}
                     hydrateLiveWp();
                 }}, 30000);
-            }}
-
-            function collapsePanel() {{
-                if (pollInterval) {{ clearInterval(pollInterval); pollInterval = null; }}
-                document.querySelectorAll('.wp-panel-row').forEach(el => el.remove());
-                document.querySelectorAll('.wp-panel-card').forEach(el => el.remove());
-                openEspnId = null;
-            }}
-
-            async function expandPanel(espnId, game) {{
-                collapsePanel();
-                openEspnId = espnId;
-                document.querySelectorAll(`[data-espn-id="${{espnId}}"]`).forEach(el => {{
-                    const panelHtml = `<div class="wp-panel">
-                        <div class="wp-panel-header" data-wp-id="${{espnId}}">Loading…</div>
-                        <div class="wp-chart-content" data-wp-id="${{espnId}}"></div>
-                    </div>`;
-                    if (el.tagName === 'TR') {{
-                        const cols = el.querySelectorAll('td').length;
-                        el.insertAdjacentHTML('afterend', `<tr class="wp-panel-row"><td colspan="${{cols}}">${{panelHtml}}</td></tr>`);
-                    }} else {{
-                        el.insertAdjacentHTML('afterend', `<div class="wp-panel-card">${{panelHtml}}</div>`);
-                    }}
-                }});
-                await fetchAndRenderChart(espnId, game);
-            }}
-
-            async function fetchAndRenderChart(espnId, game) {{
-                try {{
-                    const resp = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
-                    if (!resp.ok) {{
-                        const msg = resp.status === 404 ? 'Game not found.' : 'Chart unavailable.';
-                        setWpContent(espnId, msg, `<div class="wp-panel-msg">${{msg}}</div>`);
-                        return;
-                    }}
-                    const data = await resp.json();
-                    renderChartData(espnId, data, game);
-                    if (isLiveStatus(data.status) && openEspnId === espnId) {{
-                        if (pollInterval) clearInterval(pollInterval);
-                        pollInterval = setInterval(async () => {{
-                            if (openEspnId !== espnId) {{ clearInterval(pollInterval); pollInterval = null; return; }}
-                            try {{
-                                const r = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
-                                if (!r.ok) return;
-                                const d = await r.json();
-                                renderChartData(espnId, d, game);
-                                if (!isLiveStatus(d.status)) {{ clearInterval(pollInterval); pollInterval = null; }}
-                            }} catch (e) {{ console.warn('WP poll failed:', e); }}
-                        }}, 30000);
-                    }}
-                }} catch (e) {{
-                    setWpContent(espnId, 'Chart unavailable.', '<div class="wp-panel-msg">Chart unavailable.</div>');
-                }}
-            }}
-
-            function renderChartData(espnId, data, game) {{
-                const plays = data.plays || [];
-                const homeAbbr = escapeHtml(game.team_a_abbr || game.team_a);
-                const awayAbbr = escapeHtml(game.team_b_abbr || game.team_b);
-                let header = '';
-                let chart = '';
-                const homeSwatch = `<span class="wp-swatch wp-swatch-home"></span>`;
-                if (plays.length === 0) {{
-                    const msg = (data.status === 'STATUS_SCHEDULED' || !data.status || data.status === 'STATUS_UNKNOWN')
-                        ? "Game hasn't started yet."
-                        : 'No chart data available.';
-                    header = msg;
-                    chart = `<div class="wp-panel-msg">${{msg}}</div>`;
-                }} else {{
-                    const last = plays[plays.length - 1];
-                    const hp = Math.round(last.home_pct * 100);
-                    const ap = 100 - hp;
-                    const homeLabel = `${{homeSwatch}}${{homeAbbr}} ${{hp}}%`;
-                    const awayLabel = `${{awayAbbr}} ${{ap}}%`;
-                    const wpLabel = `${{homeLabel}} &middot; ${{awayLabel}} win probability`;
-                    const hs = data.home_score != null && data.home_score !== '' ? escapeHtml(String(data.home_score)) : null;
-                    const as_ = data.away_score != null && data.away_score !== '' ? escapeHtml(String(data.away_score)) : null;
-                    const scoreStr = (hs && as_) ? `${{homeAbbr}} ${{hs}}&ndash;${{as_}} ${{awayAbbr}}` : '';
-                    if (data.status === 'STATUS_FINAL') {{
-                        header = scoreStr ? `${{scoreStr}} &mdash; Final &middot; ${{wpLabel}}` : `Final &middot; ${{wpLabel}}`;
-                    }} else if (isLiveStatus(data.status)) {{
-                        let gameLabel;
-                        if (data.status === 'STATUS_HALFTIME') {{
-                            gameLabel = 'Halftime';
-                        }} else if (data.status === 'STATUS_END_PERIOD') {{
-                            gameLabel = last.period <= 4 ? `End Q${{last.period}}` : `End OT`;
-                        }} else {{
-                            const q = last.period <= 4 ? `Q${{last.period}}` : `OT`;
-                            const clk = last.clock ? ` ${{escapeHtml(last.clock)}}` : '';
-                            gameLabel = `${{q}}${{clk}}`;
-                        }}
-                        const gameState = scoreStr ? `${{scoreStr}} &middot; ${{gameLabel}}` : gameLabel;
-                        header = `${{gameState}} &mdash; ${{wpLabel}}`;
-                    }} else {{
-                        header = wpLabel;
-                    }}
-                    chart = buildWpSvg(plays, homeAbbr, awayAbbr);
-                }}
-                setWpContent(espnId, header, chart);
-
-                const excitementLabel = computeExcitement(plays);
-                document.querySelectorAll(`[data-espn-id="${{espnId}}"]`).forEach(row => {{
-                    const eyebrow = row.querySelector('.excitement-eyebrow');
-                    if (eyebrow) applyExcitementClass(eyebrow, excitementLabel);
-                }});
-            }}
-
-            function setWpContent(espnId, header, chart) {{
-                document.querySelectorAll(`.wp-panel-header[data-wp-id="${{espnId}}"]`).forEach(el => {{
-                    el.innerHTML = header;
-                }});
-                document.querySelectorAll(`.wp-chart-content[data-wp-id="${{espnId}}"]`).forEach(el => {{
-                    el.innerHTML = chart || '';
-                }});
-            }}
-
-            function buildWpSvg(plays, homeAbbr, awayAbbr) {{
-                if (!plays || plays.length < 2) return '';
-                const W = 500, H = 150;
-                const padL = 36, padR = 8, padT = 8, padB = 8;
-                const cW = W - padL - padR;
-                const cH = H - padT - padB;
-                const midY = padT + cH / 2;
-                const N = plays.length;
-
-                const pts = plays.map((p, i) => [
-                    padL + (i / (N - 1)) * cW,
-                    padT + (1 - p.home_pct) * cH
-                ]);
-
-                const periodBounds = [];
-                for (let i = 1; i < plays.length; i++) {{
-                    if (plays[i].period !== plays[i - 1].period) {{
-                        periodBounds.push(pts[i][0].toFixed(1));
-                    }}
-                }}
-
-                const firstX = pts[0][0].toFixed(1);
-                const lastX = pts[N - 1][0].toFixed(1);
-                const botY = (H - padB).toFixed(1);
-
-                // Home fill: always below the line (orange)
-                const homePoly = [[firstX, botY],
-                    ...pts.map(p => [p[0].toFixed(1), p[1].toFixed(1)]),
-                    [lastX, botY]].map(p => `${{p[0]}},${{p[1]}}`).join(' ');
-
-                const linePath = 'M ' + pts.map(p => `${{p[0].toFixed(1)}},${{p[1].toFixed(1)}}`).join(' L ');
-                const [dotX, dotY] = pts[N - 1];
-                const pBounds = periodBounds.map(x =>
-                    `<line x1="${{x}}" y1="${{padT}}" x2="${{x}}" y2="${{H - padB}}" stroke="#e7e2d8" stroke-width="1" stroke-dasharray="2,2"/>`
-                ).join('');
-
-                return `<svg class="wp-chart-svg" viewBox="0 0 ${{W}} ${{H}}" role="img" aria-label="Win probability chart">
-                    <text x="${{padL - 4}}" y="${{padT + 5}}" text-anchor="end" font-size="9" fill="#8a929d">${{awayAbbr}}</text>
-                    <text x="${{padL - 4}}" y="${{midY + 3}}" text-anchor="end" font-size="9" fill="#8a929d">50%</text>
-                    <text x="${{padL - 4}}" y="${{H - padB}}" text-anchor="end" font-size="9" fill="#8a929d">${{homeAbbr}}</text>
-                    <polygon points="${{homePoly}}" fill="rgba(255,107,0,0.15)"/>
-                    <line x1="${{padL}}" y1="${{midY.toFixed(1)}}" x2="${{W - padR}}" y2="${{midY.toFixed(1)}}" stroke="#c8c2b8" stroke-width="1" stroke-dasharray="3,3"/>
-                    ${{pBounds}}
-                    <path d="${{linePath}}" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-linejoin="round"/>
-                    <circle cx="${{dotX.toFixed(1)}}" cy="${{dotY.toFixed(1)}}" r="3" fill="var(--orange)"/>
-                </svg>`;
             }}
 
             // Elapsed game seconds for a play; regulation = 2400s (4×10 min), each OT = 300s.
@@ -2367,18 +2256,18 @@ _HOMEPAGE_HTML = f"""
                 }});
                 document.addEventListener('keydown', handleModalKeydown);
 
-                const handleEspnRowClick = (e) => {{
+                // Click anywhere on a row/card (or Enter when focused) → detail page.
+                const navToGame = (e) => {{
+                    if (e.type === 'keydown' && e.key !== 'Enter') return;
                     const target = e.target.closest('[data-espn-id]');
                     if (!target || !target.dataset.espnId) return;
-                    const espnId = target.dataset.espnId;
-                    if (openEspnId === espnId) {{ collapsePanel(); return; }}
-                    const game = allGames.find(g => g.espn_id === espnId)
-                        || allCompleted.find(g => g.espn_id === espnId);
-                    if (!game) return;
-                    expandPanel(espnId, game);
+                    window.location.href = '/game/' + encodeURIComponent(target.dataset.espnId);
                 }};
-                document.getElementById('games-container').addEventListener('click', handleEspnRowClick);
-                document.getElementById('completed-games-container').addEventListener('click', handleEspnRowClick);
+                ['games-container', 'completed-games-container'].forEach(id => {{
+                    const el = document.getElementById(id);
+                    el.addEventListener('click', navToGame);
+                    el.addEventListener('keydown', navToGame);
+                }});
 
                 // Add a shadow to the filter bar only once it pins to the top.
                 const sentinel = document.getElementById('controls-sentinel');
@@ -2393,6 +2282,608 @@ _HOMEPAGE_HTML = f"""
     </body>
     </html>
     """
+
+
+def render_game_detail(session: Session, espn_id: str) -> str | None:
+    """Render the detail page for one game, or None if the espn_id is unknown."""
+    game = session.query(Game).filter(Game.espn_id == espn_id).first()
+    if game is None:
+        return None
+
+    teams = get_teams_by_ids(session, {game.team_a_id, game.team_b_id})
+    team_a = teams.get(game.team_a_id)
+    team_b = teams.get(game.team_b_id)
+    if team_a is None or team_b is None:
+        return None
+
+    ranking = (
+        session.query(DailyRanking)
+        .filter(
+            DailyRanking.date == game.date,
+            DailyRanking.team_a_id == game.team_a_id,
+            DailyRanking.team_b_id == game.team_b_id,
+        )
+        .first()
+    )
+
+    # Derive the season from the game's own date (ISO year prefix), not a
+    # hardcoded literal, so H2H doesn't silently go empty in a future season.
+    season_year = int(game.date[:4])
+    h2h = get_head_to_head(
+        session, game.team_a_id, game.team_b_id, season_year=season_year
+    )
+
+    return _render_game_detail_html(game, team_a, team_b, ranking, h2h)
+
+
+_DETAIL_STYLE = """
+            /* ---------- Header ---------- */
+            .header {
+                background: var(--navy);
+                color: white;
+                padding: 22px 32px 24px;
+                border-bottom: 4px solid var(--orange);
+            }
+            .header-inner { max-width: 760px; margin: 0 auto; }
+            .back-link {
+                font-family: var(--body);
+                font-size: 0.82rem;
+                font-weight: 500;
+                letter-spacing: 0.04em;
+                color: #b9c4d4;
+                text-decoration: none;
+            }
+            .back-link:hover { color: white; }
+
+            /* ---------- Page shell ---------- */
+            main {
+                max-width: 760px;
+                margin: 0 auto;
+                padding: 36px 24px 80px;
+                width: 100%;
+                flex: 1;
+            }
+            .eyebrow {
+                font-family: var(--body);
+                font-size: 0.74rem;
+                font-weight: 600;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                color: var(--text-subtle);
+            }
+            h1.matchup {
+                font-family: var(--display);
+                font-variation-settings: 'opsz' 144;
+                font-weight: 900;
+                font-size: clamp(2rem, 6vw, 3.1rem);
+                line-height: 1.04;
+                letter-spacing: -0.02em;
+                margin: 10px 0 0;
+            }
+            h1.matchup .slash { color: var(--orange); font-weight: 500; }
+
+            /* ---------- Overall score + summary ---------- */
+            .overall-block {
+                display: flex;
+                align-items: baseline;
+                gap: 16px;
+                margin: 28px 0 6px;
+            }
+            .overall-num {
+                font-family: var(--display);
+                font-variation-settings: 'opsz' 144;
+                font-weight: 900;
+                font-size: 4rem;
+                line-height: 0.9;
+                color: var(--orange);
+                font-feature-settings: 'tnum' on;
+            }
+            .overall-num.empty { color: var(--text-subtle); }
+            .overall-label {
+                font-family: var(--body);
+                font-size: 0.74rem;
+                font-weight: 600;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                color: var(--text-muted);
+            }
+            .summary {
+                font-size: 1.05rem;
+                color: var(--text-muted);
+                max-width: 60ch;
+                margin-bottom: 8px;
+            }
+
+            /* ---------- Sections ---------- */
+            section { margin-top: 40px; }
+            .section-title {
+                font-family: var(--display);
+                font-variation-settings: 'opsz' 72;
+                font-weight: 700;
+                font-size: 1.4rem;
+                letter-spacing: -0.01em;
+                margin-bottom: 16px;
+            }
+
+            /* ---------- Win-prob tug-of-war ---------- */
+            .wp-bar {
+                display: flex;
+                height: 44px;
+                border-radius: 10px;
+                overflow: hidden;
+                border: 1px solid var(--line);
+            }
+            .wp-seg {
+                display: flex;
+                align-items: center;
+                color: white;
+                font-family: var(--body);
+                font-weight: 600;
+                font-size: 0.9rem;
+                white-space: nowrap;
+                overflow: hidden;
+            }
+            .wp-seg.a { background: var(--orange); padding-left: 14px; }
+            .wp-seg.b { background: var(--navy); justify-content: flex-end; padding-right: 14px; }
+            .wp-seg.neutral { background: var(--navy-3); }
+            .wp-note {
+                margin-top: 12px;
+                color: var(--text-muted);
+                font-size: 0.98rem;
+            }
+            .wp-note.muted { color: var(--text-subtle); font-style: italic; }
+
+            /* ---------- Breakdown mini-bars ---------- */
+            .breakdown-block { margin-bottom: 24px; }
+            .mini-bar-label {
+                font-family: var(--body);
+                font-size: 0.74rem;
+                font-weight: 600;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                color: var(--text-muted);
+            }
+            .mini-bar-track {
+                display: block;
+                height: 9px;
+                background: var(--line-soft);
+                border-radius: 999px;
+                overflow: hidden;
+                margin: 8px 0 10px;
+            }
+            .mini-bar-fill {
+                display: block;
+                height: 100%;
+                border-radius: 999px;
+            }
+            .mini-bar-fill.quality { background: linear-gradient(90deg, #ff6b00, #ff9540); }
+            .mini-bar-fill.importance { background: linear-gradient(90deg, #2b3a52, #5a6573); }
+            .breakdown-text { color: var(--text-muted); font-size: 0.98rem; }
+
+            /* ---------- How this is scored ---------- */
+            details.scored {
+                margin-top: 28px;
+                border-top: 1px solid var(--line);
+                padding-top: 16px;
+            }
+            details.scored summary {
+                cursor: pointer;
+                font-family: var(--body);
+                font-size: 0.74rem;
+                font-weight: 600;
+                letter-spacing: 0.12em;
+                text-transform: uppercase;
+                color: var(--text-muted);
+                list-style: none;
+            }
+            details.scored summary::-webkit-details-marker { display: none; }
+            details.scored summary::before { content: '+ '; color: var(--orange); }
+            details.scored[open] summary::before { content: '– '; }
+            details.scored p {
+                margin-top: 14px;
+                color: var(--text-muted);
+                font-size: 0.95rem;
+                max-width: 64ch;
+            }
+            details.scored p + p { margin-top: 10px; }
+
+            /* ---------- Head-to-head ---------- */
+            .h2h-row {
+                display: grid;
+                grid-template-columns: 110px 1fr auto;
+                gap: 12px;
+                align-items: baseline;
+                padding: 12px 0;
+                border-bottom: 1px solid var(--line-soft);
+            }
+            .h2h-row:last-child { border-bottom: none; }
+            .h2h-date { color: var(--text-subtle); font-size: 0.85rem; }
+            .h2h-score {
+                font-family: var(--display);
+                font-weight: 600;
+                font-feature-settings: 'tnum' on;
+            }
+            .h2h-excite {
+                font-size: 0.8rem;
+                color: var(--text-subtle);
+                font-style: italic;
+            }
+            .h2h-empty { color: var(--text-muted); font-style: italic; }
+
+            /* ---------- WP chart slot ---------- */
+            #wp-chart { margin-top: 4px; min-height: 1px; }
+            .chart-placeholder { color: var(--text-subtle); font-style: italic; font-size: 0.95rem; }
+            .wp-chart-header {
+                font-size: 0.95rem;
+                color: var(--text);
+                margin-bottom: 6px;
+            }
+            .wp-chart-header .wp-chart-status { color: var(--text-muted); }
+            .wp-chart-svg {
+                width: 100%;
+                height: 150px;
+                display: block;
+                overflow: visible;
+            }
+"""
+
+
+def _detail_meta_line(game) -> str:
+    """Uppercase eyebrow: DATE · TIME · BROADCASTER (broadcaster optional).
+
+    The date+time are wrapped in a `.meta-when` span carrying `time_utc`; the
+    detail page's script localizes them to the viewer's timezone on load (the
+    rest of the site derives local display from `time_utc` too). The server text
+    is the ET fallback shown if JS is off or `time_utc` is missing.
+    """
+    when_parts = []
+    if game.date:
+        try:
+            dt = datetime.strptime(game.date, "%Y-%m-%d")
+            friendly_date = f"{dt.strftime('%a %b')} {dt.day}"  # e.g. "Tue Jun 2"
+        except ValueError:
+            friendly_date = game.date
+        when_parts.append(escape_html(friendly_date))
+    if game.time:
+        when_parts.append(escape_html(game.time))
+    when = " · ".join(when_parts)
+    time_utc = escape_html(game.time_utc or "")
+    line = f'<span class="meta-when" data-time-utc="{time_utc}">{when}</span>'
+
+    broadcaster = (game.broadcaster or "").strip()
+    if broadcaster and broadcaster.upper() != "TBD":
+        line += f" · {escape_html(broadcaster)}"
+    return line
+
+
+def _detail_win_prob_section(ranking, team_a, team_b) -> str:
+    """Tug-of-war bar + Elo blurb. Neutral 50/50 when not simulated."""
+    abbr_a = escape_html(team_a.abbreviation or team_a.name)
+    abbr_b = escape_html(team_b.abbreviation or team_b.name)
+    win_prob_a = None if ranking is None else ranking.win_prob_a
+
+    if win_prob_a is None:
+        return f"""
+                <div class="wp-bar" role="img" aria-label="Win probability not simulated">
+                    <span class="wp-seg neutral a" style="width: 50%">{abbr_a}</span>
+                    <span class="wp-seg neutral b" style="width: 50%">{abbr_b}</span>
+                </div>
+                <p class="wp-note muted">Not simulated.</p>"""
+
+    pct_a = win_prob_a * 100
+    pct_b = 100 - pct_a
+    note = escape_html(blurbs.win_prob_blurb(win_prob_a, team_a.name, team_b.name))
+    return f"""
+                <div class="wp-bar" role="img" aria-label="{abbr_a} {pct_a:.0f} percent, {abbr_b} {pct_b:.0f} percent">
+                    <span class="wp-seg a" style="width: {pct_a:.1f}%">{abbr_a} {pct_a:.0f}%</span>
+                    <span class="wp-seg b" style="width: {pct_b:.1f}%">{pct_b:.0f}% {abbr_b}</span>
+                </div>
+                <p class="wp-note">{note}</p>"""
+
+
+def _detail_breakdown_section(ranking, team_a, team_b) -> str:
+    """Quality (orange) + Importance (navy) mini-bars with blurbs."""
+    if ranking is None:
+        return """
+                <div class="breakdown-block">
+                    <span class="mini-bar-label">Quality — not simulated · 60% of score</span>
+                    <span class="mini-bar-track" aria-hidden="true"></span>
+                    <p class="breakdown-text">Not simulated, so there's no quality score for this game.</p>
+                </div>
+                <div class="breakdown-block">
+                    <span class="mini-bar-label">Importance — not simulated · 40% of score</span>
+                    <span class="mini-bar-track" aria-hidden="true"></span>
+                    <p class="breakdown-text">Not simulated, so there's no importance score for this game.</p>
+                </div>"""
+
+    quality = ranking.quality_score
+    importance = ranking.importance_score
+    q_pct = 0.0 if quality is None else max(0.0, min(100.0, quality))
+    q_label = "not simulated" if quality is None else f"{quality:.0f}"
+    q_text = escape_html(
+        blurbs.quality_blurb(
+            quality or 0.0,
+            team_a.bpi_rating or 0.0,
+            team_b.bpi_rating or 0.0,
+            team_a.name,
+            team_b.name,
+        )
+    )
+
+    if importance is None:
+        i_label = "Importance — not simulated · 40% of score"
+        i_track = '<span class="mini-bar-track" aria-hidden="true"></span>'
+    else:
+        i_pct = max(0.0, min(100.0, importance))
+        i_label = f"Importance — {importance:.0f} · 40% of score"
+        i_track = (
+            '<span class="mini-bar-track" aria-hidden="true">'
+            f'<span class="mini-bar-fill importance" style="width: {i_pct:.1f}%"></span></span>'
+        )
+    i_text = escape_html(blurbs.importance_blurb(importance))
+
+    return f"""
+                <div class="breakdown-block">
+                    <span class="mini-bar-label">Quality — {q_label} · 60% of score</span>
+                    <span class="mini-bar-track" aria-hidden="true"><span class="mini-bar-fill quality" style="width: {q_pct:.1f}%"></span></span>
+                    <p class="breakdown-text">{q_text}</p>
+                </div>
+                <div class="breakdown-block">
+                    <span class="mini-bar-label">{i_label}</span>
+                    {i_track}
+                    <p class="breakdown-text">{i_text}</p>
+                </div>"""
+
+
+def _detail_h2h_section(game, team_a, team_b, h2h) -> str:
+    """Ledger of completed season meetings; 'First meeting' when empty."""
+    if not h2h:
+        return '<p class="h2h-empty">First meeting of the season.</p>'
+
+    name_by_id = {game.team_a_id: team_a, game.team_b_id: team_b}
+    rows = []
+    for g in h2h:
+        ta = name_by_id.get(g.team_a_id)
+        tb = name_by_id.get(g.team_b_id)
+        abbr_a = (ta.abbreviation or ta.name) if ta else "?"
+        abbr_b = (tb.abbreviation or tb.name) if tb else "?"
+        sa = "" if g.final_score_a is None else g.final_score_a
+        sb = "" if g.final_score_b is None else g.final_score_b
+        score = f"{escape_html(abbr_a)} {escape_html(sa)} – {escape_html(sb)} {escape_html(abbr_b)}"
+        excite = ""
+        if g.excitement_index is not None:
+            excite = (
+                f'<span class="h2h-excite">excitement {g.excitement_index:.0f}</span>'
+            )
+        rows.append(
+            f"""
+                <div class="h2h-row">
+                    <span class="h2h-date">{escape_html(g.date or "")}</span>
+                    <span class="h2h-score">{score}</span>
+                    {excite}
+                </div>"""
+        )
+    return "".join(rows)
+
+
+def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
+    name_a = escape_html(team_a.name)
+    name_b = escape_html(team_b.name)
+    title = f"{name_a} vs {name_b} — {_SITE_TITLE}"
+
+    meta_line = _detail_meta_line(game)
+
+    if ranking is None or ranking.overall_score is None:
+        overall_html = '<span class="overall-num empty">—</span>'
+        summary = "Not simulated — no overall score for this game yet."
+    else:
+        overall_html = f'<span class="overall-num">{ranking.overall_score:.0f}</span>'
+        summary = (
+            f"{team_a.name} vs {team_b.name} scores "
+            f"{ranking.overall_score:.0f} out of 100 overall — "
+            "60% matchup quality, 40% playoff importance."
+        )
+    summary = escape_html(summary)
+
+    wp_section = _detail_win_prob_section(ranking, team_a, team_b)
+    breakdown_section = _detail_breakdown_section(ranking, team_a, team_b)
+    h2h_section = _detail_h2h_section(game, team_a, team_b, h2h)
+    espn_id = escape_html(game.espn_id or "")
+    home_abbr_js = json.dumps(team_a.abbreviation or "")
+    away_abbr_js = json.dumps(team_b.abbreviation or "")
+
+    return f"""<!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{title}</title>
+{_SHARED_HEAD}
+{_DETAIL_STYLE}
+        </style>
+    </head>
+    <body>
+        <header class="header">
+            <div class="header-inner">
+                <a class="back-link" href="/">&larr; back to rankings</a>
+            </div>
+        </header>
+        <main>
+            <p class="eyebrow">{meta_line}</p>
+            <h1 class="matchup">{name_a} <span class="slash">&#9585;</span> {name_b}</h1>
+
+            <div class="overall-block">
+                {overall_html}
+                <span class="overall-label">Overall</span>
+            </div>
+            <p class="summary">{summary}</p>
+
+            <section>
+                <h2 class="section-title">Win probability</h2>
+                {wp_section}
+            </section>
+
+            <section>
+                <h2 class="section-title">Why it's ranked here</h2>
+                {breakdown_section}
+                <details class="scored">
+                    <summary>How this is scored</summary>
+                    <p>Overall is a weighted blend: 60% matchup quality plus 40% playoff importance.</p>
+                    <p>Quality is the harmonic mean of the two teams' ESPN BPI ratings, normalized on the live &plusmn;8 BPI spread — it rewards games where both teams are strong, not just one.</p>
+                    <p>Importance is the swing in playoff odds this game produces in a Monte Carlo simulation, measured against a season-start ceiling.</p>
+                    <p>Win probability is separate from quality: it's an Elo rating (with a +50 home-court bump), not BPI.</p>
+                </details>
+            </section>
+
+            <section>
+                <h2 class="section-title">Head-to-head &middot; {game.date[:4]}</h2>
+                {h2h_section}
+            </section>
+
+            <section>
+                <h2 class="section-title">Win-probability chart</h2>
+                <div id="wp-chart" data-espn-id="{espn_id}"></div>
+                <p class="chart-placeholder">Appears once the game tips off.</p>
+            </section>
+        </main>
+        <script>
+{_WP_CHART_JS}
+{_SHARED_JS}
+
+            // Localize the eyebrow date/time to the viewer's timezone (the ET
+            // text rendered server-side is the fallback), matching the rest of
+            // the site, which derives local display from time_utc.
+            (function () {{
+                const el = document.querySelector('.meta-when');
+                if (!el || !el.dataset.timeUtc) return;
+                const d = new Date(el.dataset.timeUtc);
+                if (isNaN(d)) return;
+                const ds = d.toLocaleDateString(undefined, {{ weekday: 'short', month: 'short', day: 'numeric' }});
+                const ts = d.toLocaleTimeString(undefined, {{ hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }});
+                el.textContent = ds + ' · ' + ts;
+            }})();
+
+            (function () {{
+                const HOME_ABBR = {home_abbr_js};
+                const AWAY_ABBR = {away_abbr_js};
+                const chartEl = document.getElementById('wp-chart');
+                const placeholderEl = document.querySelector('.chart-placeholder');
+                if (!chartEl) return;
+                const espnId = chartEl.dataset.espnId;
+                if (!espnId) return;
+
+                let pollTimer = null;
+                let backoffIdx = 0;
+                let hasChart = false;  // true once a real chart has been drawn
+
+                const LIVE_INTERVAL = 30000;
+                // Backoff for transient failures, mirroring the homepage
+                // live-status poll (30s → 60s → 120s → 300s, then holds).
+                const BACKOFF_MS = [30000, 60000, 120000, 300000];
+
+                function stopPoll() {{
+                    if (pollTimer) {{ clearTimeout(pollTimer); pollTimer = null; }}
+                }}
+
+                function scheduleNext(delayMs) {{
+                    stopPoll();
+                    pollTimer = setTimeout(load, delayMs);
+                }}
+
+                function showPlaceholder() {{
+                    chartEl.innerHTML = '';
+                    if (placeholderEl) placeholderEl.style.display = '';
+                }}
+
+                function showMessage(msg) {{
+                    if (placeholderEl) placeholderEl.style.display = 'none';
+                    chartEl.innerHTML = `<p class="chart-placeholder" style="display:block">${{escapeHtml(msg)}}</p>`;
+                }}
+
+                // Transient ESPN/API blip (network error, 5xx, or bad JSON):
+                // /api/live-wp returns 502 on ESPN failure by design, so a single
+                // hiccup must NOT kill the chart. Keep any chart already drawn and
+                // retry with backoff instead of replacing it with an error.
+                function transientFail() {{
+                    if (!hasChart) showPlaceholder();
+                    const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)];
+                    backoffIdx++;
+                    scheduleNext(delay);
+                }}
+
+                // Header line: away score / home score, then period+clock (live) or "Final".
+                function headerHtml(data) {{
+                    const away = `${{escapeHtml(AWAY_ABBR)}} ${{escapeHtml(String(data.away_score))}}`;
+                    const home = `${{escapeHtml(HOME_ABBR)}} ${{escapeHtml(String(data.home_score))}}`;
+                    const last = data.plays[data.plays.length - 1];
+                    const period = last && last.period ? last.period : 0;
+                    let status;
+                    if (data.status === 'STATUS_HALFTIME') {{
+                        status = 'Halftime';
+                    }} else if (data.status === 'STATUS_END_PERIOD') {{
+                        status = period <= 4 ? `End Q${{escapeHtml(String(period))}}` : 'End OT';
+                    }} else if (isLiveStatus(data.status)) {{
+                        const q = period <= 4 ? `Q${{escapeHtml(String(period))}}` : 'OT';
+                        const clock = last && last.clock ? ` ${{escapeHtml(String(last.clock))}}` : '';
+                        status = `${{q}}${{clock}}`;
+                    }} else {{
+                        status = 'Final';
+                    }}
+                    const statusHtml = status ? ` <span class="wp-chart-status">&middot; ${{status}}</span>` : '';
+                    return `<div class="wp-chart-header">${{away}} &nbsp; ${{home}}${{statusHtml}}</div>`;
+                }}
+
+                function render(data) {{
+                    const plays = (data && data.plays) || [];
+                    if (!data || !data.status || data.status === 'STATUS_SCHEDULED' || plays.length === 0) {{
+                        showPlaceholder();
+                        return;
+                    }}
+                    if (placeholderEl) placeholderEl.style.display = 'none';
+                    chartEl.innerHTML = headerHtml(data) + buildWpSvg(plays, HOME_ABBR, AWAY_ABBR);
+                    hasChart = true;
+                }}
+
+                async function load() {{
+                    let resp;
+                    try {{
+                        resp = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
+                    }} catch (e) {{
+                        transientFail();  // network error — retry with backoff
+                        return;
+                    }}
+                    if (resp.status === 404) {{
+                        // Terminal: unknown/removed id. Stop; show the message only
+                        // if we never managed to draw a chart.
+                        stopPoll();
+                        if (!hasChart) showMessage('Chart unavailable.');
+                        return;
+                    }}
+                    if (!resp.ok) {{
+                        transientFail();  // 5xx etc. — retry with backoff
+                        return;
+                    }}
+                    let data;
+                    try {{
+                        data = await resp.json();
+                    }} catch (e) {{
+                        transientFail();  // bad JSON — retry with backoff
+                        return;
+                    }}
+                    backoffIdx = 0;  // success resets the backoff sequence
+                    render(data);
+                    if (isLiveStatus(data.status)) {{
+                        scheduleNext(LIVE_INTERVAL);
+                    }} else {{
+                        stopPoll();  // final / scheduled — nothing more to poll
+                    }}
+                }}
+
+                load();
+            }})();
+        </script>
+    </body>
+    </html>"""
 
 
 def render_homepage() -> str:

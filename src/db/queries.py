@@ -418,6 +418,34 @@ def get_completed_postseason_games(
     )
 
 
+def get_head_to_head(
+    session: Session, team_a_id: int, team_b_id: int, season_year: int = 2026
+) -> list[Game]:
+    """Completed regular-season + postseason games this season between exactly
+    these two teams, chronological. Order-agnostic: matches both home/away
+    arrangements. Excludes preseason (season_type=1) via `_NOT_PRESEASON`, like
+    the other user-facing completed-game queries; legacy NULL season_type rows
+    are still included.
+
+    Used by the game detail page. Current-season only — the DB holds only
+    the current season's games (Elo history is fetched fresh each run and
+    not persisted), so multi-season H2H isn't available here.
+    """
+    pair_a = (Game.team_a_id == team_a_id) & (Game.team_b_id == team_b_id)
+    pair_b = (Game.team_a_id == team_b_id) & (Game.team_b_id == team_a_id)
+    return (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(
+            _NOT_PRESEASON
+        )  # exclude preseason (season_type=1), like the archive queries
+        .filter(or_(pair_a, pair_b))
+        .order_by(Game.date, Game.time)
+        .all()
+    )
+
+
 def get_completed_games_missing_excitement(
     session: Session, season_year: int = 2026, limit: int | None = None
 ) -> list[Game]:

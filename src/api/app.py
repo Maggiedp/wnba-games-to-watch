@@ -49,6 +49,20 @@ async def homepage():
     return render_homepage()
 
 
+@app.get("/game/{espn_id}", response_class=HTMLResponse)
+def game_detail(espn_id: str):
+    from src.api.routes import render_game_detail
+
+    session = get_session()
+    try:
+        html = render_game_detail(session, espn_id)
+    finally:
+        session.close()
+    if html is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return html
+
+
 @app.get("/api/games/today", response_model=list[GameResponse])
 def get_today_games():
     today = today_et()
