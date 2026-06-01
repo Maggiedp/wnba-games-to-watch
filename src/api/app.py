@@ -22,6 +22,7 @@ from src.data.espn_api import (
 )
 from src.db.queries import (
     get_all_known_espn_ids,
+    get_calibration_pairs,
     get_completed_rankings,
     get_daily_rankings,
     get_elo_history,
@@ -31,6 +32,7 @@ from src.db.queries import (
     get_upcoming_rankings,
 )
 from src.db.schema import get_session, init_db
+from src.scoring.calibration import compute_calibration
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +361,34 @@ async def get_elo_history_endpoint(season: str = Query(default=None)):
                 {"date": r.date, "rating": round(r.rating, 1)}
             )
         return {"season": season, "teams": out}
+    finally:
+        session.close()
+
+
+@app.get("/api/calibration")
+async def get_calibration_endpoint(season: int = Query(default=None)):
+    """Win-probability reliability for completed games (DB-only)."""
+    if season is None:
+        season = int(today_et()[:4])
+    session = get_session()
+    try:
+        pairs = get_calibration_pairs(session, season)
+        result = compute_calibration(pairs)
+        return {
+            "season": season,
+            "n": result.n,
+            "brier": round(result.brier, 4),
+            "buckets": [
+                {
+                    "lo": b.lo,
+                    "hi": b.hi,
+                    "predicted_mean": round(b.predicted_mean, 4),
+                    "actual_rate": round(b.actual_rate, 4),
+                    "count": b.count,
+                }
+                for b in result.buckets
+            ],
+        }
     finally:
         session.close()
 

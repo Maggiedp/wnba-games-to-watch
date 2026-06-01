@@ -658,6 +658,37 @@ def get_completed_rankings(
     return result
 
 
+def get_calibration_pairs(
+    session: Session, season_year: int = 2026
+) -> list[tuple[float, bool]]:
+    """(predicted win_prob_a, team_a_won) for completed regular/post-season
+    games that have a frozen DailyRanking.win_prob_a. Rows without a stored
+    win_prob_a are dropped. Used by /api/calibration and the audit script."""
+    games = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(_NOT_PRESEASON)
+        .all()
+    )
+    if not games:
+        return []
+    dates = {g.date for g in games}
+    keys = {(g.date, g.team_a_id, g.team_b_id) for g in games}
+    rankings = {
+        (r.date, r.team_a_id, r.team_b_id): r
+        for r in session.query(DailyRanking).filter(DailyRanking.date.in_(dates)).all()
+        if (r.date, r.team_a_id, r.team_b_id) in keys
+    }
+    pairs: list[tuple[float, bool]] = []
+    for g in games:
+        r = rankings.get((g.date, g.team_a_id, g.team_b_id))
+        if r is None or r.win_prob_a is None:
+            continue
+        pairs.append((r.win_prob_a, g.winner_id == g.team_a_id))
+    return pairs
+
+
 def get_rankings_by_broadcaster(
     session: Session,
     start_date: str,
