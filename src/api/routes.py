@@ -200,6 +200,14 @@ _SHARED_HEAD = """\
 _WP_CHART_JS = """
             function buildWpSvg(plays, homeAbbr, awayAbbr) {
                 if (!plays || plays.length < 2) return '';
+                // The labels are dropped into innerHTML below, and team
+                // abbreviations are external ESPN/DB data — escape them so a
+                // poisoned value can't inject markup into viewers' pages.
+                const escLbl = s => String(s).replace(/[&<>"']/g, c => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                }[c]));
+                const homeLbl = escLbl(homeAbbr);
+                const awayLbl = escLbl(awayAbbr);
                 const W = 500, H = 150;
                 const padL = 36, padR = 8, padT = 8, padB = 8;
                 const cW = W - padL - padR;
@@ -235,9 +243,9 @@ _WP_CHART_JS = """
                 ).join('');
 
                 return `<svg class="wp-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Win probability chart">
-                    <text x="${padL - 4}" y="${padT + 5}" text-anchor="end" font-size="9" fill="#8a929d">${awayAbbr}</text>
+                    <text x="${padL - 4}" y="${padT + 5}" text-anchor="end" font-size="9" fill="#8a929d">${awayLbl}</text>
                     <text x="${padL - 4}" y="${midY + 3}" text-anchor="end" font-size="9" fill="#8a929d">50%</text>
-                    <text x="${padL - 4}" y="${H - padB}" text-anchor="end" font-size="9" fill="#8a929d">${homeAbbr}</text>
+                    <text x="${padL - 4}" y="${H - padB}" text-anchor="end" font-size="9" fill="#8a929d">${homeLbl}</text>
                     <polygon points="${homePoly}" fill="rgba(255,107,0,0.15)"/>
                     <line x1="${padL}" y1="${midY.toFixed(1)}" x2="${W - padR}" y2="${midY.toFixed(1)}" stroke="#c8c2b8" stroke-width="1" stroke-dasharray="3,3"/>
                     ${pBounds}

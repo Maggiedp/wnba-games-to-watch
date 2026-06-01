@@ -1065,3 +1065,35 @@ def test_render_game_detail_not_simulated_when_no_ranking(session, team_ids):
 
     assert html is not None
     assert "Not simulated" in html  # graceful, no crash
+
+
+def test_buildwpsvg_escapes_team_abbreviations(session, team_ids):
+    """The client-side WP chart drops team abbreviations into innerHTML, so they
+    must be escaped — team names/abbreviations are external ESPN/DB data. There is
+    no JS runtime in this suite, so guard at the source level: the SVG <text>
+    labels must use the escaped variables and the escape helper must be present,
+    not the raw params interpolated directly."""
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736212",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736212")
+
+    # Escape helper wired into buildWpSvg and applied to both labels.
+    assert "const escLbl" in html
+    assert "const homeLbl = escLbl(homeAbbr)" in html
+    assert "const awayLbl = escLbl(awayAbbr)" in html
+    # SVG labels use the escaped vars; the raw, unescaped params are gone.
+    assert "${awayLbl}</text>" in html
+    assert "${homeLbl}</text>" in html
+    assert "${awayAbbr}</text>" not in html
+    assert "${homeAbbr}</text>" not in html
