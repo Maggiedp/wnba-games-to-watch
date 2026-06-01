@@ -148,7 +148,7 @@ def format_games_response(
     return results
 
 
-_SITE_URL = "https://wnba-games-to-watch-1068218371131.us-central1.run.app"
+_SITE_URL = "https://wumbers.com"
 _SITE_TITLE = "WNBA Games to Watch"
 _SITE_DESCRIPTION = (
     "A nightly ranking of the best WNBA matchups, weighing team quality and "

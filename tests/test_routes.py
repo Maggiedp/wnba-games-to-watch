@@ -1067,6 +1067,12 @@ def test_render_game_detail_not_simulated_when_no_ranking(session, team_ids):
     assert "Not simulated" in html  # graceful, no crash
 
 
+def test_homepage_og_url_uses_canonical_domain():
+    from src.api.routes import _SITE_URL
+
+    assert _SITE_URL == "https://wumbers.com"
+
+
 def test_buildwpsvg_escapes_team_abbreviations(session, team_ids):
     """The client-side WP chart drops team abbreviations into innerHTML, so they
     must be escaped — team names/abbreviations are external ESPN/DB data. There is
