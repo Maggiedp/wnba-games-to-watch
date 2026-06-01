@@ -201,13 +201,10 @@ _WP_CHART_JS = """
             function buildWpSvg(plays, homeAbbr, awayAbbr) {
                 if (!plays || plays.length < 2) return '';
                 // The labels are dropped into innerHTML below, and team
-                // abbreviations are external ESPN/DB data — escape them so a
-                // poisoned value can't inject markup into viewers' pages.
-                const escLbl = s => String(s).replace(/[&<>"']/g, c => ({
-                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-                }[c]));
-                const homeLbl = escLbl(homeAbbr);
-                const awayLbl = escLbl(awayAbbr);
+                // abbreviations are external ESPN/DB data — escape them (via the
+                // shared escapeHtml) so a poisoned value can't inject markup.
+                const homeLbl = escapeHtml(homeAbbr);
+                const awayLbl = escapeHtml(awayAbbr);
                 const W = 500, H = 150;
                 const padL = 36, padR = 8, padT = 8, padB = 8;
                 const cW = W - padL - padR;
@@ -252,6 +249,26 @@ _WP_CHART_JS = """
                     <path d="${linePath}" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-linejoin="round"/>
                     <circle cx="${dotX.toFixed(1)}" cy="${dotY.toFixed(1)}" r="3" fill="var(--orange)"/>
                 </svg>`;
+            }
+"""
+
+# Shared client-side JS helpers used by both the homepage and the detail page.
+# Plain string (not f-string) — braces are SINGLE. Interpolated via
+# {_SHARED_JS} into each page's <script> so the XSS-escaping table and the
+# live-status check are single-sourced and can't drift between pages.
+_SHARED_JS = """
+            function escapeHtml(s) {
+                return String(s).replace(/[&<>"']/g, c => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                })[c]);
+            }
+
+            // ESPN reports STATUS_HALFTIME between halves and STATUS_END_PERIOD
+            // between quarters. Both are "live" for rendering and polling.
+            function isLiveStatus(status) {
+                return status === 'STATUS_IN_PROGRESS'
+                    || status === 'STATUS_HALFTIME'
+                    || status === 'STATUS_END_PERIOD';
             }
 """
 
@@ -1867,11 +1884,7 @@ _HOMEPAGE_HTML = f"""
                 );
             }}
 
-            function escapeHtml(s) {{
-                return String(s).replace(/[&<>"']/g, c => ({{
-                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-                }})[c]);
-            }}
+{_SHARED_JS}
 
             function renderTeam(name, logo) {{
                 const safeName = escapeHtml(name);
@@ -2073,14 +2086,6 @@ _HOMEPAGE_HTML = f"""
                 `;
             }}
 
-            // ESPN reports STATUS_HALFTIME between halves and STATUS_END_PERIOD
-            // between quarters. Both are "live" for rendering and polling.
-            function isLiveStatus(status) {{
-                return status === 'STATUS_IN_PROGRESS'
-                    || status === 'STATUS_HALFTIME'
-                    || status === 'STATUS_END_PERIOD';
-            }}
-
             // ---------- Live WP hydration (collapsed row) ----------
             // The main table/card shows the *pregame* Elo WP by default
             // (game.win_prob_a). For games currently in progress, fetch the
@@ -2250,21 +2255,18 @@ _HOMEPAGE_HTML = f"""
                 }});
                 document.addEventListener('keydown', handleModalKeydown);
 
-                const handleEspnRowClick = (e) => {{
+                // Click anywhere on a row/card (or Enter when focused) → detail page.
+                const navToGame = (e) => {{
+                    if (e.type === 'keydown' && e.key !== 'Enter') return;
                     const target = e.target.closest('[data-espn-id]');
                     if (!target || !target.dataset.espnId) return;
                     window.location.href = '/game/' + encodeURIComponent(target.dataset.espnId);
                 }};
-                document.getElementById('games-container').addEventListener('click', handleEspnRowClick);
-                document.getElementById('completed-games-container').addEventListener('click', handleEspnRowClick);
-                const handleEspnRowKey = (e) => {{
-                    if (e.key !== 'Enter') return;
-                    const target = e.target.closest('[data-espn-id]');
-                    if (!target || !target.dataset.espnId) return;
-                    window.location.href = '/game/' + encodeURIComponent(target.dataset.espnId);
-                }};
-                document.getElementById('games-container').addEventListener('keydown', handleEspnRowKey);
-                document.getElementById('completed-games-container').addEventListener('keydown', handleEspnRowKey);
+                ['games-container', 'completed-games-container'].forEach(id => {{
+                    const el = document.getElementById(id);
+                    el.addEventListener('click', navToGame);
+                    el.addEventListener('keydown', navToGame);
+                }});
 
                 // Add a shadow to the filter bar only once it pins to the top.
                 const sentinel = document.getElementById('controls-sentinel');
@@ -2303,7 +2305,12 @@ def render_game_detail(session: Session, espn_id: str) -> str | None:
         .first()
     )
 
-    h2h = get_head_to_head(session, game.team_a_id, game.team_b_id, season_year=2026)
+    # Derive the season from the game's own date (ISO year prefix), not a
+    # hardcoded literal, so H2H doesn't silently go empty in a future season.
+    season_year = int(game.date[:4])
+    h2h = get_head_to_head(
+        session, game.team_a_id, game.team_b_id, season_year=season_year
+    )
 
     return _render_game_detail_html(game, team_a, team_b, ranking, h2h)
 
@@ -2606,7 +2613,7 @@ def _detail_breakdown_section(ranking, team_a, team_b) -> str:
                     <p class="breakdown-text">{q_text}</p>
                 </div>
                 <div class="breakdown-block">
-                    <span class="mini-bar-label">{escape_html(i_label)}</span>
+                    <span class="mini-bar-label">{i_label}</span>
                     {i_track}
                     <p class="breakdown-text">{i_text}</p>
                 </div>"""
@@ -2713,7 +2720,7 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
             </section>
 
             <section>
-                <h2 class="section-title">Head-to-head &middot; 2026</h2>
+                <h2 class="section-title">Head-to-head &middot; {game.date[:4]}</h2>
                 {h2h_section}
             </section>
 
@@ -2725,18 +2732,7 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
         </main>
         <script>
 {_WP_CHART_JS}
-
-            function escapeHtml(s) {{
-                return String(s).replace(/[&<>"']/g, c => ({{
-                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-                }})[c]);
-            }}
-
-            function isLiveStatus(status) {{
-                return status === 'STATUS_IN_PROGRESS'
-                    || status === 'STATUS_HALFTIME'
-                    || status === 'STATUS_END_PERIOD';
-            }}
+{_SHARED_JS}
 
             (function () {{
                 const HOME_ABBR = {home_abbr_js};

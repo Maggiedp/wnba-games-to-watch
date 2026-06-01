@@ -1088,10 +1088,10 @@ def test_buildwpsvg_escapes_team_abbreviations(session, team_ids):
 
     html = render_game_detail(session, "401736212")
 
-    # Escape helper wired into buildWpSvg and applied to both labels.
-    assert "const escLbl" in html
-    assert "const homeLbl = escLbl(homeAbbr)" in html
-    assert "const awayLbl = escLbl(awayAbbr)" in html
+    # buildWpSvg escapes both labels via the shared escapeHtml helper.
+    assert "function escapeHtml" in html
+    assert "const homeLbl = escapeHtml(homeAbbr)" in html
+    assert "const awayLbl = escapeHtml(awayAbbr)" in html
     # SVG labels use the escaped vars; the raw, unescaped params are gone.
     assert "${awayLbl}</text>" in html
     assert "${homeLbl}</text>" in html
