@@ -3,6 +3,7 @@
 import html as _html
 import json
 import logging
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
@@ -2528,16 +2529,31 @@ _DETAIL_STYLE = """
 
 
 def _detail_meta_line(game) -> str:
-    """Uppercase eyebrow: DATE · TIME · BROADCASTER (broadcaster optional)."""
-    parts = []
+    """Uppercase eyebrow: DATE · TIME · BROADCASTER (broadcaster optional).
+
+    The date+time are wrapped in a `.meta-when` span carrying `time_utc`; the
+    detail page's script localizes them to the viewer's timezone on load (the
+    rest of the site derives local display from `time_utc` too). The server text
+    is the ET fallback shown if JS is off or `time_utc` is missing.
+    """
+    when_parts = []
     if game.date:
-        parts.append(escape_html(game.date))
+        try:
+            dt = datetime.strptime(game.date, "%Y-%m-%d")
+            friendly_date = f"{dt.strftime('%a %b')} {dt.day}"  # e.g. "Tue Jun 2"
+        except ValueError:
+            friendly_date = game.date
+        when_parts.append(escape_html(friendly_date))
     if game.time:
-        parts.append(escape_html(game.time))
+        when_parts.append(escape_html(game.time))
+    when = " · ".join(when_parts)
+    time_utc = escape_html(game.time_utc or "")
+    line = f'<span class="meta-when" data-time-utc="{time_utc}">{when}</span>'
+
     broadcaster = (game.broadcaster or "").strip()
     if broadcaster and broadcaster.upper() != "TBD":
-        parts.append(escape_html(broadcaster))
-    return " · ".join(parts)
+        line += f" · {escape_html(broadcaster)}"
+    return line
 
 
 def _detail_win_prob_section(ranking, team_a, team_b) -> str:
@@ -2734,6 +2750,19 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
 {_WP_CHART_JS}
 {_SHARED_JS}
 
+            // Localize the eyebrow date/time to the viewer's timezone (the ET
+            // text rendered server-side is the fallback), matching the rest of
+            // the site, which derives local display from time_utc.
+            (function () {{
+                const el = document.querySelector('.meta-when');
+                if (!el || !el.dataset.timeUtc) return;
+                const d = new Date(el.dataset.timeUtc);
+                if (isNaN(d)) return;
+                const ds = d.toLocaleDateString(undefined, {{ weekday: 'short', month: 'short', day: 'numeric' }});
+                const ts = d.toLocaleTimeString(undefined, {{ hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }});
+                el.textContent = ds + ' · ' + ts;
+            }})();
+
             (function () {{
                 const HOME_ABBR = {home_abbr_js};
                 const AWAY_ABBR = {away_abbr_js};
@@ -2786,12 +2815,17 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
                 function headerHtml(data) {{
                     const away = `${{escapeHtml(AWAY_ABBR)}} ${{escapeHtml(String(data.away_score))}}`;
                     const home = `${{escapeHtml(HOME_ABBR)}} ${{escapeHtml(String(data.home_score))}}`;
+                    const last = data.plays[data.plays.length - 1];
+                    const period = last && last.period ? last.period : 0;
                     let status;
-                    if (isLiveStatus(data.status)) {{
-                        const last = data.plays[data.plays.length - 1];
-                        const period = last && last.period ? `Q${{escapeHtml(String(last.period))}}` : '';
-                        const clock = last && last.clock ? escapeHtml(String(last.clock)) : '';
-                        status = [period, clock].filter(Boolean).join(' ');
+                    if (data.status === 'STATUS_HALFTIME') {{
+                        status = 'Halftime';
+                    }} else if (data.status === 'STATUS_END_PERIOD') {{
+                        status = period <= 4 ? `End Q${{escapeHtml(String(period))}}` : 'End OT';
+                    }} else if (isLiveStatus(data.status)) {{
+                        const q = period <= 4 ? `Q${{escapeHtml(String(period))}}` : 'OT';
+                        const clock = last && last.clock ? ` ${{escapeHtml(String(last.clock))}}` : '';
+                        status = `${{q}}${{clock}}`;
                     }} else {{
                         status = 'Final';
                     }}
