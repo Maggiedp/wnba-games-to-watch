@@ -28,7 +28,7 @@ def _seed_elo(schema):
     b = session.query(schema.Team).filter_by(name="Storm").one().id
     replace_elo_history(
         session,
-        "2026",
+        2026,
         [
             (a, "2026-05-10", 1600.0),
             (b, "2026-05-10", 1450.0),
@@ -45,7 +45,7 @@ def test_elo_history_shape(env):
     r = TestClient(app).get("/api/elo-history?season=2026")
     assert r.status_code == 200
     body = r.json()
-    assert body["season"] == "2026"
+    assert body["season"] == 2026
     assert body["teams"]["Aces"] == [
         {"date": "2026-05-10", "rating": 1600.0},
         {"date": "2026-05-15", "rating": 1615.0},
@@ -58,7 +58,7 @@ def test_elo_history_empty_season(env):
 
     r = TestClient(app).get("/api/elo-history?season=1999")
     assert r.status_code == 200
-    assert r.json() == {"season": "1999", "teams": {}}
+    assert r.json() == {"season": 1999, "teams": {}}
 
 
 def test_transparency_page_renders():

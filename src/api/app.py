@@ -342,10 +342,10 @@ async def get_playoff_odds(date: str = Query(default=None)):
 
 
 @app.get("/api/elo-history")
-async def get_elo_history_endpoint(season: str = Query(default=None)):
+async def get_elo_history_endpoint(season: int = Query(default=None)):
     """Per-team Elo trajectory for a season (DB-only; never calls ESPN)."""
     if season is None:
-        season = today_et()[:4]
+        season = int(today_et()[:4])
     session = get_session()
     try:
         rows = get_elo_history(session, season)

@@ -36,14 +36,14 @@ def _replay():
 
 
 def test_store_writes_resolved_team_points(session):
-    store_elo_history(session, _replay(), "2026")
-    stored = get_elo_history(session, "2026")
+    store_elo_history(session, _replay(), 2026)
+    stored = get_elo_history(session, 2026)
     assert {(r.team_id, r.rating) for r in stored} == {(1, 1600.0), (2, 1450.0)}
 
 
 def test_store_raises_on_unknown_team_and_preserves_existing(session):
     # A prior complete season is already published.
-    replace_elo_history(session, "2026", [(1, "2026-05-01", 1500.0)])
+    replace_elo_history(session, 2026, [(1, "2026-05-01", 1500.0)])
     replay = EloReplay(
         final_ratings={},
         history=[
@@ -61,8 +61,8 @@ def test_store_raises_on_unknown_team_and_preserves_existing(session):
     # partial season — so the non-fatal probe in main() rolls back and the
     # previously stored complete season survives untouched.
     with pytest.raises(ValueError, match="Unresolved teams"):
-        store_elo_history(session, replay, "2026")
-    stored = get_elo_history(session, "2026")
+        store_elo_history(session, replay, 2026)
+    stored = get_elo_history(session, 2026)
     assert [(r.team_id, r.date, r.rating) for r in stored] == [
         (1, "2026-05-01", 1500.0)
     ]

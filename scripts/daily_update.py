@@ -899,10 +899,10 @@ def store_playoff_probabilities(
     logger.info(f"Stored {stored} playoff probabilities for {snapshot_date}")
 
 
-def store_elo_history(session, replay: EloReplay, season_prefix: str) -> None:
+def store_elo_history(session, replay: EloReplay, season_year: int) -> None:
     """Persist the per-team Elo trajectory for one season for the
     /transparency chart. Whole-season delete-and-rewrite (idempotent)."""
-    timeline = build_elo_timeline(replay.history, season_prefix)
+    timeline = build_elo_timeline(replay.history, str(season_year))
     get_cached_team_id = _make_team_id_resolver(session)
     rows: list[tuple[int, str, float]] = []
     missing: list[str] = []
@@ -919,10 +919,12 @@ def store_elo_history(session, replay: EloReplay, season_prefix: str) -> None:
         # Raise instead — main()'s non-fatal probe rolls back and the previously
         # stored complete season stands until the team data is fixed.
         raise ValueError(
-            f"Unresolved teams for Elo history {season_prefix}: {sorted(missing)}"
+            f"Unresolved teams for Elo history {season_year}: {sorted(missing)}"
         )
-    replace_elo_history(session, season_prefix, rows)
-    logger.info(f"Stored {len(rows)} Elo history points for {season_prefix}")
+    # replace_elo_history commits internally; nothing fallible should run after
+    # it here, or main()'s except-rollback would be a no-op over a live write.
+    replace_elo_history(session, season_year, rows)
+    logger.info(f"Stored {len(rows)} Elo history points for {season_year}")
 
 
 def main() -> int:
@@ -971,7 +973,7 @@ def main() -> int:
             # Persist the Elo trajectory for the transparency page. Non-fatal:
             # a failure here must not block the user-visible ranking write.
             try:
-                store_elo_history(session, replay, today[:4])
+                store_elo_history(session, replay, int(today[:4]))
             except Exception as e:
                 session.rollback()
                 logger.warning(f"Elo history store failed (non-fatal): {e}")

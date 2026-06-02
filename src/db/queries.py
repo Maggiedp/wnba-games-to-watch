@@ -664,30 +664,29 @@ def get_calibration_pairs(
     """(predicted win_prob_a, team_a_won) for completed regular/post-season
     games that have a frozen DailyRanking.win_prob_a. Rows without a stored
     win_prob_a are dropped. Used by /api/calibration and the audit script."""
-    games = (
-        session.query(Game)
+    # Single inner JOIN on the matchup key: returns only completed games that
+    # have a frozen win_prob_a, so there's no over-fetch and no Python-side
+    # join. Calibration is from team_a's (the home team's) perspective — one
+    # prediction per game; home teams are both favorites and underdogs, so
+    # win_prob_a still spans the full 0..1 range.
+    rows = (
+        session.query(DailyRanking.win_prob_a, Game.winner_id, Game.team_a_id)
+        .join(
+            Game,
+            (Game.date == DailyRanking.date)
+            & (Game.team_a_id == DailyRanking.team_a_id)
+            & (Game.team_b_id == DailyRanking.team_b_id),
+        )
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
         .filter(_NOT_PRESEASON)
+        .filter(DailyRanking.win_prob_a.isnot(None))
         .all()
     )
-    if not games:
-        return []
-    dates = {g.date for g in games}
-    rankings = {
-        (r.date, r.team_a_id, r.team_b_id): r
-        for r in session.query(DailyRanking).filter(DailyRanking.date.in_(dates)).all()
-    }
-    pairs: list[tuple[float, bool]] = []
-    for g in games:
-        r = rankings.get((g.date, g.team_a_id, g.team_b_id))
-        if r is None or r.win_prob_a is None:
-            continue
-        # Calibration is from team_a's (the home team's) perspective: one
-        # prediction per game. Home teams appear as both favorites and
-        # underdogs, so win_prob_a still spans the full 0..1 range.
-        pairs.append((r.win_prob_a, g.winner_id == g.team_a_id))
-    return pairs
+    return [
+        (win_prob_a, winner_id == team_a_id)
+        for win_prob_a, winner_id, team_a_id in rows
+    ]
 
 
 def get_rankings_by_broadcaster(
@@ -762,7 +761,7 @@ def upsert_daily_ranking(
 _ELO_HISTORY_LOCK_NS = 8412
 
 
-def _acquire_elo_history_lock(session: Session, season_prefix: str) -> None:
+def _acquire_elo_history_lock(session: Session, season_year: int) -> None:
     """Take a transaction-scoped Postgres advisory lock for one season's
     elo_history rewrite so two overlapping daily-update runs serialize instead
     of interleaving the delete-and-reinsert (the table has no unique key, so an
@@ -772,26 +771,26 @@ def _acquire_elo_history_lock(session: Session, season_prefix: str) -> None:
         return
     session.execute(
         text("SELECT pg_advisory_xact_lock(:ns, :yr)"),
-        {"ns": _ELO_HISTORY_LOCK_NS, "yr": int(season_prefix)},
+        {"ns": _ELO_HISTORY_LOCK_NS, "yr": season_year},
     )
 
 
 def replace_elo_history(
     session: Session,
-    season_prefix: str,
+    season_year: int,
     rows: list[tuple[int, str, float]],
 ) -> None:
     """Delete-and-rewrite all elo_history rows for one season.
 
     `rows` is (team_id, date, rating). The trajectory is a deterministic replay,
     so rewriting the whole season each run is idempotent and avoids stale rows.
-    The delete is scoped by date prefix so other seasons are untouched.
+    The delete is scoped by year so other seasons are untouched.
 
     Serialized per season via an advisory lock (see `_acquire_elo_history_lock`)
     so overlapping daily-update runs can't interleave and corrupt the rewrite.
     """
-    _acquire_elo_history_lock(session, season_prefix)
-    session.query(EloHistory).filter(EloHistory.date.like(f"{season_prefix}-%")).delete(
+    _acquire_elo_history_lock(session, season_year)
+    session.query(EloHistory).filter(EloHistory.date.like(f"{season_year}-%")).delete(
         synchronize_session=False
     )
     for team_id, d, rating in rows:
@@ -799,12 +798,16 @@ def replace_elo_history(
     session.commit()
 
 
-def get_elo_history(session: Session, season_prefix: str) -> list[EloHistory]:
-    """All elo_history rows for a season, date ascending."""
+def get_elo_history(session: Session, season_year: int) -> list[EloHistory]:
+    """All elo_history rows for a season, ordered by (date, team_id).
+
+    The team_id secondary sort makes per-team chronological order explicit
+    rather than relying on the global date sort happening to interleave teams
+    correctly (e.g. two rows sharing a date)."""
     return (
         session.query(EloHistory)
-        .filter(EloHistory.date.like(f"{season_prefix}-%"))
-        .order_by(EloHistory.date)
+        .filter(EloHistory.date.like(f"{season_year}-%"))
+        .order_by(EloHistory.date, EloHistory.team_id)
         .all()
     )
 

@@ -2904,30 +2904,38 @@ def render_transparency() -> str:
     """Server-rendered /transparency page. Data is fetched client-side from
     /api/elo-history and /api/calibration so this stays a thin shell."""
     return (
-        """<!DOCTYPE html>
+        f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Behind the numbers · Wumbers</title>
-<style>
-  body { font-family: -apple-system, system-ui, sans-serif; margin: 0;
-         background: #f7f7f5; color: #0d1b2a; }
-  .wrap { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
-  h1 { font-size: 1.6rem; margin: 0 0 4px; }
-  .sub { color: #5a6472; margin: 0 0 28px; }
-  section { background: #fff; border: 1px solid #e3e3df; border-radius: 12px;
-            padding: 20px; margin-bottom: 24px; }
-  h2 { font-size: 1.15rem; margin: 0 0 4px; }
-  .desc { color: #5a6472; font-size: .9rem; margin: 0 0 16px; }
-  .chart { width: 100%; overflow-x: auto; }
-  .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px;
-            font-size: .8rem; }
-  .legend span { display: inline-flex; align-items: center; gap: 5px; }
-  .legend i { width: 11px; height: 3px; border-radius: 2px; display: inline-block; }
-  .empty { color: #8a8f98; font-style: italic; }
-  a.back { color: #1b6ca8; text-decoration: none; font-size: .9rem; }
-</style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Behind the numbers · {_SITE_TITLE}</title>
+<meta name="description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
+
+<meta property="og:title" content="Behind the numbers · {_SITE_TITLE}">
+<meta property="og:description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="{_SITE_URL}/transparency">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Behind the numbers · {_SITE_TITLE}">
+<meta name="twitter:description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
+
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23ff6b00'/><path d='M2 16 h28 M16 2 v28' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 7 C 11 12 21 12 27 7' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 25 C 11 20 21 20 27 25' stroke='%230d1b2a' stroke-width='2' fill='none'/></svg>">
+
+{_SHARED_HEAD}
+            .wrap {{ max-width: 920px; width: 100%; margin: 0 auto; padding: 24px 16px 64px; }}
+            h1 {{ font-family: var(--display); font-size: 1.7rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }}
+            h2 {{ font-family: var(--display); font-size: 1.2rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }}
+            .sub {{ color: var(--text-muted); margin: 0 0 28px; }}
+            section {{ background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 24px; }}
+            .desc {{ color: var(--text-muted); font-size: .9rem; margin: 0 0 16px; }}
+            .chart {{ width: 100%; overflow-x: auto; }}
+            .legend {{ display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; font-size: .8rem; }}
+            .legend span {{ display: inline-flex; align-items: center; gap: 5px; }}
+            .legend i {{ width: 11px; height: 3px; border-radius: 2px; display: inline-block; }}
+            .empty {{ color: var(--text-subtle); font-style: italic; }}
+            a.back {{ color: var(--orange-deep); text-decoration: none; font-size: .9rem; }}
+        </style>
 </head>
 <body>
 <div class="wrap">
@@ -2996,6 +3004,7 @@ async function loadElo() {
   const legend = document.getElementById('elo-legend');
   try {
     const res = await fetch('/api/elo-history');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     const names = Object.keys(data.teams || {});
     if (!names.length) { mount.innerHTML = '<p class="empty">No Elo history yet.</p>'; return; }
@@ -3050,6 +3059,7 @@ async function loadCalibration() {
   const summary = document.getElementById('calibration-summary');
   try {
     const res = await fetch('/api/calibration');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     if (!data.n) {
       mount.innerHTML = '<p class="empty">Not enough completed games yet.</p>';
