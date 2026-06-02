@@ -2930,6 +2930,7 @@ def render_transparency() -> str:
             section {{ background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 24px; }}
             .desc {{ color: var(--text-muted); font-size: .9rem; margin: 0 0 16px; }}
             .chart {{ width: 100%; overflow-x: auto; }}
+            .chart svg {{ max-width: 100%; height: auto; display: block; }}
             .legend {{ display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; font-size: .8rem; }}
             .legend span {{ display: inline-flex; align-items: center; gap: 5px; }}
             .legend i {{ width: 11px; height: 3px; border-radius: 2px; display: inline-block; }}
