@@ -224,7 +224,8 @@ def test_transparency_legend_escapes_team_names():
     from src.api.routes import render_transparency
 
     html = render_transparency()
-    assert "function escHtml" in html
-    assert "escHtml(s.label)" in html
+    # Reuses the single-sourced escapeHtml from _SHARED_JS (not a page-local copy).
+    assert "function escapeHtml" in html
+    assert "escapeHtml(s.label)" in html
     # The raw, unescaped label interpolation must be gone from the legend.
     assert "${s.label}" not in html

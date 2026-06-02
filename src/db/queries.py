@@ -674,11 +674,9 @@ def get_calibration_pairs(
     if not games:
         return []
     dates = {g.date for g in games}
-    keys = {(g.date, g.team_a_id, g.team_b_id) for g in games}
     rankings = {
         (r.date, r.team_a_id, r.team_b_id): r
         for r in session.query(DailyRanking).filter(DailyRanking.date.in_(dates)).all()
-        if (r.date, r.team_a_id, r.team_b_id) in keys
     }
     pairs: list[tuple[float, bool]] = []
     for g in games:
