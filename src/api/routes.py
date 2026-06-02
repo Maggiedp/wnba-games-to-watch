@@ -2997,7 +2997,7 @@ const MIN_CAL_GAMES = 25;
 // uses only prior games). Regenerate and update if the Elo hyperparameters or
 // historical data change.
 const BACKTEST = {
-  brier: 0.214, n: 1910, seasons: '2017–2025',
+  brier: 0.214, pickAcc: 0.671, n: 1910, seasons: '2017–2025',
   buckets: [
     { predicted_mean: 0.164, actual_rate: 0.250, count: 44 },
     { predicted_mean: 0.319, actual_rate: 0.315, count: 349 },
@@ -3014,10 +3014,10 @@ function renderBacktest() {
   mount.innerHTML = buildReliabilitySvg(BACKTEST.buckets);
   summary.innerHTML =
     `<p>Replaying every game from ${BACKTEST.seasons} and scoring each prediction against ` +
-    `what actually happened — no peeking ahead. Across the middle of the range, where most ` +
-    `games sit, predicted and actual win rates agree within about 1%.</p>` +
-    `<p class="cal-foot">Brier score <strong>${BACKTEST.brier}</strong> across ` +
-    `${BACKTEST.n.toLocaleString()} games — 0 = perfect, 0.25 = a coin flip.</p>`;
+    `what actually happened — no peeking ahead. The model picks the winner about ` +
+    `<strong>${Math.round(BACKTEST.pickAcc * 100)}%</strong> of the time, and predicted ` +
+    `win rates match actual within about 1% across the middle of the range.</p>` +
+    `<p class="cal-foot">Across ${BACKTEST.n.toLocaleString()} games (2017&ndash;2025).</p>`;
 }
 
 function buildLineChartSvg(series, opts) {
@@ -3183,8 +3183,7 @@ async function loadCalibration() {
       `<p>Each dot groups games we gave a similar win chance; its height is how often those ` +
       `teams actually won. Dots on the dashed line are perfectly calibrated, and a dot's size ` +
       `is how many games it covers.</p>` +
-      `<p class="cal-foot">Brier score <strong>${data.brier}</strong> across ${data.n} games ` +
-      `— 0 = perfect, 0.25 = a coin flip.</p>`;
+      `<p class="cal-foot">Across ${data.n} completed games this season.</p>`;
   } catch (e) {
     mount.innerHTML = '<p class="empty">Could not load calibration.</p>';
   }
