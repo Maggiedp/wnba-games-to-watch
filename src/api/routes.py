@@ -2935,6 +2935,20 @@ def render_transparency() -> str:
             .legend i {{ width: 11px; height: 3px; border-radius: 2px; display: inline-block; }}
             .empty {{ color: var(--text-subtle); font-style: italic; }}
             a.back {{ color: var(--orange-deep); text-decoration: none; font-size: .9rem; }}
+            .legend-row {{ display: inline-flex; align-items: baseline; gap: 7px; padding: 3px 11px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: .82rem; transition: background .12s ease, color .12s ease, border-color .12s ease; }}
+            .legend-row .rank {{ color: var(--text-subtle); font-variant-numeric: tabular-nums; font-size: .72rem; }}
+            .legend-row .rating {{ color: var(--text-subtle); font-variant-numeric: tabular-nums; }}
+            .legend-row:hover, .legend-row.active, .legend-row:focus-visible {{ background: var(--orange); border-color: var(--orange); color: #fff; outline: none; }}
+            .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .rating, .legend-row.active .rating {{ color: rgba(255, 255, 255, .82); }}
+            .elo-line {{ fill: none; stroke: var(--navy); stroke-opacity: .15; stroke-width: 1.4; transition: stroke-opacity .12s ease, stroke-width .12s ease; }}
+            .elo-line.hi {{ stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }}
+            .cal-layout {{ display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: center; }}
+            .cal-read p {{ margin: 0 0 12px; color: var(--text-muted); font-size: .92rem; line-height: 1.5; }}
+            .cal-foot {{ color: var(--text-subtle) !important; font-size: .82rem !important; }}
+            .cal-stat {{ display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 220px; }}
+            .cal-brier {{ font-family: var(--display); font-size: 3.4rem; font-weight: 600; color: var(--navy); line-height: 1; font-variant-numeric: tabular-nums; }}
+            .cal-brier-lbl {{ margin-top: 8px; color: var(--text-subtle); font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }}
+            @media (max-width: 640px) {{ .cal-layout {{ grid-template-columns: 1fr; }} }}
         </style>
 </head>
 <body>
@@ -2952,11 +2966,12 @@ def render_transparency() -> str:
   </section>
   <section>
     <h2>Win-probability calibration</h2>
-    <p class="desc">For completed games, our predicted win probability vs. how
-       often that team actually won. Points on the dashed line = perfectly
-       calibrated.</p>
-    <div id="calibration-chart" class="chart"><p class="empty">Loading…</p></div>
-    <div id="calibration-summary" class="desc"></div>
+    <p class="desc">For completed games, how our predicted win probability compares
+       to how often those teams actually won.</p>
+    <div class="cal-layout">
+      <div id="calibration-chart" class="chart"><p class="empty">Loading…</p></div>
+      <div id="calibration-summary" class="cal-read"></div>
+    </div>
   </section>
 </div>
 
@@ -2964,11 +2979,11 @@ def render_transparency() -> str:
 """
         + _SHARED_JS
         + """
-const PALETTE = ['#e6194B','#3cb44b','#4363d8','#f58231','#911eb4','#42d4f4',
-  '#f032e6','#bfef45','#fabed4','#469990','#9A6324','#800000','#000075','#a9a9a9'];
+const MIN_CAL_GAMES = 25;
 
 function buildLineChartSvg(series, opts) {
-  // series: [{label, color, points:[{x:Number, y:Number}]}]
+  // series: [{label, points:[{x,y}]}] — lines are styled/highlighted via CSS
+  // (.elo-line / .elo-line.hi); each path carries data-team = its series index.
   const W = opts.width, H = opts.height, P = 40;
   const xs = series.flatMap(s => s.points.map(p => p.x));
   const ys = series.flatMap(s => s.points.map(p => p.y));
@@ -2977,23 +2992,23 @@ function buildLineChartSvg(series, opts) {
   const ymin = Math.min(...ys), ymax = Math.max(...ys);
   const sx = x => P + (xmax === xmin ? 0 : (x - xmin) / (xmax - xmin)) * (W - 2*P);
   const sy = y => H - P - (ymax === ymin ? 0 : (y - ymin) / (ymax - ymin)) * (H - 2*P);
-  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img">`;
-  // y gridlines + labels (4 steps)
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Team Elo ratings over time">`;
   for (let i = 0; i <= 4; i++) {
     const val = ymin + (ymax - ymin) * i / 4;
     const y = sy(val);
-    svg += `<line x1="${P}" y1="${y}" x2="${W-P}" y2="${y}" stroke="#eee"/>`;
-    svg += `<text x="${P-6}" y="${y+3}" text-anchor="end" font-size="10" fill="#999">${Math.round(val)}</text>`;
+    svg += `<line x1="${P}" y1="${y}" x2="${W-P}" y2="${y}" stroke="#ece6da"/>`;
+    svg += `<text x="${P-8}" y="${y+3}" text-anchor="end" font-size="10" fill="#8a929d">${Math.round(val)}</text>`;
   }
   for (const t of (opts.xTicks || [])) {
     const x = sx(t.x);
-    svg += `<line x1="${x}" y1="${P}" x2="${x}" y2="${H-P}" stroke="#f0f0f0"/>`;
-    svg += `<text x="${x}" y="${H-P+14}" text-anchor="middle" font-size="10" fill="#999">${t.label}</text>`;
+    svg += `<line x1="${x}" y1="${P}" x2="${x}" y2="${H-P}" stroke="#f2ede3"/>`;
+    svg += `<text x="${x}" y="${H-P+15}" text-anchor="middle" font-size="10" fill="#8a929d">${t.label}</text>`;
   }
-  for (const s of series) {
+  for (let i = 0; i < series.length; i++) {
+    const s = series[i];
     if (!s.points.length) continue;
-    const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ');
-    svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6"/>`;
+    const d = s.points.map((p, k) => `${k ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ');
+    svg += `<path class="elo-line" data-team="${i}" d="${d}"/>`;
   }
   svg += '</svg>';
   return svg;
@@ -3008,25 +3023,43 @@ async function loadElo() {
     const data = await res.json();
     const names = Object.keys(data.teams || {});
     if (!names.length) { mount.innerHTML = '<p class="empty">No Elo history yet.</p>'; return; }
-    // x = day index from the earliest date across all teams.
     const allDates = [...new Set(names.flatMap(n => data.teams[n].map(p => p.date)))].sort();
     const dayIndex = Object.fromEntries(allDates.map((d, i) => [d, i]));
-    const series = names.map((n, i) => ({
-      label: n, color: PALETTE[i % PALETTE.length],
-      points: data.teams[n].map(p => ({ x: dayIndex[p.date], y: p.rating })),
-    }));
+    const series = names.map(n => {
+      const pts = data.teams[n];
+      return { label: n, last: pts[pts.length - 1].rating,
+               points: pts.map(p => ({ x: dayIndex[p.date], y: p.rating })) };
+    });
+    series.sort((a, b) => b.last - a.last);  // legend doubles as a standings list
     const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const seenMonth = new Set();
+    const seen = new Set();
     const xTicks = [];
     for (const d of allDates) {
-      const ym = d.slice(0, 7);            // "2026-05"
-      if (seenMonth.has(ym)) continue;
-      seenMonth.add(ym);
+      const ym = d.slice(0, 7);
+      if (seen.has(ym)) continue;
+      seen.add(ym);
       xTicks.push({ x: dayIndex[d], label: MONTHS[parseInt(d.slice(5, 7), 10) - 1] });
     }
     mount.innerHTML = buildLineChartSvg(series, { width: 860, height: 360, xTicks });
-    legend.innerHTML = series.map(s =>
-      `<span><i style="background:${s.color}"></i>${escapeHtml(s.label)}</span>`).join('');
+    const svg = mount.querySelector('svg');
+    legend.innerHTML = series.map((s, i) =>
+      `<button class="legend-row" type="button" data-team="${i}">` +
+      `<span class="rank">${i + 1}</span>${escapeHtml(s.label)}` +
+      `<span class="rating">${Math.round(s.last)}</span></button>`).join('');
+    // Hover/focus a team to lift its line out of the muted cloud.
+    const setHi = (i, on) => {
+      const path = svg && svg.querySelector(`.elo-line[data-team="${i}"]`);
+      const row = legend.querySelector(`.legend-row[data-team="${i}"]`);
+      if (path) { path.classList.toggle('hi', on); if (on) path.parentNode.appendChild(path); }
+      if (row) row.classList.toggle('active', on);
+    };
+    legend.querySelectorAll('.legend-row').forEach(row => {
+      const i = row.dataset.team;
+      row.addEventListener('mouseenter', () => setHi(i, true));
+      row.addEventListener('mouseleave', () => setHi(i, false));
+      row.addEventListener('focus', () => setHi(i, true));
+      row.addEventListener('blur', () => setHi(i, false));
+    });
   } catch (e) {
     mount.innerHTML = '<p class="empty">Could not load Elo history.</p>';
   }
@@ -3036,19 +3069,18 @@ function buildReliabilitySvg(buckets) {
   const W = 360, H = 360, P = 44;
   const sx = v => P + v * (W - 2*P);
   const sy = v => H - P - v * (H - 2*P);
-  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img">`;
-  // axes box
-  svg += `<rect x="${P}" y="${P}" width="${W-2*P}" height="${H-2*P}" fill="none" stroke="#eee"/>`;
-  // perfect-calibration diagonal
-  svg += `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(1)}" y2="${sy(1)}" stroke="#bbb" stroke-dasharray="4 4"/>`;
-  // axis labels
-  svg += `<text x="${W/2}" y="${H-8}" text-anchor="middle" font-size="11" fill="#5a6472">Predicted win probability</text>`;
-  svg += `<text x="14" y="${H/2}" text-anchor="middle" font-size="11" fill="#5a6472" transform="rotate(-90 14 ${H/2})">Actual win rate</text>`;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Win-probability calibration">`;
+  svg += `<rect x="${P}" y="${P}" width="${W-2*P}" height="${H-2*P}" fill="none" stroke="#e7e2d8"/>`;
+  // perfect-calibration identity line (navy, dashed)
+  svg += `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(1)}" y2="${sy(1)}" stroke="#0d1b2a" stroke-opacity="0.3" stroke-dasharray="4 4"/>`;
+  svg += `<text x="${W/2}" y="${H-8}" text-anchor="middle" font-size="11" fill="#5a6573">Predicted win probability</text>`;
+  svg += `<text x="14" y="${H/2}" text-anchor="middle" font-size="11" fill="#5a6573" transform="rotate(-90 14 ${H/2})">Actual win rate</text>`;
   const maxN = Math.max(1, ...buckets.map(b => b.count));
   for (const b of buckets) {
     const cx = sx(b.predicted_mean), cy = sy(b.actual_rate);
-    const rad = 3 + 7 * (b.count / maxN);  // point size ~ sample count
-    svg += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="#1b6ca8" fill-opacity="0.7"/>`;
+    const rad = 4 + 8 * (b.count / maxN);  // dot size ~ games in the bucket
+    svg += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="#ff6b00" fill-opacity="0.85" stroke="#a03c00" stroke-width="1"/>`;
+    svg += `<text x="${cx.toFixed(1)}" y="${(cy - rad - 4).toFixed(1)}" text-anchor="middle" font-size="9" fill="#8a929d">${b.count}</text>`;
   }
   svg += '</svg>';
   return svg;
@@ -3062,11 +3094,30 @@ async function loadCalibration() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     if (!data.n) {
-      mount.innerHTML = '<p class="empty">Not enough completed games yet.</p>';
+      mount.innerHTML = '<p class="empty">No completed games yet.</p>';
+      summary.innerHTML = '';
+      return;
+    }
+    if (data.n < MIN_CAL_GAMES) {
+      // Too few games to bucket into a meaningful curve — show the single
+      // honest number instead of a noisy 1-2-games-per-bucket scatter.
+      mount.innerHTML =
+        `<div class="cal-stat"><span class="cal-brier">${data.brier}</span>` +
+        `<span class="cal-brier-lbl">Brier score</span></div>`;
+      summary.innerHTML =
+        `<p>From <strong>${data.n}</strong> completed game${data.n === 1 ? '' : 's'} so far. ` +
+        `A reliability curve needs ~${MIN_CAL_GAMES} games before the per-bucket win rates settle ` +
+        `down — until then a single score is more honest than a noisy chart.</p>` +
+        `<p class="cal-foot">Brier: 0 = perfect, 0.25 = a coin flip. Lower is better.</p>`;
       return;
     }
     mount.innerHTML = buildReliabilitySvg(data.buckets || []);
-    summary.textContent = `Brier score ${data.brier} across ${data.n} completed games (lower is better; 0 = perfect, 0.25 = a coin flip).`;
+    summary.innerHTML =
+      `<p>Each dot groups games we gave a similar win chance; its height is how often those ` +
+      `teams actually won. Dots on the dashed line are perfectly calibrated, and a dot's size ` +
+      `is how many games it covers.</p>` +
+      `<p class="cal-foot">Brier score <strong>${data.brier}</strong> across ${data.n} games ` +
+      `— 0 = perfect, 0.25 = a coin flip.</p>`;
   } catch (e) {
     mount.innerHTML = '<p class="empty">Could not load calibration.</p>';
   }
