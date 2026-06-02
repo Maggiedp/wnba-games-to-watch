@@ -905,13 +905,22 @@ def store_elo_history(session, replay: EloReplay, season_prefix: str) -> None:
     timeline = build_elo_timeline(replay.history, season_prefix)
     get_cached_team_id = _make_team_id_resolver(session)
     rows: list[tuple[int, str, float]] = []
+    missing: list[str] = []
     for team_name, points in timeline.items():
         team_id = get_cached_team_id(team_name)
         if not team_id:
-            logger.warning(f"Skipping Elo history for unknown team: {team_name}")
+            missing.append(team_name)
             continue
         for p in points:
             rows.append((team_id, p["date"], p["rating"]))
+    if missing:
+        # The rewrite deletes every row for the season, so dropping a team here
+        # would silently erase it from the chart and publish a partial season.
+        # Raise instead — main()'s non-fatal probe rolls back and the previously
+        # stored complete season stands until the team data is fixed.
+        raise ValueError(
+            f"Unresolved teams for Elo history {season_prefix}: {sorted(missing)}"
+        )
     replace_elo_history(session, season_prefix, rows)
     logger.info(f"Stored {len(rows)} Elo history points for {season_prefix}")
 
