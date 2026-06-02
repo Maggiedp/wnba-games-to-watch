@@ -3167,15 +3167,15 @@ async function loadCalibration() {
       return;
     }
     if (data.n < MIN_CAL_GAMES) {
-      // Too few games for a stable number — show progress toward the threshold,
-      // not a noisy small-sample Brier that would over/under-sell the model.
-      mount.innerHTML =
-        `<div class="cal-stat"><span class="cal-brier">${data.n}</span>` +
-        `<span class="cal-brier-lbl">of ~${MIN_CAL_GAMES} games needed</span></div>`;
+      // Not enough games for a stable curve — collapse to one quiet line (no
+      // loud placeholder); the 2017-2025 backtest below carries model quality.
+      const layout = mount.closest('.cal-layout');
+      if (layout) layout.style.display = 'block';
+      mount.innerHTML = '';
       summary.innerHTML =
-        `<p>Calibration shows here once about <strong>${MIN_CAL_GAMES}</strong> games are ` +
-        `completed — enough that the result isn't dominated by small-sample swings. ` +
-        `<strong>${data.n}</strong> completed so far this season.</p>`;
+        `<p class="cal-foot" style="margin:0">This season's calibration appears once about ` +
+        `<strong>${MIN_CAL_GAMES}</strong> games are completed — <strong>${data.n}</strong> ` +
+        `so far. The backtest below shows how the model does over a full history.</p>`;
       return;
     }
     mount.innerHTML = buildReliabilitySvg(data.buckets || []);
