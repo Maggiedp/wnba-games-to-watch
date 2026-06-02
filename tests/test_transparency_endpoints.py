@@ -215,3 +215,16 @@ def test_homepage_links_to_transparency():
     from src.api.routes import render_homepage
 
     assert 'href="/transparency"' in render_homepage()
+
+
+def test_transparency_legend_escapes_team_names():
+    # The Elo legend injects team names (from the DB) via innerHTML. They must
+    # be HTML-escaped so a poisoned/malformed team name can't execute markup —
+    # consistent with the homepage/detail pages, which escape DB/ESPN labels.
+    from src.api.routes import render_transparency
+
+    html = render_transparency()
+    assert "function escHtml" in html
+    assert "escHtml(s.label)" in html
+    # The raw, unescaped label interpolation must be gone from the legend.
+    assert "${s.label}" not in html

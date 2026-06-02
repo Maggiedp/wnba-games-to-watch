@@ -2955,6 +2955,11 @@ def render_transparency() -> str:
 const PALETTE = ['#e6194B','#3cb44b','#4363d8','#f58231','#911eb4','#42d4f4',
   '#f032e6','#bfef45','#fabed4','#469990','#9A6324','#800000','#000075','#a9a9a9'];
 
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function buildLineChartSvg(series, opts) {
   // series: [{label, color, points:[{x:Number, y:Number}]}]
   const W = opts.width, H = opts.height, P = 40;
@@ -3013,7 +3018,7 @@ async function loadElo() {
     }
     mount.innerHTML = buildLineChartSvg(series, { width: 860, height: 360, xTicks });
     legend.innerHTML = series.map(s =>
-      `<span><i style="background:${s.color}"></i>${s.label}</span>`).join('');
+      `<span><i style="background:${s.color}"></i>${escHtml(s.label)}</span>`).join('');
   } catch (e) {
     mount.innerHTML = '<p class="empty">Could not load Elo history.</p>';
   }
