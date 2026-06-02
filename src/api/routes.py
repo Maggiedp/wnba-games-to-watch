@@ -2952,6 +2952,7 @@ def render_transparency() -> str:
             .cal-stat {{ display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 220px; }}
             .cal-brier {{ font-family: var(--display); font-size: 3.4rem; font-weight: 600; color: var(--navy); line-height: 1; font-variant-numeric: tabular-nums; }}
             .cal-brier-lbl {{ margin-top: 8px; color: var(--text-subtle); font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }}
+            .cal-sub {{ font-family: var(--display); font-size: 1rem; font-weight: 600; color: var(--navy); margin: 24px 0 12px; padding-top: 14px; border-top: 1px solid var(--line-soft); }}
             @media (max-width: 640px) {{ .cal-layout {{ grid-template-columns: 1fr; }} }}
         </style>
 </head>
@@ -2970,11 +2971,17 @@ def render_transparency() -> str:
   </section>
   <section>
     <h2>Win-probability calibration</h2>
-    <p class="desc">For completed games, how our predicted win probability compares
-       to how often those teams actually won.</p>
+    <p class="desc">How our predicted win probabilities line up with how often teams
+       actually win — dots on the dashed line are perfectly calibrated.</p>
+    <h3 class="cal-sub">This season</h3>
     <div class="cal-layout">
       <div id="calibration-chart" class="chart"><p class="empty">Loading…</p></div>
       <div id="calibration-summary" class="cal-read"></div>
+    </div>
+    <h3 class="cal-sub">Backtest · 2017&ndash;2025</h3>
+    <div class="cal-layout">
+      <div id="backtest-chart" class="chart"></div>
+      <div id="backtest-summary" class="cal-read"></div>
     </div>
   </section>
 </div>
@@ -2984,6 +2991,34 @@ def render_transparency() -> str:
         + _SHARED_JS
         + """
 const MIN_CAL_GAMES = 25;
+
+// Static 2017-2025 backtest of the deployed Elo model (K=16, H=50, reg=0.5,
+// MOV on), from `python -m scripts.validate_elo`. Time-honest (each prediction
+// uses only prior games). Regenerate and update if the Elo hyperparameters or
+// historical data change.
+const BACKTEST = {
+  brier: 0.214, n: 1910, seasons: '2017–2025',
+  buckets: [
+    { predicted_mean: 0.164, actual_rate: 0.250, count: 44 },
+    { predicted_mean: 0.319, actual_rate: 0.315, count: 349 },
+    { predicted_mean: 0.504, actual_rate: 0.492, count: 664 },
+    { predicted_mean: 0.693, actual_rate: 0.684, count: 686 },
+    { predicted_mean: 0.844, actual_rate: 0.898, count: 167 },
+  ],
+};
+
+function renderBacktest() {
+  const mount = document.getElementById('backtest-chart');
+  const summary = document.getElementById('backtest-summary');
+  if (!mount) return;
+  mount.innerHTML = buildReliabilitySvg(BACKTEST.buckets);
+  summary.innerHTML =
+    `<p>Replaying every game from ${BACKTEST.seasons} and scoring each prediction against ` +
+    `what actually happened — no peeking ahead. Across the middle of the range, where most ` +
+    `games sit, predicted and actual win rates agree within about 1%.</p>` +
+    `<p class="cal-foot">Brier score <strong>${BACKTEST.brier}</strong> across ` +
+    `${BACKTEST.n.toLocaleString()} games — 0 = perfect, 0.25 = a coin flip.</p>`;
+}
 
 function buildLineChartSvg(series, opts) {
   // series: [{label, abbr, points:[{x,y}]}] — lines styled/highlighted via CSS
@@ -3132,16 +3167,15 @@ async function loadCalibration() {
       return;
     }
     if (data.n < MIN_CAL_GAMES) {
-      // Too few games to bucket into a meaningful curve — show the single
-      // honest number instead of a noisy 1-2-games-per-bucket scatter.
+      // Too few games for a stable number — show progress toward the threshold,
+      // not a noisy small-sample Brier that would over/under-sell the model.
       mount.innerHTML =
-        `<div class="cal-stat"><span class="cal-brier">${data.brier}</span>` +
-        `<span class="cal-brier-lbl">Brier score</span></div>`;
+        `<div class="cal-stat"><span class="cal-brier">${data.n}</span>` +
+        `<span class="cal-brier-lbl">of ~${MIN_CAL_GAMES} games needed</span></div>`;
       summary.innerHTML =
-        `<p>From <strong>${data.n}</strong> completed game${data.n === 1 ? '' : 's'} so far. ` +
-        `A reliability curve needs ~${MIN_CAL_GAMES} games before the per-bucket win rates settle ` +
-        `down — until then a single score is more honest than a noisy chart.</p>` +
-        `<p class="cal-foot">Brier: 0 = perfect, 0.25 = a coin flip. Lower is better.</p>`;
+        `<p>Calibration shows here once about <strong>${MIN_CAL_GAMES}</strong> games are ` +
+        `completed — enough that the result isn't dominated by small-sample swings. ` +
+        `<strong>${data.n}</strong> completed so far this season.</p>`;
       return;
     }
     mount.innerHTML = buildReliabilitySvg(data.buckets || []);
@@ -3158,6 +3192,7 @@ async function loadCalibration() {
 
 loadElo();
 loadCalibration();
+renderBacktest();
 </script>
 </body>
 </html>"""
