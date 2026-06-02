@@ -2941,9 +2941,10 @@ def render_transparency() -> str:
             .legend-row .rating {{ color: var(--text-subtle); font-variant-numeric: tabular-nums; }}
             .legend-row:hover, .legend-row.active, .legend-row:focus-visible {{ background: var(--orange); border-color: var(--orange); color: #fff; outline: none; }}
             .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .rating, .legend-row.active .rating {{ color: rgba(255, 255, 255, .82); }}
-            .elo-line {{ fill: none; stroke: var(--navy); stroke-opacity: .15; stroke-width: 1.4; transition: stroke-opacity .12s ease, stroke-width .12s ease; }}
+            .elo-line {{ fill: none; stroke: var(--navy); stroke-opacity: .15; stroke-width: 1.4; pointer-events: none; transition: stroke-opacity .12s ease, stroke-width .12s ease; }}
             .elo-line.hi {{ stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }}
-            .elo-label {{ fill: var(--text-subtle); font-size: 9.5px; font-variant-numeric: tabular-nums; }}
+            .elo-hit {{ fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }}
+            .elo-label {{ fill: var(--text-subtle); font-size: 9.5px; font-variant-numeric: tabular-nums; cursor: pointer; }}
             .elo-label.hi {{ fill: var(--orange); font-weight: 600; }}
             .cal-layout {{ display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: center; }}
             .cal-read p {{ margin: 0 0 12px; color: var(--text-muted); font-size: .92rem; line-height: 1.5; }}
@@ -3008,11 +3009,11 @@ function buildLineChartSvg(series, opts) {
     svg += `<line x1="${x}" y1="${PT}" x2="${x}" y2="${H-PB}" stroke="#f2ede3"/>`;
     svg += `<text x="${x}" y="${H-PB+15}" text-anchor="middle" font-size="10" fill="#8a929d">${t.label}</text>`;
   }
+  const paths = series.map(s => s.points.length
+    ? s.points.map((p, k) => `${k ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ')
+    : '');
   for (let i = 0; i < series.length; i++) {
-    const s = series[i];
-    if (!s.points.length) continue;
-    const d = s.points.map((p, k) => `${k ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ');
-    svg += `<path class="elo-line" data-team="${i}" d="${d}"/>`;
+    if (paths[i]) svg += `<path class="elo-line" data-team="${i}" d="${paths[i]}"/>`;
   }
   // Direct end-of-line labels (abbreviation), nudged apart so they don't stack.
   const ends = series
@@ -3026,6 +3027,10 @@ function buildLineChartSvg(series, opts) {
   if (overflow > 0) for (const e of ends) e.y -= overflow;  // shift stack up to fit
   for (const e of ends) {
     svg += `<text class="elo-label" data-team="${e.i}" x="${W-PR+5}" y="${e.y.toFixed(1)}" dominant-baseline="middle">${escapeHtml(e.abbr)}</text>`;
+  }
+  // Invisible wide hit paths on top so the thin lines are easy to hover.
+  for (let i = 0; i < series.length; i++) {
+    if (paths[i]) svg += `<path class="elo-hit" data-team="${i}" d="${paths[i]}"/>`;
   }
   svg += '</svg>';
   return svg;
@@ -3080,6 +3085,13 @@ async function loadElo() {
       row.addEventListener('mouseleave', () => setHi(i, false));
       row.addEventListener('focus', () => setHi(i, true));
       row.addEventListener('blur', () => setHi(i, false));
+    });
+    // Hovering the line itself (via a wide transparent hit path) or its end
+    // label highlights the same team.
+    (svg ? svg.querySelectorAll('.elo-hit, .elo-label') : []).forEach(el => {
+      const i = el.dataset.team;
+      el.addEventListener('mouseenter', () => setHi(i, true));
+      el.addEventListener('mouseleave', () => setHi(i, false));
     });
   } catch (e) {
     mount.innerHTML = '<p class="empty">Could not load Elo history.</p>';
