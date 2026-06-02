@@ -2942,6 +2942,8 @@ def render_transparency() -> str:
             .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .rating, .legend-row.active .rating {{ color: rgba(255, 255, 255, .82); }}
             .elo-line {{ fill: none; stroke: var(--navy); stroke-opacity: .15; stroke-width: 1.4; transition: stroke-opacity .12s ease, stroke-width .12s ease; }}
             .elo-line.hi {{ stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }}
+            .elo-label {{ fill: var(--text-subtle); font-size: 9.5px; font-variant-numeric: tabular-nums; }}
+            .elo-label.hi {{ fill: var(--orange); font-weight: 600; }}
             .cal-layout {{ display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: center; }}
             .cal-read p {{ margin: 0 0 12px; color: var(--text-muted); font-size: .92rem; line-height: 1.5; }}
             .cal-foot {{ color: var(--text-subtle) !important; font-size: .82rem !important; }}
@@ -2982,33 +2984,47 @@ def render_transparency() -> str:
 const MIN_CAL_GAMES = 25;
 
 function buildLineChartSvg(series, opts) {
-  // series: [{label, points:[{x,y}]}] — lines are styled/highlighted via CSS
-  // (.elo-line / .elo-line.hi); each path carries data-team = its series index.
-  const W = opts.width, H = opts.height, P = 40;
+  // series: [{label, abbr, points:[{x,y}]}] — lines styled/highlighted via CSS
+  // (.elo-line[.hi]); each path and its end-label carry data-team = the index.
+  const W = opts.width, H = opts.height;
+  const PL = 40, PR = 48, PT = 16, PB = 28;  // extra right pad for end-labels
   const xs = series.flatMap(s => s.points.map(p => p.x));
   const ys = series.flatMap(s => s.points.map(p => p.y));
   if (!xs.length) return '<p class="empty">No data yet.</p>';
   const xmin = Math.min(...xs), xmax = Math.max(...xs);
   const ymin = Math.min(...ys), ymax = Math.max(...ys);
-  const sx = x => P + (xmax === xmin ? 0 : (x - xmin) / (xmax - xmin)) * (W - 2*P);
-  const sy = y => H - P - (ymax === ymin ? 0 : (y - ymin) / (ymax - ymin)) * (H - 2*P);
+  const sx = x => PL + (xmax === xmin ? 0 : (x - xmin) / (xmax - xmin)) * (W - PL - PR);
+  const sy = y => H - PB - (ymax === ymin ? 0 : (y - ymin) / (ymax - ymin)) * (H - PT - PB);
   let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Team Elo ratings over time">`;
   for (let i = 0; i <= 4; i++) {
     const val = ymin + (ymax - ymin) * i / 4;
     const y = sy(val);
-    svg += `<line x1="${P}" y1="${y}" x2="${W-P}" y2="${y}" stroke="#ece6da"/>`;
-    svg += `<text x="${P-8}" y="${y+3}" text-anchor="end" font-size="10" fill="#8a929d">${Math.round(val)}</text>`;
+    svg += `<line x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}" stroke="#ece6da"/>`;
+    svg += `<text x="${PL-8}" y="${y+3}" text-anchor="end" font-size="10" fill="#8a929d">${Math.round(val)}</text>`;
   }
   for (const t of (opts.xTicks || [])) {
     const x = sx(t.x);
-    svg += `<line x1="${x}" y1="${P}" x2="${x}" y2="${H-P}" stroke="#f2ede3"/>`;
-    svg += `<text x="${x}" y="${H-P+15}" text-anchor="middle" font-size="10" fill="#8a929d">${t.label}</text>`;
+    svg += `<line x1="${x}" y1="${PT}" x2="${x}" y2="${H-PB}" stroke="#f2ede3"/>`;
+    svg += `<text x="${x}" y="${H-PB+15}" text-anchor="middle" font-size="10" fill="#8a929d">${t.label}</text>`;
   }
   for (let i = 0; i < series.length; i++) {
     const s = series[i];
     if (!s.points.length) continue;
     const d = s.points.map((p, k) => `${k ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ');
     svg += `<path class="elo-line" data-team="${i}" d="${d}"/>`;
+  }
+  // Direct end-of-line labels (abbreviation), nudged apart so they don't stack.
+  const ends = series
+    .map((s, i) => ({ i, abbr: s.abbr, y: sy(s.points[s.points.length - 1].y) }))
+    .sort((a, b) => a.y - b.y);
+  const gap = 11;
+  for (let k = 1; k < ends.length; k++) {
+    if (ends[k].y - ends[k - 1].y < gap) ends[k].y = ends[k - 1].y + gap;
+  }
+  const overflow = ends.length ? ends[ends.length - 1].y - (H - PB) : 0;
+  if (overflow > 0) for (const e of ends) e.y -= overflow;  // shift stack up to fit
+  for (const e of ends) {
+    svg += `<text class="elo-label" data-team="${e.i}" x="${W-PR+5}" y="${e.y.toFixed(1)}" dominant-baseline="middle">${escapeHtml(e.abbr)}</text>`;
   }
   svg += '</svg>';
   return svg;
@@ -3025,9 +3041,11 @@ async function loadElo() {
     if (!names.length) { mount.innerHTML = '<p class="empty">No Elo history yet.</p>'; return; }
     const allDates = [...new Set(names.flatMap(n => data.teams[n].map(p => p.date)))].sort();
     const dayIndex = Object.fromEntries(allDates.map((d, i) => [d, i]));
+    const abbrevs = data.abbrevs || {};
     const series = names.map(n => {
       const pts = data.teams[n];
-      return { label: n, last: pts[pts.length - 1].rating,
+      return { label: n, abbr: abbrevs[n] || n.slice(0, 3).toUpperCase(),
+               last: pts[pts.length - 1].rating,
                points: pts.map(p => ({ x: dayIndex[p.date], y: p.rating })) };
     });
     series.sort((a, b) => b.last - a.last);  // legend doubles as a standings list
@@ -3049,8 +3067,10 @@ async function loadElo() {
     // Hover/focus a team to lift its line out of the muted cloud.
     const setHi = (i, on) => {
       const path = svg && svg.querySelector(`.elo-line[data-team="${i}"]`);
+      const label = svg && svg.querySelector(`.elo-label[data-team="${i}"]`);
       const row = legend.querySelector(`.legend-row[data-team="${i}"]`);
       if (path) { path.classList.toggle('hi', on); if (on) path.parentNode.appendChild(path); }
+      if (label) { label.classList.toggle('hi', on); if (on) label.parentNode.appendChild(label); }
       if (row) row.classList.toggle('active', on);
     };
     legend.querySelectorAll('.legend-row').forEach(row => {

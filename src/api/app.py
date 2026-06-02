@@ -353,6 +353,7 @@ async def get_elo_history_endpoint(season: int = Query(default=None)):
             return {"season": season, "teams": {}}
         teams = get_teams_by_ids(session, {r.team_id for r in rows})
         out: dict[str, list[dict]] = {}
+        abbrevs: dict[str, str] = {}
         for r in rows:
             t = teams.get(r.team_id)
             if t is None:
@@ -360,7 +361,8 @@ async def get_elo_history_endpoint(season: int = Query(default=None)):
             out.setdefault(t.name, []).append(
                 {"date": r.date, "rating": round(r.rating, 1)}
             )
-        return {"season": season, "teams": out}
+            abbrevs.setdefault(t.name, t.abbreviation or "")
+        return {"season": season, "teams": out, "abbrevs": abbrevs}
     finally:
         session.close()
 
