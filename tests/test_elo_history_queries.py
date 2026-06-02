@@ -47,3 +47,25 @@ def test_get_returns_date_ascending(session):
     )
     dates = [r.date for r in get_elo_history(session, "2026")]
     assert dates == ["2026-05-10", "2026-05-15"]
+
+
+def test_advisory_lock_serializes_postgres_rewrites():
+    # On Postgres the season rewrite must take a transaction-scoped advisory
+    # lock before the delete-and-reinsert, so two overlapping daily-update
+    # runs can't interleave and duplicate/wipe rows (elo_history has no
+    # unique key). On SQLite (tests, no cross-connection concurrency) it must
+    # NOT emit the Postgres-only lock SQL.
+    from unittest.mock import MagicMock
+
+    from src.db.queries import _acquire_elo_history_lock
+
+    pg = MagicMock()
+    pg.get_bind.return_value.dialect.name = "postgresql"
+    _acquire_elo_history_lock(pg, "2026")
+    assert pg.execute.called
+    assert "pg_advisory_xact_lock" in str(pg.execute.call_args[0][0])
+
+    lite = MagicMock()
+    lite.get_bind.return_value.dialect.name = "sqlite"
+    _acquire_elo_history_lock(lite, "2026")
+    assert not lite.execute.called

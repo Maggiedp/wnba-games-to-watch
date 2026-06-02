@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -759,6 +759,25 @@ def upsert_daily_ranking(
     return ranking
 
 
+# Arbitrary namespace paired with the season year for the per-season
+# elo_history advisory lock, so it can't collide with other advisory locks.
+_ELO_HISTORY_LOCK_NS = 8412
+
+
+def _acquire_elo_history_lock(session: Session, season_prefix: str) -> None:
+    """Take a transaction-scoped Postgres advisory lock for one season's
+    elo_history rewrite so two overlapping daily-update runs serialize instead
+    of interleaving the delete-and-reinsert (the table has no unique key, so an
+    interleave could duplicate or wipe rows). Auto-released at COMMIT/ROLLBACK.
+    No-op on SQLite (tests), which has no cross-connection write concurrency."""
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(:ns, :yr)"),
+        {"ns": _ELO_HISTORY_LOCK_NS, "yr": int(season_prefix)},
+    )
+
+
 def replace_elo_history(
     session: Session,
     season_prefix: str,
@@ -769,7 +788,11 @@ def replace_elo_history(
     `rows` is (team_id, date, rating). The trajectory is a deterministic replay,
     so rewriting the whole season each run is idempotent and avoids stale rows.
     The delete is scoped by date prefix so other seasons are untouched.
+
+    Serialized per season via an advisory lock (see `_acquire_elo_history_lock`)
+    so overlapping daily-update runs can't interleave and corrupt the rewrite.
     """
+    _acquire_elo_history_lock(session, season_prefix)
     session.query(EloHistory).filter(EloHistory.date.like(f"{season_prefix}-%")).delete(
         synchronize_session=False
     )
