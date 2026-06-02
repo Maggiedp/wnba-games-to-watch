@@ -685,6 +685,9 @@ def get_calibration_pairs(
         r = rankings.get((g.date, g.team_a_id, g.team_b_id))
         if r is None or r.win_prob_a is None:
             continue
+        # Calibration is from team_a's (the home team's) perspective: one
+        # prediction per game. Home teams appear as both favorites and
+        # underdogs, so win_prob_a still spans the full 0..1 range.
         pairs.append((r.win_prob_a, g.winner_id == g.team_a_id))
     return pairs
 

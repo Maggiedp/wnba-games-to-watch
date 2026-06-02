@@ -1300,6 +1300,7 @@ _HOMEPAGE_HTML = f"""
             Team strength from <a href="https://www.espn.com/wnba/bpi" target="_blank" rel="noopener">ESPN BPI</a>.
             Schedule and broadcasters from ESPN. Updated daily.
             &middot; <button type="button" class="link-button" id="how-it-works-footer">How it works</button>
+            &middot; <a href="/transparency">Behind the numbers</a>
         </footer>
 
         <div class="modal-backdrop" id="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -2972,6 +2973,11 @@ function buildLineChartSvg(series, opts) {
     svg += `<line x1="${P}" y1="${y}" x2="${W-P}" y2="${y}" stroke="#eee"/>`;
     svg += `<text x="${P-6}" y="${y+3}" text-anchor="end" font-size="10" fill="#999">${Math.round(val)}</text>`;
   }
+  for (const t of (opts.xTicks || [])) {
+    const x = sx(t.x);
+    svg += `<line x1="${x}" y1="${P}" x2="${x}" y2="${H-P}" stroke="#f0f0f0"/>`;
+    svg += `<text x="${x}" y="${H-P+14}" text-anchor="middle" font-size="10" fill="#999">${t.label}</text>`;
+  }
   for (const s of series) {
     if (!s.points.length) continue;
     const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ');
@@ -2996,7 +3002,16 @@ async function loadElo() {
       label: n, color: PALETTE[i % PALETTE.length],
       points: data.teams[n].map(p => ({ x: dayIndex[p.date], y: p.rating })),
     }));
-    mount.innerHTML = buildLineChartSvg(series, { width: 860, height: 360 });
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const seenMonth = new Set();
+    const xTicks = [];
+    for (const d of allDates) {
+      const ym = d.slice(0, 7);            // "2026-05"
+      if (seenMonth.has(ym)) continue;
+      seenMonth.add(ym);
+      xTicks.push({ x: dayIndex[d], label: MONTHS[parseInt(d.slice(5, 7), 10) - 1] });
+    }
+    mount.innerHTML = buildLineChartSvg(series, { width: 860, height: 360, xTicks });
     legend.innerHTML = series.map(s =>
       `<span><i style="background:${s.color}"></i>${s.label}</span>`).join('');
   } catch (e) {
@@ -3004,7 +3019,6 @@ async function loadElo() {
   }
 }
 
-loadElo();
 function buildReliabilitySvg(buckets) {
   const W = 360, H = 360, P = 44;
   const sx = v => P + v * (W - 2*P);
@@ -3044,6 +3058,7 @@ async function loadCalibration() {
   }
 }
 
+loadElo();
 loadCalibration();
 </script>
 </body>
