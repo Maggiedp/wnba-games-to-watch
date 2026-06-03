@@ -2300,6 +2300,14 @@ _HOMEPAGE_HTML = f"""
                 badge.hidden = n === 0;
             }}
 
+            // Single point that keeps the panel's .open class and the toggle's
+            // aria-expanded in lockstep (mobile collapsible filter bar).
+            function setFilterPanel(open) {{
+                document.getElementById('filter-panel').classList.toggle('open', open);
+                document.getElementById('mobile-filter-toggle')
+                    .setAttribute('aria-expanded', open ? 'true' : 'false');
+            }}
+
             // ---------- Modal w/ focus trap ----------
             let lastFocused = null;
 
@@ -2350,14 +2358,9 @@ _HOMEPAGE_HTML = f"""
                     b.addEventListener('click', () => setSortBy(b.dataset.sort));
                 }});
                 document.getElementById('mobile-filter-toggle').addEventListener('click', () => {{
-                    const toggle = document.getElementById('mobile-filter-toggle');
-                    const open = document.getElementById('filter-panel').classList.toggle('open');
-                    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+                    setFilterPanel(!document.getElementById('filter-panel').classList.contains('open'));
                 }});
-                document.getElementById('filter-done').addEventListener('click', () => {{
-                    document.getElementById('filter-panel').classList.remove('open');
-                    document.getElementById('mobile-filter-toggle').setAttribute('aria-expanded', 'false');
-                }});
+                document.getElementById('filter-done').addEventListener('click', () => setFilterPanel(false));
 
                 document.querySelectorAll('.preset-pill').forEach(btn => {{
                     btn.addEventListener('click', () => setPreset(btn.dataset.preset));
