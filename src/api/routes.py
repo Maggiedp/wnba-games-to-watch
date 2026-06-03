@@ -539,6 +539,9 @@ _HOMEPAGE_HTML = f"""
             .sort-btn + .sort-btn {{ border-left: 1px solid var(--line); }}
             .sort-btn[aria-pressed="true"] {{ background: var(--navy); color: white; }}
             .sort-wrap {{ margin-left: auto; }}
+            .mobile-filter-bar {{ display: none; }}
+            .filter-done {{ display: none; }}
+            .filter-panel-inner {{ display: flex; flex-direction: column; gap: 10px; }}
 
             /* ---------- Main layout ---------- */
             .content {{
@@ -1177,7 +1180,7 @@ _HOMEPAGE_HTML = f"""
             @media (max-width: 768px) {{
                 .header {{ padding: 22px 18px 24px; }}
                 .header-inner {{ align-items: flex-start; }}
-                .controls-inner {{ padding: 12px 18px 14px; }}
+                .controls-inner {{ padding: 12px 18px 14px; gap: 0; }}
                 .content {{ padding: 22px 14px 12px; }}
                 .featured {{
                     grid-template-columns: 1fr;
@@ -1199,10 +1202,75 @@ _HOMEPAGE_HTML = f"""
                 .sort-wrap {{ margin-left: 0; }}
                 .games-table {{ display: none; }}
                 .games-cards {{ display: block; }}
+                .mobile-filter-bar {{
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 12px;
+                }}
+                .mobile-filter-toggle {{
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 8px 14px;
+                    border: 1px solid var(--line);
+                    border-radius: 6px;
+                    background: var(--surface);
+                    color: var(--text);
+                    font-family: var(--body);
+                    font-size: 0.84rem;
+                    font-weight: 600;
+                    cursor: pointer;
+                }}
+                .mobile-filter-toggle[aria-expanded="true"] {{ border-color: var(--navy); color: var(--navy); }}
+                .mobile-filter-icon {{ font-size: 0.95rem; line-height: 1; }}
+                .filter-badge {{
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    min-width: 18px;
+                    height: 18px;
+                    padding: 0 5px;
+                    border-radius: 999px;
+                    background: var(--orange);
+                    color: white;
+                    font-size: 0.68rem;
+                    font-weight: 700;
+                }}
+                .filter-badge[hidden] {{ display: none; }}
+                .filter-panel {{
+                    display: grid;
+                    grid-template-rows: 0fr;
+                    transition: grid-template-rows 0.22s ease;
+                }}
+                .filter-panel.open {{ grid-template-rows: 1fr; }}
+                .filter-panel-inner {{
+                    overflow: hidden;
+                    min-height: 0;
+                    visibility: hidden;
+                    transition: visibility 0.22s;
+                }}
+                .filter-panel.open .filter-panel-inner {{ visibility: visible; padding-top: 12px; }}
+                .filter-panel .sort-wrap {{ display: none; }}
+                .filter-done {{
+                    display: inline-block;
+                    align-self: flex-start;
+                    margin-top: 2px;
+                    padding: 9px 22px;
+                    border: none;
+                    border-radius: 6px;
+                    background: var(--navy);
+                    color: white;
+                    font-family: var(--body);
+                    font-size: 0.86rem;
+                    font-weight: 600;
+                    cursor: pointer;
+                }}
             }}
 
             @media (prefers-reduced-motion: reduce) {{
                 .skeleton-bar {{ animation: none; }}
+                .filter-panel, .filter-panel-inner {{ transition: none; }}
             }}
         </style>
     </head>
@@ -1238,33 +1306,50 @@ _HOMEPAGE_HTML = f"""
         <div id="controls-sentinel" aria-hidden="true"></div>
         <div class="controls">
             <div class="controls-inner">
-                <div class="filter-row">
-                    <span class="filter-label">Networks</span>
-                    <div class="pill-group" id="network-pills"></div>
+                <div class="mobile-filter-bar">
+                    <button type="button" id="mobile-filter-toggle" class="mobile-filter-toggle"
+                            aria-expanded="false" aria-controls="filter-panel">
+                        <span class="mobile-filter-icon" aria-hidden="true">&#9776;</span>
+                        Filters
+                        <span class="filter-badge" id="filter-badge" hidden></span>
+                    </button>
+                    <div class="sort-toggle" role="group" aria-label="Sort games">
+                        <button class="sort-btn" data-sort="date" type="button" aria-pressed="true">Date</button>
+                        <button class="sort-btn" data-sort="score" type="button" aria-pressed="false">Overall</button>
+                    </div>
                 </div>
-                <div class="filter-row">
-                    <span class="filter-label">Date</span>
-                    <div class="pill-group" id="preset-pills">
-                        <button class="pill preset-pill" data-preset="today" type="button" aria-pressed="false">Today</button>
-                        <button class="pill preset-pill" data-preset="7" type="button" aria-pressed="false">Next 7 days</button>
-                        <button class="pill preset-pill" data-preset="30" type="button" aria-pressed="false">Next 30 days</button>
-                        <button class="pill preset-pill" data-preset="all" type="button" aria-pressed="true">All</button>
-                    </div>
-                    <div class="filter-group">
-                        <input type="date" id="from-date" aria-label="From date">
-                        <span class="date-arrow" aria-hidden="true">&rarr;</span>
-                        <input type="date" id="to-date" aria-label="To date">
-                    </div>
-                    <div class="filter-group">
-                        <label for="team-filter" class="filter-label">Team</label>
-                        <select id="team-filter"><option value="">All</option></select>
-                    </div>
-                    <div class="filter-group sort-wrap">
-                        <span class="filter-label">Sort</span>
-                        <div class="sort-toggle" role="group" aria-label="Sort games">
-                            <button class="sort-btn" id="sort-date" type="button" aria-pressed="true">Date</button>
-                            <button class="sort-btn" id="sort-score" type="button" aria-pressed="false">Overall</button>
+                <div class="filter-panel" id="filter-panel">
+                    <div class="filter-panel-inner">
+                        <div class="filter-row">
+                            <span class="filter-label">Networks</span>
+                            <div class="pill-group" id="network-pills"></div>
                         </div>
+                        <div class="filter-row">
+                            <span class="filter-label">Date</span>
+                            <div class="pill-group" id="preset-pills">
+                                <button class="pill preset-pill" data-preset="today" type="button" aria-pressed="false">Today</button>
+                                <button class="pill preset-pill" data-preset="7" type="button" aria-pressed="false">Next 7 days</button>
+                                <button class="pill preset-pill" data-preset="30" type="button" aria-pressed="false">Next 30 days</button>
+                                <button class="pill preset-pill" data-preset="all" type="button" aria-pressed="true">All</button>
+                            </div>
+                            <div class="filter-group">
+                                <input type="date" id="from-date" aria-label="From date">
+                                <span class="date-arrow" aria-hidden="true">&rarr;</span>
+                                <input type="date" id="to-date" aria-label="To date">
+                            </div>
+                            <div class="filter-group">
+                                <label for="team-filter" class="filter-label">Team</label>
+                                <select id="team-filter"><option value="">All</option></select>
+                            </div>
+                            <div class="filter-group sort-wrap">
+                                <span class="filter-label">Sort</span>
+                                <div class="sort-toggle" role="group" aria-label="Sort games">
+                                    <button class="sort-btn" data-sort="date" type="button" aria-pressed="true">Date</button>
+                                    <button class="sort-btn" data-sort="score" type="button" aria-pressed="false">Overall</button>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" id="filter-done" class="filter-done">Done</button>
                     </div>
                 </div>
             </div>
@@ -1603,6 +1688,7 @@ _HOMEPAGE_HTML = f"""
                 const toDate = document.getElementById('to-date').value;
                 const team = document.getElementById('team-filter').value;
                 const inScope = (g) => matchesScope(g, team);
+                updateFilterBadge();
 
                 // Top pick is computed against the next 7 days regardless of the
                 // user's date range, but suppressed below when it falls outside
@@ -2191,9 +2277,35 @@ _HOMEPAGE_HTML = f"""
 
             function setSortBy(mode) {{
                 sortBy = mode;
-                document.getElementById('sort-date').setAttribute('aria-pressed', mode === 'date' ? 'true' : 'false');
-                document.getElementById('sort-score').setAttribute('aria-pressed', mode === 'score' ? 'true' : 'false');
+                // Two sort toggles exist (desktop in-panel + mobile slim bar);
+                // keep both in sync from the single `sortBy` source of truth.
+                document.querySelectorAll('[data-sort]').forEach(b => {{
+                    b.setAttribute('aria-pressed', b.dataset.sort === mode ? 'true' : 'false');
+                }});
                 applyFilters();
+            }}
+
+            function updateFilterBadge() {{
+                const fromDate = document.getElementById('from-date').value;
+                const toDate = document.getElementById('to-date').value;
+                const team = document.getElementById('team-filter').value;
+                const allPressed = document.querySelector('.preset-pill[data-preset="all"]')
+                    .getAttribute('aria-pressed') === 'true';
+                let n = 0;
+                if (selectedNetworks.size > 0) n++;
+                if (team) n++;
+                if (!allPressed || fromDate || toDate) n++;
+                const badge = document.getElementById('filter-badge');
+                badge.textContent = n;
+                badge.hidden = n === 0;
+            }}
+
+            // Single point that keeps the panel's .open class and the toggle's
+            // aria-expanded in lockstep (mobile collapsible filter bar).
+            function setFilterPanel(open) {{
+                document.getElementById('filter-panel').classList.toggle('open', open);
+                document.getElementById('mobile-filter-toggle')
+                    .setAttribute('aria-expanded', open ? 'true' : 'false');
             }}
 
             // ---------- Modal w/ focus trap ----------
@@ -2242,8 +2354,13 @@ _HOMEPAGE_HTML = f"""
                 document.getElementById('from-date').addEventListener('change', () => {{ clearActivePreset(); applyFilters(); }});
                 document.getElementById('to-date').addEventListener('change', () => {{ clearActivePreset(); applyFilters(); }});
                 document.getElementById('team-filter').addEventListener('change', applyFilters);
-                document.getElementById('sort-date').addEventListener('click', () => setSortBy('date'));
-                document.getElementById('sort-score').addEventListener('click', () => setSortBy('score'));
+                document.querySelectorAll('[data-sort]').forEach(b => {{
+                    b.addEventListener('click', () => setSortBy(b.dataset.sort));
+                }});
+                document.getElementById('mobile-filter-toggle').addEventListener('click', () => {{
+                    setFilterPanel(!document.getElementById('filter-panel').classList.contains('open'));
+                }});
+                document.getElementById('filter-done').addEventListener('click', () => setFilterPanel(false));
 
                 document.querySelectorAll('.preset-pill').forEach(btn => {{
                     btn.addEventListener('click', () => setPreset(btn.dataset.preset));
