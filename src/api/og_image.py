@@ -45,7 +45,7 @@ def _fit_font(
     weight: float,
     min_size: int = 28,
 ) -> ImageFont.FreeTypeFont:
-    """Largest weight-`weight` font whose `text` width fits `max_width`."""
+    """A weight-`weight` font at the largest tried size whose `text` width fits `max_width`."""
     size = start_size
     while size > min_size:
         font = _load_font(size, weight)
