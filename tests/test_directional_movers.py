@@ -1,6 +1,8 @@
 from src.scoring.monte_carlo import (
     compute_directional_movers_from_matrix,
     compute_importance_from_matrix,
+    compute_postseason_movers_from_matrix,
+    compute_postseason_swing_from_matrix,
 )
 
 
@@ -51,4 +53,53 @@ def test_directional_sum_matches_existing_swing():
     expected = compute_importance_from_matrix(
         outcome_matrix, playoff_sets, [("Sun", "Sky")], team_names
     )[0]
+    assert abs(directional_sum - expected) < 1e-9
+
+
+def test_postseason_movers_basic_split():
+    # 4 sims. Focal game ("f", 1): higher won in 0,1; lower won in 2,3.
+    bracket_outcomes = [
+        {("f", 1): True},
+        {("f", 1): True},
+        {("f", 1): False},
+        {("f", 1): False},
+    ]
+    champions = ["Aces", "Aces", "Liberty", "Liberty"]
+    movers = compute_postseason_movers_from_matrix(
+        "f", 1, bracket_outcomes, champions, ["Aces", "Liberty"]
+    )
+    by_team = {m["team"]: m for m in movers}
+    assert by_team["Aces"]["if_higher"] == 1.0 and by_team["Aces"]["if_lower"] == 0.0
+    assert (
+        by_team["Liberty"]["if_higher"] == 0.0 and by_team["Liberty"]["if_lower"] == 1.0
+    )
+
+
+def test_postseason_movers_empty_bucket():
+    bracket_outcomes = [{("f", 1): True}, {("f", 1): True}]
+    champions = ["Aces", "Aces"]
+    assert (
+        compute_postseason_movers_from_matrix(
+            "f", 1, bracket_outcomes, champions, ["Aces"]
+        )
+        == []
+    )
+
+
+def test_postseason_sum_matches_existing_swing():
+    bracket_outcomes = [
+        {("sf1", 2): True},
+        {("sf1", 2): False},
+        {("sf1", 2): True},
+        {("sf1", 2): False},
+    ]
+    champions = ["Aces", "Liberty", "Aces", None]
+    team_names = ["Aces", "Liberty"]
+    movers = compute_postseason_movers_from_matrix(
+        "sf1", 2, bracket_outcomes, champions, team_names, top_n=99, min_delta=0.0
+    )
+    directional_sum = sum(abs(m["if_higher"] - m["if_lower"]) for m in movers)
+    expected = compute_postseason_swing_from_matrix(
+        "sf1", 2, bracket_outcomes, champions, team_names
+    )
     assert abs(directional_sum - expected) < 1e-9

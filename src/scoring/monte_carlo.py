@@ -403,3 +403,47 @@ def compute_postseason_swing_from_matrix(
     for team in team_names:
         swing += abs(champ_rate(higher_indices, team) - champ_rate(lower_indices, team))
     return swing
+
+
+def compute_postseason_movers_from_matrix(
+    focal_slot: str,
+    focal_game_num: int,
+    bracket_outcomes: list[dict[tuple[str, int], bool]],
+    champions: list[str | None],
+    team_names: list[str],
+    top_n: int = 3,
+    min_delta: float = 0.03,
+) -> list[dict]:
+    """Per-team directional championship-odds movers for one bracket game.
+
+    Partitions sims by who won the focal bracket game (same split as
+    ``compute_postseason_swing_from_matrix``), then computes
+    P(champion | higher won) and P(champion | lower won) for each team.
+    Returns up to ``top_n`` teams by ``|if_higher - if_lower|`` clearing
+    ``min_delta``, sorted descending. Returns ``[]`` if either bucket is empty.
+    Each dict: ``{"team": str, "if_higher": float, "if_lower": float}``; the
+    caller maps higher/lower to the matchup's team_a/team_b for display.
+    """
+    higher_indices: list[int] = []
+    lower_indices: list[int] = []
+    for i, outcomes in enumerate(bracket_outcomes):
+        played = outcomes.get((focal_slot, focal_game_num))
+        if played is True:
+            higher_indices.append(i)
+        elif played is False:
+            lower_indices.append(i)
+    if not higher_indices or not lower_indices:
+        return []
+
+    def champ_rate(indices: list[int], team: str) -> float:
+        return sum(1 for i in indices if champions[i] == team) / len(indices)
+
+    movers: list[dict] = []
+    for team in team_names:
+        rate_h = champ_rate(higher_indices, team)
+        rate_l = champ_rate(lower_indices, team)
+        if abs(rate_h - rate_l) >= min_delta:
+            movers.append({"team": team, "if_higher": rate_h, "if_lower": rate_l})
+
+    movers.sort(key=lambda m: abs(m["if_higher"] - m["if_lower"]), reverse=True)
+    return movers[:top_n]
