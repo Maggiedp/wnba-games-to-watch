@@ -3,7 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.api.routes import _coerce_fraction, _importance_movers_html
+from src.api.routes import (
+    _coerce_fraction,
+    _importance_movers_html,
+    _short_team_name,
+)
 
 
 def test_playoffs_movers_render():
@@ -18,10 +22,12 @@ def test_playoffs_movers_render():
         )
     )
     html = _importance_movers_html(ranking)
-    assert "Connecticut Sun" in html
+    assert "Connecticut Sun" in html  # mover name stays full
     assert "playoff odds" in html
     assert "58%" in html and "41%" in html
-    assert "Seattle Storm" in html and "Chicago Sky" in html
+    # "if <team> wins" uses the city shorthand, not the full name.
+    assert "if Seattle wins" in html and "if Chicago wins" in html
+    assert "Seattle Storm" not in html
 
 
 def test_championship_wording():
@@ -104,6 +110,16 @@ def test_mixed_valid_and_invalid_movers_keeps_valid_only():
     )
     html = _importance_movers_html(ranking)
     assert "Good" in html and "Bad" not in html
+
+
+def test_short_team_name_drops_nickname():
+    assert _short_team_name("New York Liberty") == "New York"
+    assert _short_team_name("Connecticut Sun") == "Connecticut"
+    assert _short_team_name("Las Vegas Aces") == "Las Vegas"
+    assert _short_team_name("Golden State Valkyries") == "Golden State"
+    # Single-word / empty input is returned unchanged.
+    assert _short_team_name("Storm") == "Storm"
+    assert _short_team_name("") == ""
 
 
 def test_coerce_fraction_rejects_non_numbers_and_bools():

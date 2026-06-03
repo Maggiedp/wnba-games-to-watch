@@ -2721,6 +2721,17 @@ def _coerce_fraction(value) -> float | None:
     return value
 
 
+def _short_team_name(name: str) -> str:
+    """Drop the nickname (last word) so "New York Liberty" -> "New York".
+
+    WNBA team names are "<City> <Nickname>"; the city alone reads cleanly in
+    the repeated "if <team> wins" clauses next to the full bold mover name.
+    Returns the full string unchanged for single-word or empty input.
+    """
+    parts = str(name).split()
+    return " ".join(parts[:-1]) if len(parts) > 1 else str(name)
+
+
 def _importance_movers_html(ranking) -> str:
     """Render the 'What's at stake' directional-odds block, or '' when absent.
 
@@ -2746,8 +2757,8 @@ def _importance_movers_html(ranking) -> str:
     odds_label = (
         "title odds" if data.get("metric") == "championship" else "playoff odds"
     )
-    a_team = escape_html(data.get("if_a_team", "Team A"))
-    b_team = escape_html(data.get("if_b_team", "Team B"))
+    a_team = escape_html(_short_team_name(data.get("if_a_team", "Team A")))
+    b_team = escape_html(_short_team_name(data.get("if_b_team", "Team B")))
 
     lines = []
     for m in movers:
