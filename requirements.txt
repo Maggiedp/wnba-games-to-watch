@@ -9,3 +9,4 @@ beautifulsoup4==4.12.2
 pytest==7.4.3
 tzdata==2024.1
 psycopg[binary]==3.2.4
+Pillow==12.2.0
