@@ -12,6 +12,10 @@ import os
 from datetime import datetime
 
 from PIL import Image, ImageDraw, ImageFont
+from sqlalchemy.orm import Session
+
+from src.db.queries import get_teams_by_ids
+from src.db.schema import DailyRanking, Game
 
 WIDTH, HEIGHT = 1200, 630
 
@@ -113,3 +117,35 @@ def render_game_card(
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def render_game_card_png(session: Session, espn_id: str) -> bytes | None:
+    """Fetch a game by espn_id and render its social card, or None if unknown."""
+    game = session.query(Game).filter(Game.espn_id == espn_id).first()
+    if game is None:
+        return None
+
+    teams = get_teams_by_ids(session, {game.team_a_id, game.team_b_id})
+    team_a = teams.get(game.team_a_id)
+    team_b = teams.get(game.team_b_id)
+    if team_a is None or team_b is None:
+        return None
+
+    ranking = (
+        session.query(DailyRanking)
+        .filter(
+            DailyRanking.date == game.date,
+            DailyRanking.team_a_id == game.team_a_id,
+            DailyRanking.team_b_id == game.team_b_id,
+        )
+        .first()
+    )
+    overall = ranking.overall_score if ranking is not None else None
+
+    return render_game_card(
+        name_a=team_a.name,
+        name_b=team_b.name,
+        overall=overall,
+        date_str=game.date,
+        broadcaster=game.broadcaster or "",
+    )

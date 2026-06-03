@@ -68,3 +68,54 @@ def test_scoreless_card_omits_methodology_footer():
     # so the bottom-right region must differ between the two cards.
     box = (700, 540, 1180, 600)  # bottom-right footer area
     assert scored.crop(box).tobytes() != scoreless.crop(box).tobytes()
+
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from src.api.og_image import render_game_card_png
+from src.db.queries import upsert_daily_ranking, upsert_game, upsert_team
+from src.db.schema import Base
+
+
+@pytest.fixture
+def session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def team_ids(session):
+    a = upsert_team(session, name="Storm", abbreviation="SEA", logo_url="", bpi_rating=0.0)
+    b = upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    return a.id, b.id
+
+
+def test_render_game_card_png_unknown_id_returns_none(session):
+    assert render_game_card_png(session, "does-not-exist") is None
+
+
+def test_render_game_card_png_scored_returns_png_bytes(session, team_ids):
+    a_id, b_id = team_ids
+    upsert_game(session, team_a_id=a_id, team_b_id=b_id, date="2026-06-04",
+                time="7:00 PM ET", broadcaster="ESPN", espn_id="401234")
+    upsert_daily_ranking(session, date="2026-06-04", team_a_id=a_id, team_b_id=b_id,
+                         quality_score=50.0, importance_score=0.3, overall_score=87.0,
+                         broadcaster="ESPN")
+    png = render_game_card_png(session, "401234")
+    assert isinstance(png, bytes) and png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_render_game_card_png_scoreless_game_renders(session, team_ids):
+    a_id, b_id = team_ids
+    upsert_game(session, team_a_id=a_id, team_b_id=b_id, date="2026-06-04",
+                time="", broadcaster="", espn_id="401999")
+    # No daily_ranking row -> not simulated.
+    png = render_game_card_png(session, "401999")
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
