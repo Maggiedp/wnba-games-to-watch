@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Daily update job for WNBA Games to Watch."""
 
+import json
 import logging
 import random
 import sys
@@ -57,7 +58,9 @@ from src.scoring.importance import (
 )
 from src.scoring.monte_carlo import (
     RoundProbabilities,
+    compute_directional_movers_from_matrix,
     compute_importance_from_matrix,
+    compute_postseason_movers_from_matrix,
     run_monte_carlo_simulation,
     to_team_standings,
 )
@@ -692,6 +695,88 @@ def _importance_for_game(
     )
 
 
+def _importance_detail_for_game(
+    game: dict,
+    outcome_matrix: list[list[bool | None]],
+    playoff_sets: list[set[str]],
+    remaining_event_index: dict[str, int],
+    bracket_state=None,
+    bracket_outcomes: list[dict[tuple[str, int], bool]] | None = None,
+    champions: list[str | None] | None = None,
+    team_names: list[str] | None = None,
+    postseason_slot_lookup: dict[str, tuple[str, int]] | None = None,
+) -> str | None:
+    """Build the directional-movers JSON payload for one upcoming game.
+
+    Regular season: top playoff-odds movers from the MC outcome matrix.
+    Postseason: top championship-odds movers from bracket outcomes, with the
+    slot's higher/lower seed mapped onto the matchup's team_a/team_b.
+    Returns None for preseason, non-simulated games, games that can't be
+    located in the sim universe, or when no team's odds clear the threshold.
+    """
+    season_type = game.get("season_type", 2)
+    team_a, team_b = game["team_a"], game["team_b"]
+    if season_type == 1:
+        return None
+
+    if season_type == 3:
+        if (
+            bracket_state is None
+            or bracket_outcomes is None
+            or champions is None
+            or team_names is None
+            or postseason_slot_lookup is None
+        ):
+            return None
+        located = postseason_slot_lookup.get(game.get("event_id", ""))
+        if located is None:
+            return None
+        slot_id, game_num = located
+        raw = compute_postseason_movers_from_matrix(
+            slot_id, game_num, bracket_outcomes, champions, team_names
+        )
+        if not raw:
+            return None
+        slot = bracket_state[slot_id]
+        a_is_higher = team_a == slot.higher
+        movers = [
+            {
+                "team": m["team"],
+                "if_a": m["if_higher"] if a_is_higher else m["if_lower"],
+                "if_b": m["if_lower"] if a_is_higher else m["if_higher"],
+            }
+            for m in raw
+        ]
+        return json.dumps(
+            {
+                "metric": "championship",
+                "if_a_team": team_a,
+                "if_b_team": team_b,
+                "movers": movers,
+            }
+        )
+
+    if team_names is None:
+        return None
+    game_index = remaining_event_index.get(game.get("event_id", ""))
+    if game_index is None:
+        return None
+
+    movers = compute_directional_movers_from_matrix(
+        outcome_matrix, playoff_sets, game_index, team_names
+    )
+    if not movers:
+        return None
+    return json.dumps(
+        {
+            "metric": "playoffs",
+            "if_a_team": team_a,
+            "if_b_team": team_b,
+            "movers": movers,
+        }
+    )
+
+
 def compute_daily_scores(
     session, games: list[dict], standings: dict
 ) -> tuple[list[dict], RoundProbabilities]:
@@ -824,6 +909,17 @@ def compute_daily_scores(
             team_names=team_names,
             postseason_slot_lookup=postseason_slot_lookup,
         )
+        importance_detail = _importance_detail_for_game(
+            game,
+            outcome_matrix,
+            playoff_sets,
+            remaining_event_index,
+            bracket_state=bracket_state,
+            bracket_outcomes=bracket_outcomes,
+            champions=champions,
+            team_names=team_names,
+            postseason_slot_lookup=postseason_slot_lookup,
+        )
 
         importance_for_overall = importance if importance is not None else 0.0
         overall = quality * 0.6 + importance_for_overall * 0.4
@@ -843,6 +939,7 @@ def compute_daily_scores(
                 "overall": overall,
                 "broadcaster": game.get("broadcaster", ""),
                 "win_prob_a": win_prob_a,
+                "importance_detail": importance_detail,
             }
         )
 
@@ -870,6 +967,7 @@ def store_daily_rankings(session, scored_games: list[dict]) -> None:
             overall_score=game["overall"],
             broadcaster=game.get("broadcaster", ""),
             win_prob_a=game.get("win_prob_a"),
+            importance_detail=game.get("importance_detail"),
         )
         stored += 1
 

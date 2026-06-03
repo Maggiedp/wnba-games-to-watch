@@ -8,6 +8,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     create_engine,
     func,
@@ -86,6 +87,7 @@ class DailyRanking(Base):
     overall_score = Column(Float, default=0.0)
     broadcaster = Column(String(50), default="")
     win_prob_a = Column(Float, nullable=True)
+    importance_detail = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     __table_args__ = (
@@ -345,6 +347,7 @@ def init_db():
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_semis_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_finals_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN win_championship_prob FLOAT",
+                "ALTER TABLE daily_rankings ADD COLUMN importance_detail TEXT",
             ]:
                 try:
                     conn.execute(text(stmt))
@@ -450,6 +453,12 @@ def init_db():
                 text(
                     "ALTER TABLE playoff_probabilities ADD COLUMN IF NOT EXISTS "
                     "win_championship_prob FLOAT"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE daily_rankings ADD COLUMN IF NOT EXISTS "
+                    "importance_detail TEXT"
                 )
             )
             _dedupe_games_by_espn_id(conn)

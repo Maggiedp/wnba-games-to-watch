@@ -3,6 +3,7 @@
 import html as _html
 import json
 import logging
+import math
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
@@ -2577,6 +2578,13 @@ _DETAIL_STYLE = """
             .mini-bar-fill.quality { background: linear-gradient(90deg, #ff6b00, #ff9540); }
             .mini-bar-fill.importance { background: linear-gradient(90deg, #2b3a52, #5a6573); }
             .breakdown-text { color: var(--text-muted); font-size: 0.98rem; }
+            .importance-movers { margin-top: 12px; }
+            .importance-movers .movers-heading {
+                font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em;
+                color: var(--text-muted); margin: 0 0 4px;
+            }
+            .importance-movers ul { margin: 0; padding-left: 18px; }
+            .importance-movers li { font-size: 0.9rem; line-height: 1.5; }
 
             /* ---------- How this is scored ---------- */
             details.scored {
@@ -2699,6 +2707,73 @@ def _detail_win_prob_section(ranking, team_a, team_b) -> str:
                 <p class="wp-note">{note}</p>"""
 
 
+def _coerce_fraction(value) -> float | None:
+    """Return value as a finite float, or None if it isn't a usable number.
+
+    Rejects bools, None, strings, and NaN/inf so a schema-skewed
+    importance_detail row degrades gracefully instead of raising mid-render.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    if not math.isfinite(value):
+        return None
+    return value
+
+
+def _importance_movers_html(ranking) -> str:
+    """Render the 'What's at stake' directional-odds block, or '' when absent.
+
+    Reads ranking.importance_detail (JSON written by daily_update). Each mover
+    line shows the team's odds under each game outcome. Returns '' for missing,
+    malformed, or empty payloads so the caller falls back to the bar + blurb.
+    """
+    raw = getattr(ranking, "importance_detail", None)
+    if not raw:
+        return ""
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return ""
+    # The payload is server-authored, but a schema-skewed or hand-edited row
+    # must degrade to the bar+blurb fallback, never 500 the detail page.
+    if not isinstance(data, dict):
+        return ""
+    movers = data.get("movers")
+    if not isinstance(movers, list):
+        return ""
+
+    odds_label = (
+        "title odds" if data.get("metric") == "championship" else "playoff odds"
+    )
+    a_team = escape_html(data.get("if_a_team", "Team A"))
+    b_team = escape_html(data.get("if_b_team", "Team B"))
+
+    lines = []
+    for m in movers:
+        if not isinstance(m, dict):
+            continue
+        if_a = _coerce_fraction(m.get("if_a"))
+        if_b = _coerce_fraction(m.get("if_b"))
+        if if_a is None or if_b is None:
+            continue
+        team = escape_html(m.get("team", ""))
+        if_a_pct = max(0.0, min(1.0, if_a)) * 100
+        if_b_pct = max(0.0, min(1.0, if_b)) * 100
+        lines.append(
+            f"<li><strong>{team}</strong> {odds_label}: "
+            f"<strong>{if_a_pct:.0f}%</strong> if {a_team} wins → "
+            f"<strong>{if_b_pct:.0f}%</strong> if {b_team} wins</li>"
+        )
+    if not lines:
+        return ""
+    return (
+        '<div class="importance-movers">'
+        '<p class="movers-heading">What\'s at stake</p>'
+        f"<ul>{''.join(lines)}</ul></div>"
+    )
+
+
 def _detail_breakdown_section(ranking, team_a, team_b) -> str:
     """Quality (orange) + Importance (navy) mini-bars with blurbs."""
     if ranking is None:
@@ -2739,6 +2814,7 @@ def _detail_breakdown_section(ranking, team_a, team_b) -> str:
             f'<span class="mini-bar-fill importance" style="width: {i_pct:.1f}%"></span></span>'
         )
     i_text = escape_html(blurbs.importance_blurb(importance))
+    movers_html = _importance_movers_html(ranking)
 
     return f"""
                 <div class="breakdown-block">
@@ -2750,6 +2826,7 @@ def _detail_breakdown_section(ranking, team_a, team_b) -> str:
                     <span class="mini-bar-label">{i_label}</span>
                     {i_track}
                     <p class="breakdown-text">{i_text}</p>
+                    {movers_html}
                 </div>"""
 
 

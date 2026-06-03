@@ -264,6 +264,70 @@ def test_upsert_daily_ranking_updates_win_prob(session, team_ids):
     assert records[0].win_prob_a == pytest.approx(0.62)
 
 
+def test_upsert_daily_ranking_stores_importance_detail(session, team_ids):
+    """importance_detail is stored and retrieved when provided."""
+    a_id, b_id = team_ids
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-03",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.4,
+        overall_score=46.0,
+        broadcaster="ESPN",
+        importance_detail='{"metric":"playoffs","movers":[]}',
+    )
+    fetched = session.query(DailyRanking).filter_by(id=ranking.id).one()
+    assert fetched.importance_detail == '{"metric":"playoffs","movers":[]}'
+
+
+def test_upsert_daily_ranking_importance_detail_defaults_to_none(session, team_ids):
+    """importance_detail is NULL when not provided (backward-compatible default)."""
+    a_id, b_id = team_ids
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-04",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=None,
+        overall_score=30.0,
+        broadcaster="",
+    )
+    fetched = session.query(DailyRanking).filter_by(id=ranking.id).one()
+    assert fetched.importance_detail is None
+
+
+def test_upsert_daily_ranking_updates_importance_detail(session, team_ids):
+    """Re-upserting an existing ranking with a different importance_detail overwrites it."""
+    a_id, b_id = team_ids
+    upsert_daily_ranking(
+        session,
+        date="2026-06-05",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.4,
+        overall_score=46.0,
+        broadcaster="ESPN",
+        importance_detail='{"metric":"playoffs","movers":[]}',
+    )
+    ranking = upsert_daily_ranking(
+        session,
+        date="2026-06-05",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.4,
+        overall_score=46.0,
+        broadcaster="ESPN",
+        importance_detail='{"metric":"title","movers":[{"team":"SEA"}]}',
+    )
+    fetched = session.query(DailyRanking).filter_by(id=ranking.id).one()
+    assert fetched.importance_detail == '{"metric":"title","movers":[{"team":"SEA"}]}'
+
+
 def test_upsert_game_stores_espn_id(session, team_ids):
     a_id, b_id = team_ids
     game = upsert_game(
