@@ -724,6 +724,7 @@ def upsert_daily_ranking(
     overall_score: float,
     broadcaster: str,
     win_prob_a: float | None = None,
+    importance_detail: str | None = None,
 ) -> DailyRanking:
     ranking = (
         session.query(DailyRanking)
@@ -740,6 +741,7 @@ def upsert_daily_ranking(
         ranking.overall_score = overall_score
         ranking.broadcaster = broadcaster
         ranking.win_prob_a = win_prob_a
+        ranking.importance_detail = importance_detail
     else:
         ranking = DailyRanking(
             date=date,
@@ -750,6 +752,7 @@ def upsert_daily_ranking(
             overall_score=overall_score,
             broadcaster=broadcaster,
             win_prob_a=win_prob_a,
+            importance_detail=importance_detail,
         )
         session.add(ranking)
     session.commit()
