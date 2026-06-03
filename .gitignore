@@ -44,3 +44,7 @@ CODEX_CONTEXT.md
 INTERVIEW_NOTES.md
 docs/
 .superpowers/
+
+# Claude Code local runtime state (lock files, etc.) — never track
+.claude/scheduled_tasks.lock
+.claude/*.lock
