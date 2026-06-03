@@ -3120,6 +3120,207 @@ def test_backfill_legacy_preseason_excludes_regular_season_dates(session, team_i
         )
 
 
+def test_backfill_legacy_espn_ids_recovers_in_window(session, team_ids, monkeypatch):
+    """Legacy regular-season rows (NULL espn_id, completed, in the 2026-05-08
+    through 2026-05-12 window) get their espn_id recovered by matching ESPN's
+    schedule on (date, unordered team pair). The match is orientation-robust,
+    rows outside the window or already carrying an espn_id are untouched, a row
+    with no ESPN match is left NULL, and a second run is a no-op."""
+    import scripts.backfill_legacy_espn_ids as mod
+    from scripts.backfill_legacy_espn_ids import backfill_legacy_espn_ids
+
+    a_id, b_id = team_ids
+
+    # Should match: completed, NULL espn_id, in window.
+    in_window = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-10",
+        time="",
+        broadcaster="ION",
+        espn_id=None,
+        season_type=None,
+        winner_id=a_id,
+        final_score_a=88,
+        final_score_b=80,
+    )
+    # In window but ESPN has no entry for it -> stays NULL (no guessing).
+    unmatched = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-11",
+        time="",
+        broadcaster="ION",
+        espn_id=None,
+        season_type=None,
+        winner_id=b_id,
+        final_score_a=70,
+        final_score_b=75,
+    )
+    # Out of window (later date).
+    out_of_window = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-20",
+        time="",
+        broadcaster="ESPN",
+        espn_id=None,
+        season_type=None,
+        winner_id=a_id,
+        final_score_a=90,
+        final_score_b=85,
+    )
+    # Already has an espn_id: not a candidate.
+    already_set = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-09",
+        time="",
+        broadcaster="ESPN",
+        espn_id="401900001",
+        season_type=2,
+        winner_id=a_id,
+        final_score_a=92,
+        final_score_b=88,
+    )
+    session.add_all([in_window, unmatched, out_of_window, already_set])
+    session.commit()
+
+    # ESPN returns the 05-10 game with teams in the opposite order to exercise
+    # the unordered-pair match. No entry for 05-11 (the unmatched row).
+    def fake_fetch(start, end):
+        return [
+            {
+                "event_id": "401856900",
+                "team_a": "Team B",
+                "team_b": "Team A",
+                "date": "2026-05-10",
+            }
+        ]
+
+    monkeypatch.setattr(mod, "fetch_games_for_range", fake_fetch)
+
+    n = backfill_legacy_espn_ids(session)
+    assert n == 1
+
+    session.expire_all()
+    assert session.query(Game).filter_by(date="2026-05-10").one().espn_id == "401856900"
+    assert session.query(Game).filter_by(date="2026-05-11").one().espn_id is None
+    assert session.query(Game).filter_by(date="2026-05-20").one().espn_id is None
+    assert session.query(Game).filter_by(date="2026-05-09").one().espn_id == "401900001"
+
+    # Idempotent: the matched row is no longer a candidate; the unmatched row
+    # still finds no ESPN entry, so nothing changes.
+    assert backfill_legacy_espn_ids(session) == 0
+
+
+def test_backfill_legacy_espn_ids_excludes_preseason_window(
+    session, team_ids, monkeypatch
+):
+    """Rows dated on or before 2026-05-03 (the preseason window handled by
+    backfill_legacy_preseason) must NOT have espn_id set, even if ESPN would
+    return a match — their NULL espn_id is intentional."""
+    import scripts.backfill_legacy_espn_ids as mod
+    from scripts.backfill_legacy_espn_ids import backfill_legacy_espn_ids
+
+    a_id, b_id = team_ids
+    preseason = Game(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-05-03",
+        time="",
+        broadcaster="ION",
+        espn_id=None,
+        season_type=1,
+        winner_id=a_id,
+        final_score_a=80,
+        final_score_b=70,
+    )
+    session.add(preseason)
+    session.commit()
+
+    def fake_fetch(start, end):
+        return [
+            {
+                "event_id": "401850000",
+                "team_a": "Team A",
+                "team_b": "Team B",
+                "date": "2026-05-03",
+            }
+        ]
+
+    monkeypatch.setattr(mod, "fetch_games_for_range", fake_fetch)
+
+    assert backfill_legacy_espn_ids(session) == 0
+    session.expire_all()
+    assert session.query(Game).filter_by(date="2026-05-03").one().espn_id is None
+
+
+def test_daily_update_main_runs_legacy_espn_id_backfill_in_order(monkeypatch):
+    """main() must actually invoke backfill_legacy_espn_ids, and do so BEFORE
+    backfill_missing_season_types (so newly-set ids get classified
+    season_type=2) and BEFORE the excitement backfill (so PBP can be fetched
+    the same run).
+
+    Also guards the auto-formatter-stripped-import failure mode: if the import
+    is dropped, the call site NameErrors silently inside the non-fatal except
+    and the job still reports success. The hasattr assertion catches that —
+    and crucially runs BEFORE any monkeypatch, since monkeypatching the helper
+    would itself inject the missing name and mask the bug.
+    """
+    import types
+
+    import scripts.daily_update as du
+
+    # Regression guard: the name must resolve in the module namespace on its
+    # own, not only because a test patched it in. Must precede the patches.
+    assert hasattr(du, "backfill_legacy_espn_ids")
+
+    calls = []
+
+    def record(name, ret=None):
+        def _f(*args, **kwargs):
+            calls.append(name)
+            return ret
+
+        return _f
+
+    class FakeSession:
+        def close(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    monkeypatch.setattr(du, "init_db", record("init_db"))
+    monkeypatch.setattr(du, "get_session", lambda: FakeSession())
+    monkeypatch.setattr(du, "fetch_and_store_bpi_ratings", record("bpi"))
+    monkeypatch.setattr(du, "fetch_and_store_games", record("games", ret=[]))
+    monkeypatch.setattr(du, "backfill_legacy_espn_ids", record("espn_ids", ret=0))
+    monkeypatch.setattr(du, "backfill_missing_season_types", record("season_types"))
+    monkeypatch.setattr(du, "backfill_legacy_preseason", record("preseason", ret=0))
+    monkeypatch.setattr(
+        du,
+        "compute_elo_ratings",
+        record("elo", ret=types.SimpleNamespace(final_ratings={})),
+    )
+    monkeypatch.setattr(du, "compute_standings", record("standings", ret={}))
+    monkeypatch.setattr(du, "compute_daily_scores", record("scores", ret=([], None)))
+    monkeypatch.setattr(du, "store_daily_rankings", record("store_rankings"))
+    monkeypatch.setattr(du, "today_et", lambda: "2026-06-02")
+    monkeypatch.setattr(du, "store_playoff_probabilities", record("store_odds"))
+    monkeypatch.setattr(du, "store_elo_history", record("elo_history"))
+    monkeypatch.setattr(
+        du, "populate_excitement_for_recent_completions", record("excitement")
+    )
+    monkeypatch.setattr(du, "refresh_recent_excitement_scores", record("refresh"))
+
+    assert du.main() == 0
+    assert "espn_ids" in calls
+    assert calls.index("espn_ids") < calls.index("season_types")
+    assert calls.index("espn_ids") < calls.index("excitement")
+
+
 def test_daily_update_rollback_clears_failed_backfill(session, team_ids):
     """The daily-update non-fatal except block must rollback so downstream
     work on the same session can proceed. Simulates a helper that mutates
