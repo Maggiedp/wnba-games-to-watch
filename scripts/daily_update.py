@@ -58,7 +58,9 @@ from src.scoring.importance import (
 )
 from src.scoring.monte_carlo import (
     RoundProbabilities,
+    compute_directional_movers_from_matrix,
     compute_importance_from_matrix,
+    compute_postseason_movers_from_matrix,
     run_monte_carlo_simulation,
     to_team_standings,
 )
@@ -730,10 +732,6 @@ def _importance_detail_for_game(
         if located is None:
             return None
         slot_id, game_num = located
-        from src.scoring.monte_carlo import (  # noqa: PLC0415
-            compute_postseason_movers_from_matrix,
-        )
-
         raw = compute_postseason_movers_from_matrix(
             slot_id, game_num, bracket_outcomes, champions, team_names
         )
@@ -763,9 +761,6 @@ def _importance_detail_for_game(
     game_index = remaining_event_index.get(game.get("event_id", ""))
     if game_index is None:
         return None
-    from src.scoring.monte_carlo import (  # noqa: PLC0415
-        compute_directional_movers_from_matrix,
-    )
 
     movers = compute_directional_movers_from_matrix(
         outcome_matrix, playoff_sets, game_index, team_names

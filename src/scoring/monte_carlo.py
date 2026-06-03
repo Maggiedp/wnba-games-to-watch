@@ -272,6 +272,34 @@ def compute_importance_swing(
     return total_swing
 
 
+def _partition_outcomes(
+    outcome_matrix: list[list[bool | None]], game_idx: int
+) -> tuple[list[int], list[int]]:
+    """Sim indices where team_a won vs. team_b won for one game (None = skip)."""
+    num_sims = len(outcome_matrix)
+    a_indices = [s for s in range(num_sims) if outcome_matrix[s][game_idx] is True]
+    b_indices = [s for s in range(num_sims) if outcome_matrix[s][game_idx] is False]
+    return a_indices, b_indices
+
+
+def _partition_bracket(
+    bracket_outcomes: list[dict[tuple[str, int], bool]],
+    focal_slot: str,
+    focal_game_num: int,
+) -> tuple[list[int], list[int]]:
+    """Sim indices where the higher seed won vs. the lower seed won for one
+    bracket game (missing key / None = focal game not played in that sim)."""
+    higher_indices: list[int] = []
+    lower_indices: list[int] = []
+    for i, outcomes in enumerate(bracket_outcomes):
+        played = outcomes.get((focal_slot, focal_game_num))
+        if played is True:
+            higher_indices.append(i)
+        elif played is False:
+            lower_indices.append(i)
+    return higher_indices, lower_indices
+
+
 def compute_importance_from_matrix(
     outcome_matrix: list[list[bool | None]],
     playoff_sets: list[set[str]],
@@ -298,12 +326,10 @@ def compute_importance_from_matrix(
         list of raw swing values (one per remaining game, same order).
         Normalize with normalize_importance_score before displaying.
     """
-    num_sims = len(outcome_matrix)
     swings: list[float] = []
 
     for game_idx in range(len(remaining_games)):
-        a_indices = [s for s in range(num_sims) if outcome_matrix[s][game_idx] is True]
-        b_indices = [s for s in range(num_sims) if outcome_matrix[s][game_idx] is False]
+        a_indices, b_indices = _partition_outcomes(outcome_matrix, game_idx)
 
         if not a_indices or not b_indices:
             swings.append(0.0)
@@ -341,9 +367,7 @@ def compute_directional_movers_from_matrix(
     Returns ``[]`` if either outcome bucket is empty (game decided/unplayed in
     all sims). Each dict: ``{"team": str, "if_a": float, "if_b": float}``.
     """
-    num_sims = len(outcome_matrix)
-    a_indices = [s for s in range(num_sims) if outcome_matrix[s][game_idx] is True]
-    b_indices = [s for s in range(num_sims) if outcome_matrix[s][game_idx] is False]
+    a_indices, b_indices = _partition_outcomes(outcome_matrix, game_idx)
     if not a_indices or not b_indices:
         return []
 
@@ -383,16 +407,9 @@ def compute_postseason_swing_from_matrix(
         Returns 0.0 if either partition bucket is empty (focal game didn't
         happen in any sim, or all sims agree on the outcome).
     """
-    higher_indices: list[int] = []
-    lower_indices: list[int] = []
-    for i, outcomes in enumerate(bracket_outcomes):
-        played = outcomes.get((focal_slot, focal_game_num))
-        if played is True:
-            higher_indices.append(i)
-        elif played is False:
-            lower_indices.append(i)
-        # None → missing key → focal game not played in this sim; skip.
-
+    higher_indices, lower_indices = _partition_bracket(
+        bracket_outcomes, focal_slot, focal_game_num
+    )
     if not higher_indices or not lower_indices:
         return 0.0
 
@@ -424,14 +441,9 @@ def compute_postseason_movers_from_matrix(
     Each dict: ``{"team": str, "if_higher": float, "if_lower": float}``; the
     caller maps higher/lower to the matchup's team_a/team_b for display.
     """
-    higher_indices: list[int] = []
-    lower_indices: list[int] = []
-    for i, outcomes in enumerate(bracket_outcomes):
-        played = outcomes.get((focal_slot, focal_game_num))
-        if played is True:
-            higher_indices.append(i)
-        elif played is False:
-            lower_indices.append(i)
+    higher_indices, lower_indices = _partition_bracket(
+        bracket_outcomes, focal_slot, focal_game_num
+    )
     if not higher_indices or not lower_indices:
         return []
 
