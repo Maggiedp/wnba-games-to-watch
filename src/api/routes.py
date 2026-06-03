@@ -1300,6 +1300,7 @@ _HOMEPAGE_HTML = f"""
             Team strength from <a href="https://www.espn.com/wnba/bpi" target="_blank" rel="noopener">ESPN BPI</a>.
             Schedule and broadcasters from ESPN. Updated daily.
             &middot; <button type="button" class="link-button" id="how-it-works-footer">How it works</button>
+            &middot; <a href="/transparency">Behind the numbers</a>
         </footer>
 
         <div class="modal-backdrop" id="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -2897,3 +2898,300 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
 
 def render_homepage() -> str:
     return _HOMEPAGE_HTML
+
+
+def render_transparency() -> str:
+    """Server-rendered /transparency page. Data is fetched client-side from
+    /api/elo-history and /api/calibration so this stays a thin shell."""
+    return (
+        f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Behind the numbers · {_SITE_TITLE}</title>
+<meta name="description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
+
+<meta property="og:title" content="Behind the numbers · {_SITE_TITLE}">
+<meta property="og:description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="{_SITE_URL}/transparency">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Behind the numbers · {_SITE_TITLE}">
+<meta name="twitter:description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
+
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23ff6b00'/><path d='M2 16 h28 M16 2 v28' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 7 C 11 12 21 12 27 7' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 25 C 11 20 21 20 27 25' stroke='%230d1b2a' stroke-width='2' fill='none'/></svg>">
+
+{_SHARED_HEAD}
+            .wrap {{ max-width: 920px; width: 100%; margin: 0 auto; padding: 24px 16px 64px; }}
+            h1 {{ font-family: var(--display); font-size: 1.7rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }}
+            h2 {{ font-family: var(--display); font-size: 1.2rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }}
+            .sub {{ color: var(--text-muted); margin: 0 0 28px; }}
+            section {{ background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 24px; }}
+            .desc {{ color: var(--text-muted); font-size: .9rem; margin: 0 0 16px; }}
+            .chart {{ width: 100%; overflow-x: auto; }}
+            .chart svg {{ max-width: 100%; height: auto; display: block; }}
+            .legend {{ display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; font-size: .8rem; }}
+            .empty {{ color: var(--text-subtle); font-style: italic; }}
+            a.back {{ color: var(--orange-deep); text-decoration: none; font-size: .9rem; }}
+            .legend-row {{ display: inline-flex; align-items: baseline; gap: 7px; padding: 3px 11px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: .82rem; transition: background .12s ease, color .12s ease, border-color .12s ease; }}
+            .legend-row .rank {{ color: var(--text-subtle); font-variant-numeric: tabular-nums; font-size: .72rem; }}
+            .legend-row .rating {{ color: var(--text-subtle); font-variant-numeric: tabular-nums; }}
+            .legend-row:hover, .legend-row.active, .legend-row:focus-visible {{ background: var(--orange); border-color: var(--orange); color: #fff; outline: none; }}
+            .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .rating, .legend-row.active .rating {{ color: rgba(255, 255, 255, .82); }}
+            .elo-line {{ fill: none; stroke: var(--navy); stroke-opacity: .15; stroke-width: 1.4; pointer-events: none; transition: stroke-opacity .12s ease, stroke-width .12s ease; }}
+            .elo-line.hi {{ stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }}
+            .elo-hit {{ fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }}
+            .elo-label {{ fill: var(--text-subtle); font-size: 9.5px; font-variant-numeric: tabular-nums; cursor: pointer; }}
+            .elo-label.hi {{ fill: var(--orange); font-weight: 600; }}
+            .cal-layout {{ display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: center; }}
+            .cal-read p {{ margin: 0 0 12px; color: var(--text-muted); font-size: .92rem; line-height: 1.5; }}
+            .cal-foot {{ color: var(--text-subtle) !important; font-size: .82rem !important; }}
+            .cal-sub {{ font-family: var(--display); font-size: 1rem; font-weight: 600; color: var(--navy); margin: 24px 0 12px; padding-top: 14px; border-top: 1px solid var(--line-soft); }}
+            @media (max-width: 640px) {{ .cal-layout {{ grid-template-columns: 1fr; }} }}
+        </style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">&larr; Back to games</a>
+  <h1>Behind the numbers</h1>
+  <p class="sub">How the model moves, and how accurate it has been.</p>
+
+  <section>
+    <h2>Elo ratings over time</h2>
+    <p class="desc">Each team's Elo rating entering every game this season.
+       Replayed from results — higher is stronger.</p>
+    <div id="elo-chart" class="chart"><p class="empty">Loading…</p></div>
+    <div id="elo-legend" class="legend"></div>
+  </section>
+  <section>
+    <h2>Win-probability calibration</h2>
+    <p class="desc">How our predicted win probabilities line up with how often teams
+       actually win — dots on the dashed line are perfectly calibrated.</p>
+    <h3 class="cal-sub">This season</h3>
+    <div class="cal-layout">
+      <div id="calibration-chart" class="chart"><p class="empty">Loading…</p></div>
+      <div id="calibration-summary" class="cal-read"></div>
+    </div>
+    <h3 class="cal-sub">Backtest · 2017&ndash;2025</h3>
+    <div class="cal-layout">
+      <div id="backtest-chart" class="chart"></div>
+      <div id="backtest-summary" class="cal-read"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+"""
+        + _SHARED_JS
+        + """
+const MIN_CAL_GAMES = 25;
+
+// Static 2017-2025 backtest of the deployed Elo model (K=16, H=50, reg=0.5,
+// MOV on), from `python -m scripts.validate_elo`. Time-honest (each prediction
+// uses only prior games). Regenerate and update if the Elo hyperparameters or
+// historical data change.
+const BACKTEST = {
+  brier: 0.214, pickAcc: 0.671, n: 1910, seasons: '2017–2025',
+  buckets: [
+    { predicted_mean: 0.164, actual_rate: 0.250, count: 44 },
+    { predicted_mean: 0.319, actual_rate: 0.315, count: 349 },
+    { predicted_mean: 0.504, actual_rate: 0.492, count: 664 },
+    { predicted_mean: 0.693, actual_rate: 0.684, count: 686 },
+    { predicted_mean: 0.844, actual_rate: 0.898, count: 167 },
+  ],
+};
+
+function renderBacktest() {
+  const mount = document.getElementById('backtest-chart');
+  const summary = document.getElementById('backtest-summary');
+  if (!mount) return;
+  mount.innerHTML = buildReliabilitySvg(BACKTEST.buckets);
+  summary.innerHTML =
+    `<p>Replaying every game from ${BACKTEST.seasons} and scoring each prediction against ` +
+    `what actually happened — no peeking ahead. The model picks the winner about ` +
+    `<strong>${Math.round(BACKTEST.pickAcc * 100)}%</strong> of the time, and predicted ` +
+    `win rates match actual within about 1% across the middle of the range.</p>` +
+    `<p class="cal-foot">Across ${BACKTEST.n.toLocaleString()} games (2017&ndash;2025).</p>`;
+}
+
+function buildLineChartSvg(series, opts) {
+  // series: [{label, abbr, points:[{x,y}]}] — lines styled/highlighted via CSS
+  // (.elo-line[.hi]); each path and its end-label carry data-team = the index.
+  const W = opts.width, H = opts.height;
+  const PL = 40, PR = 48, PT = 16, PB = 28;  // extra right pad for end-labels
+  const xs = series.flatMap(s => s.points.map(p => p.x));
+  const ys = series.flatMap(s => s.points.map(p => p.y));
+  if (!xs.length) return '<p class="empty">No data yet.</p>';
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const ymin = Math.min(...ys), ymax = Math.max(...ys);
+  const sx = x => PL + (xmax === xmin ? 0 : (x - xmin) / (xmax - xmin)) * (W - PL - PR);
+  const sy = y => H - PB - (ymax === ymin ? 0 : (y - ymin) / (ymax - ymin)) * (H - PT - PB);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Team Elo ratings over time">`;
+  for (let i = 0; i <= 4; i++) {
+    const val = ymin + (ymax - ymin) * i / 4;
+    const y = sy(val);
+    svg += `<line x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}" stroke="#ece6da"/>`;
+    svg += `<text x="${PL-8}" y="${y+3}" text-anchor="end" font-size="10" fill="#8a929d">${Math.round(val)}</text>`;
+  }
+  for (const t of (opts.xTicks || [])) {
+    const x = sx(t.x);
+    svg += `<line x1="${x}" y1="${PT}" x2="${x}" y2="${H-PB}" stroke="#f2ede3"/>`;
+    svg += `<text x="${x}" y="${H-PB+15}" text-anchor="middle" font-size="10" fill="#8a929d">${t.label}</text>`;
+  }
+  const paths = series.map(s => s.points.length
+    ? s.points.map((p, k) => `${k ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ')
+    : '');
+  for (let i = 0; i < series.length; i++) {
+    if (paths[i]) svg += `<path class="elo-line" data-team="${i}" d="${paths[i]}"/>`;
+  }
+  // Direct end-of-line labels (abbreviation), nudged apart so they don't stack.
+  const ends = [];
+  for (let i = 0; i < series.length; i++) {
+    const pts = series[i].points;
+    if (!pts.length) continue;  // guard, mirroring the line/path loop
+    ends.push({ i, abbr: series[i].abbr, y: sy(pts[pts.length - 1].y) });
+  }
+  ends.sort((a, b) => a.y - b.y);
+  const gap = 11;
+  for (let k = 1; k < ends.length; k++) {
+    if (ends[k].y - ends[k - 1].y < gap) ends[k].y = ends[k - 1].y + gap;
+  }
+  const overflow = ends.length ? ends[ends.length - 1].y - (H - PB) : 0;
+  if (overflow > 0) for (const e of ends) e.y -= overflow;  // shift stack up to fit
+  for (const e of ends) {
+    svg += `<text class="elo-label" data-team="${e.i}" x="${W-PR+5}" y="${e.y.toFixed(1)}" dominant-baseline="middle">${escapeHtml(e.abbr)}</text>`;
+  }
+  // Invisible wide hit paths on top so the thin lines are easy to hover.
+  for (let i = 0; i < series.length; i++) {
+    if (paths[i]) svg += `<path class="elo-hit" data-team="${i}" d="${paths[i]}"/>`;
+  }
+  svg += '</svg>';
+  return svg;
+}
+
+async function loadElo() {
+  const mount = document.getElementById('elo-chart');
+  const legend = document.getElementById('elo-legend');
+  try {
+    const res = await fetch('/api/elo-history');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const names = Object.keys(data.teams || {});
+    if (!names.length) { mount.innerHTML = '<p class="empty">No Elo history yet.</p>'; return; }
+    const allDates = [...new Set(names.flatMap(n => data.teams[n].map(p => p.date)))].sort();
+    const dayIndex = Object.fromEntries(allDates.map((d, i) => [d, i]));
+    const abbrevs = data.abbrevs || {};
+    const series = names.map(n => {
+      const pts = data.teams[n];
+      return { label: n, abbr: abbrevs[n] || n.slice(0, 3).toUpperCase(),
+               last: pts[pts.length - 1].rating,
+               points: pts.map(p => ({ x: dayIndex[p.date], y: p.rating })) };
+    });
+    series.sort((a, b) => b.last - a.last);  // legend doubles as a standings list
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const seen = new Set();
+    const xTicks = [];
+    for (const d of allDates) {
+      const ym = d.slice(0, 7);
+      if (seen.has(ym)) continue;
+      seen.add(ym);
+      xTicks.push({ x: dayIndex[d], label: MONTHS[parseInt(d.slice(5, 7), 10) - 1] });
+    }
+    mount.innerHTML = buildLineChartSvg(series, { width: 860, height: 360, xTicks });
+    const svg = mount.querySelector('svg');
+    legend.innerHTML = series.map((s, i) =>
+      `<button class="legend-row" type="button" data-team="${i}">` +
+      `<span class="rank">${i + 1}</span>${escapeHtml(s.label)}` +
+      `<span class="rating">${Math.round(s.last)}</span></button>`).join('');
+    // Hover/focus a team to lift its line out of the muted cloud.
+    const setHi = (i, on) => {
+      const path = svg && svg.querySelector(`.elo-line[data-team="${i}"]`);
+      const label = svg && svg.querySelector(`.elo-label[data-team="${i}"]`);
+      const row = legend.querySelector(`.legend-row[data-team="${i}"]`);
+      if (path) { path.classList.toggle('hi', on); if (on) path.parentNode.appendChild(path); }
+      if (label) { label.classList.toggle('hi', on); if (on) label.parentNode.appendChild(label); }
+      if (row) row.classList.toggle('active', on);
+    };
+    legend.querySelectorAll('.legend-row').forEach(row => {
+      const i = row.dataset.team;
+      row.addEventListener('mouseenter', () => setHi(i, true));
+      row.addEventListener('mouseleave', () => setHi(i, false));
+      row.addEventListener('focus', () => setHi(i, true));
+      row.addEventListener('blur', () => setHi(i, false));
+    });
+    // Hovering the line itself (via a wide transparent hit path) or its end
+    // label highlights the same team.
+    (svg ? svg.querySelectorAll('.elo-hit, .elo-label') : []).forEach(el => {
+      const i = el.dataset.team;
+      el.addEventListener('mouseenter', () => setHi(i, true));
+      el.addEventListener('mouseleave', () => setHi(i, false));
+    });
+  } catch (e) {
+    mount.innerHTML = '<p class="empty">Could not load Elo history.</p>';
+  }
+}
+
+function buildReliabilitySvg(buckets) {
+  const W = 360, H = 360, P = 44;
+  const sx = v => P + v * (W - 2*P);
+  const sy = v => H - P - v * (H - 2*P);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Win-probability calibration">`;
+  svg += `<rect x="${P}" y="${P}" width="${W-2*P}" height="${H-2*P}" fill="none" stroke="#e7e2d8"/>`;
+  // perfect-calibration identity line (navy, dashed)
+  svg += `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(1)}" y2="${sy(1)}" stroke="#0d1b2a" stroke-opacity="0.3" stroke-dasharray="4 4"/>`;
+  svg += `<text x="${W/2}" y="${H-8}" text-anchor="middle" font-size="11" fill="#5a6573">Predicted win probability</text>`;
+  svg += `<text x="14" y="${H/2}" text-anchor="middle" font-size="11" fill="#5a6573" transform="rotate(-90 14 ${H/2})">Actual win rate</text>`;
+  const maxN = Math.max(1, ...buckets.map(b => b.count));
+  for (const b of buckets) {
+    const cx = sx(b.predicted_mean), cy = sy(b.actual_rate);
+    const rad = 4 + 8 * (b.count / maxN);  // dot size ~ games in the bucket
+    svg += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="#ff6b00" fill-opacity="0.85" stroke="#a03c00" stroke-width="1"/>`;
+    svg += `<text x="${cx.toFixed(1)}" y="${(cy - rad - 4).toFixed(1)}" text-anchor="middle" font-size="9" fill="#8a929d">${b.count}</text>`;
+  }
+  svg += '</svg>';
+  return svg;
+}
+
+async function loadCalibration() {
+  const mount = document.getElementById('calibration-chart');
+  const summary = document.getElementById('calibration-summary');
+  try {
+    const res = await fetch('/api/calibration');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (!data.n) {
+      mount.innerHTML = '<p class="empty">No completed games yet.</p>';
+      summary.innerHTML = '';
+      return;
+    }
+    if (data.n < MIN_CAL_GAMES) {
+      // Not enough games for a stable curve — collapse to one quiet line (no
+      // loud placeholder); the 2017-2025 backtest below carries model quality.
+      const layout = mount.closest('.cal-layout');
+      if (layout) layout.style.display = 'block';
+      mount.innerHTML = '';
+      summary.innerHTML =
+        `<p class="cal-foot" style="margin:0">This season's calibration appears once about ` +
+        `<strong>${MIN_CAL_GAMES}</strong> games are completed — <strong>${data.n}</strong> ` +
+        `so far. The backtest below shows how the model does over a full history.</p>`;
+      return;
+    }
+    mount.innerHTML = buildReliabilitySvg(data.buckets || []);
+    summary.innerHTML =
+      `<p>Each dot groups games we gave a similar win chance; its height is how often those ` +
+      `teams actually won. Dots on the dashed line are perfectly calibrated, and a dot's size ` +
+      `is how many games it covers.</p>` +
+      `<p class="cal-foot">Across ${data.n} completed games this season.</p>`;
+  } catch (e) {
+    mount.innerHTML = '<p class="empty">Could not load calibration.</p>';
+  }
+}
+
+loadElo();
+loadCalibration();
+renderBacktest();
+</script>
+</body>
+</html>"""
+    )

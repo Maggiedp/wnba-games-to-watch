@@ -22,14 +22,17 @@ from src.data.espn_api import (
 )
 from src.db.queries import (
     get_all_known_espn_ids,
+    get_calibration_pairs,
     get_completed_rankings,
     get_daily_rankings,
+    get_elo_history,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_teams_by_ids,
     get_upcoming_rankings,
 )
 from src.db.schema import get_session, init_db
+from src.scoring.calibration import compute_calibration
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,13 @@ async def homepage():
     from src.api.routes import render_homepage
 
     return render_homepage()
+
+
+@app.get("/transparency", response_class=HTMLResponse)
+async def transparency_page():
+    from src.api.routes import render_transparency
+
+    return HTMLResponse(render_transparency())
 
 
 @app.get("/game/{espn_id}", response_class=HTMLResponse)
@@ -327,6 +337,60 @@ async def get_playoff_odds(date: str = Query(default=None)):
             if tid in teams
         ]
         return sorted(rows, key=lambda x: (-x.win_championship_prob, x.team))
+    finally:
+        session.close()
+
+
+@app.get("/api/elo-history")
+async def get_elo_history_endpoint(season: int = Query(default=None)):
+    """Per-team Elo trajectory for a season (DB-only; never calls ESPN)."""
+    if season is None:
+        season = int(today_et()[:4])
+    session = get_session()
+    try:
+        rows = get_elo_history(session, season)
+        if not rows:
+            return {"season": season, "teams": {}}
+        teams = get_teams_by_ids(session, {r.team_id for r in rows})
+        out: dict[str, list[dict]] = {}
+        abbrevs: dict[str, str] = {}
+        for r in rows:
+            t = teams.get(r.team_id)
+            if t is None:
+                continue
+            out.setdefault(t.name, []).append(
+                {"date": r.date, "rating": round(r.rating, 1)}
+            )
+            abbrevs.setdefault(t.name, t.abbreviation or "")
+        return {"season": season, "teams": out, "abbrevs": abbrevs}
+    finally:
+        session.close()
+
+
+@app.get("/api/calibration")
+async def get_calibration_endpoint(season: int = Query(default=None)):
+    """Win-probability reliability for completed games (DB-only)."""
+    if season is None:
+        season = int(today_et()[:4])
+    session = get_session()
+    try:
+        pairs = get_calibration_pairs(session, season)
+        result = compute_calibration(pairs)
+        return {
+            "season": season,
+            "n": result.n,
+            "brier": round(result.brier, 4),
+            "buckets": [
+                {
+                    "lo": b.lo,
+                    "hi": b.hi,
+                    "predicted_mean": round(b.predicted_mean, 4),
+                    "actual_rate": round(b.actual_rate, 4),
+                    "count": b.count,
+                }
+                for b in result.buckets
+            ],
+        }
     finally:
         session.close()
 

@@ -3,11 +3,18 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.db.schema import DailyRanking, Game, PlayoffProbability, SeasonConfig, Team
+from src.db.schema import (
+    DailyRanking,
+    EloHistory,
+    Game,
+    PlayoffProbability,
+    SeasonConfig,
+    Team,
+)
 
 # Reused predicate: include regular-season (2) + postseason (3) + legacy
 # NULL season_type rows; exclude only known preseason (1). Used by the
@@ -651,6 +658,37 @@ def get_completed_rankings(
     return result
 
 
+def get_calibration_pairs(
+    session: Session, season_year: int = 2026
+) -> list[tuple[float, bool]]:
+    """(predicted win_prob_a, team_a_won) for completed regular/post-season
+    games that have a frozen DailyRanking.win_prob_a. Rows without a stored
+    win_prob_a are dropped. Used by /api/calibration and the audit script."""
+    # Single inner JOIN on the matchup key: returns only completed games that
+    # have a frozen win_prob_a, so there's no over-fetch and no Python-side
+    # join. Calibration is from team_a's (the home team's) perspective — one
+    # prediction per game; home teams are both favorites and underdogs, so
+    # win_prob_a still spans the full 0..1 range.
+    rows = (
+        session.query(DailyRanking.win_prob_a, Game.winner_id, Game.team_a_id)
+        .join(
+            Game,
+            (Game.date == DailyRanking.date)
+            & (Game.team_a_id == DailyRanking.team_a_id)
+            & (Game.team_b_id == DailyRanking.team_b_id),
+        )
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(_NOT_PRESEASON)
+        .filter(DailyRanking.win_prob_a.isnot(None))
+        .all()
+    )
+    return [
+        (win_prob_a, winner_id == team_a_id)
+        for win_prob_a, winner_id, team_a_id in rows
+    ]
+
+
 def get_rankings_by_broadcaster(
     session: Session,
     start_date: str,
@@ -716,6 +754,62 @@ def upsert_daily_ranking(
         session.add(ranking)
     session.commit()
     return ranking
+
+
+# Arbitrary namespace paired with the season year for the per-season
+# elo_history advisory lock, so it can't collide with other advisory locks.
+_ELO_HISTORY_LOCK_NS = 8412
+
+
+def _acquire_elo_history_lock(session: Session, season_year: int) -> None:
+    """Take a transaction-scoped Postgres advisory lock for one season's
+    elo_history rewrite so two overlapping daily-update runs serialize instead
+    of interleaving the delete-and-reinsert (the table has no unique key, so an
+    interleave could duplicate or wipe rows). Auto-released at COMMIT/ROLLBACK.
+    No-op on SQLite (tests), which has no cross-connection write concurrency."""
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(:ns, :yr)"),
+        {"ns": _ELO_HISTORY_LOCK_NS, "yr": season_year},
+    )
+
+
+def replace_elo_history(
+    session: Session,
+    season_year: int,
+    rows: list[tuple[int, str, float]],
+) -> None:
+    """Delete-and-rewrite all elo_history rows for one season.
+
+    `rows` is (team_id, date, rating). The trajectory is a deterministic replay,
+    so rewriting the whole season each run is idempotent and avoids stale rows.
+    The delete is scoped by year so other seasons are untouched.
+
+    Serialized per season via an advisory lock (see `_acquire_elo_history_lock`)
+    so overlapping daily-update runs can't interleave and corrupt the rewrite.
+    """
+    _acquire_elo_history_lock(session, season_year)
+    session.query(EloHistory).filter(EloHistory.date.like(f"{season_year}-%")).delete(
+        synchronize_session=False
+    )
+    for team_id, d, rating in rows:
+        session.add(EloHistory(team_id=team_id, date=d, rating=rating))
+    session.commit()
+
+
+def get_elo_history(session: Session, season_year: int) -> list[EloHistory]:
+    """All elo_history rows for a season, ordered by (date, team_id).
+
+    The team_id secondary sort makes per-team chronological order explicit
+    rather than relying on the global date sort happening to interleave teams
+    correctly (e.g. two rows sharing a date)."""
+    return (
+        session.query(EloHistory)
+        .filter(EloHistory.date.like(f"{season_year}-%"))
+        .order_by(EloHistory.date, EloHistory.team_id)
+        .all()
+    )
 
 
 @dataclass

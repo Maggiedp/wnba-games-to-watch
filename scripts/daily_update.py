@@ -32,6 +32,7 @@ from src.db.queries import (
     get_team_by_id,
     get_team_by_name,
     get_teams_by_ids,
+    replace_elo_history,
     save_importance_max_swing,
     upsert_daily_ranking,
     upsert_game,
@@ -43,6 +44,8 @@ from src.db.schema import get_session, init_db
 from src.scoring.elo import (
     DEFAULT_HOME_ADVANTAGE,
     INITIAL_RATING,
+    EloReplay,
+    build_elo_timeline,
     expected_win_prob,
     replay_games,
 )
@@ -390,7 +393,7 @@ def refresh_recent_excitement_scores(
     logger.info(f"Re-checked {rechecked} games; updated {updated}")
 
 
-def compute_elo_ratings() -> dict[str, float]:
+def compute_elo_ratings() -> EloReplay:
     """Replay all historical games through the Elo engine to produce current ratings.
 
     Re-fetches history fresh each run — Elo state isn't persisted, so there's
@@ -406,7 +409,7 @@ def compute_elo_ratings() -> dict[str, float]:
     ]
     logger.info(f"Replaying {len(completed)} completed games through Elo")
     replay = replay_games(completed)
-    return replay.final_ratings
+    return replay
 
 
 def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]:
@@ -896,6 +899,34 @@ def store_playoff_probabilities(
     logger.info(f"Stored {stored} playoff probabilities for {snapshot_date}")
 
 
+def store_elo_history(session, replay: EloReplay, season_year: int) -> None:
+    """Persist the per-team Elo trajectory for one season for the
+    /transparency chart. Whole-season delete-and-rewrite (idempotent)."""
+    timeline = build_elo_timeline(replay.history, str(season_year))
+    get_cached_team_id = _make_team_id_resolver(session)
+    rows: list[tuple[int, str, float]] = []
+    missing: list[str] = []
+    for team_name, points in timeline.items():
+        team_id = get_cached_team_id(team_name)
+        if not team_id:
+            missing.append(team_name)
+            continue
+        for p in points:
+            rows.append((team_id, p["date"], p["rating"]))
+    if missing:
+        # The rewrite deletes every row for the season, so dropping a team here
+        # would silently erase it from the chart and publish a partial season.
+        # Raise instead — main()'s non-fatal probe rolls back and the previously
+        # stored complete season stands until the team data is fixed.
+        raise ValueError(
+            f"Unresolved teams for Elo history {season_year}: {sorted(missing)}"
+        )
+    # replace_elo_history commits internally; nothing fallible should run after
+    # it here, or main()'s except-rollback would be a no-op over a live write.
+    replace_elo_history(session, season_year, rows)
+    logger.info(f"Stored {len(rows)} Elo history points for {season_year}")
+
+
 def main() -> int:
     logger.info("=== Starting daily update job ===")
     try:
@@ -932,12 +963,20 @@ def main() -> int:
                 # transaction or autoflush partially-staged mutations.
                 session.rollback()
                 logger.warning(f"Legacy preseason backfill failed (non-fatal): {e}")
-            elo_ratings = compute_elo_ratings()
+            replay = compute_elo_ratings()
+            elo_ratings = replay.final_ratings
             standings = compute_standings(session, elo_ratings)
             scored, round_probs = compute_daily_scores(session, games, standings)
             store_daily_rankings(session, scored)
             today = today_et()
             store_playoff_probabilities(session, round_probs, today)
+            # Persist the Elo trajectory for the transparency page. Non-fatal:
+            # a failure here must not block the user-visible ranking write.
+            try:
+                store_elo_history(session, replay, int(today[:4]))
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Elo history store failed (non-fatal): {e}")
             # Archive backfill runs LAST and bounded — a slow/failing ESPN
             # PBP API must not delay the user-visible ranking computation.
             try:
