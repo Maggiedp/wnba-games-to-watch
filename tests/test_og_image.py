@@ -12,6 +12,18 @@ from src.db.queries import upsert_daily_ranking, upsert_game, upsert_team
 from src.db.schema import Base
 
 
+@pytest.fixture(autouse=True)
+def _clear_og_cache():
+    """The endpoint cache is a module global; clear it around each test so a
+    cached card can't leak across tests that reuse an espn_id (mirrors the
+    live-wp cache guard in test_live_wp_endpoint.py)."""
+    import src.api.app as app_module
+
+    app_module._og_cache.clear()
+    yield
+    app_module._og_cache.clear()
+
+
 def _open(png_bytes):
     return Image.open(io.BytesIO(png_bytes))
 
