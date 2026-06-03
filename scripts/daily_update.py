@@ -39,6 +39,7 @@ from src.db.queries import (
     upsert_playoff_probability,
     upsert_team,
 )
+from scripts.backfill_legacy_espn_ids import backfill_legacy_espn_ids
 from scripts.backfill_preseason_season_type import backfill_legacy_preseason
 from src.db.schema import get_session, init_db
 from src.scoring.elo import (
@@ -935,6 +936,22 @@ def main() -> int:
         try:
             fetch_and_store_bpi_ratings(session)
             games = fetch_and_store_games(session)
+            # Recover espn_id for legacy regular-season rows (the 2026 opener
+            # through 2026-05-12, ingested before the espn_id column landed).
+            # Must run BEFORE backfill_missing_season_types so that step can
+            # event_id-join the newly-set ids and classify them season_type=2,
+            # and BEFORE populate_excitement_for_recent_completions so PBP can
+            # be fetched the same run. Non-fatal: an ESPN outage here mustn't
+            # block the ranking computation; the rows stay NULL for next run.
+            try:
+                n = backfill_legacy_espn_ids(session)
+                if n:
+                    logger.info(f"Recovered espn_id for {n} legacy rows")
+            except Exception as e:
+                # Rollback so downstream queries don't inherit a failed
+                # transaction or autoflush partially-staged mutations.
+                session.rollback()
+                logger.warning(f"Legacy espn_id backfill failed (non-fatal): {e}")
             # Must run BEFORE compute_standings — that path consumes
             # get_completed_games, which excludes preseason but tolerates
             # NULL season_type. Legacy NULL rows could otherwise feed
