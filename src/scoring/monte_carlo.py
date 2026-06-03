@@ -323,6 +323,41 @@ def compute_importance_from_matrix(
     return swings
 
 
+def compute_directional_movers_from_matrix(
+    outcome_matrix: list[list[bool | None]],
+    playoff_sets: list[set[str]],
+    game_idx: int,
+    team_names: list[str],
+    top_n: int = 3,
+    min_delta: float = 0.03,
+) -> list[dict]:
+    """Per-team directional playoff-odds movers for one focal game.
+
+    Partitions the sim set by who won ``game_idx`` (same split as
+    ``compute_importance_from_matrix``), then for each team computes
+    P(make playoffs | team_a won) and P(make playoffs | team_b won).
+    Returns up to ``top_n`` teams with the largest ``|if_a - if_b|``, keeping
+    only those whose delta is >= ``min_delta``, sorted descending by delta.
+    Returns ``[]`` if either outcome bucket is empty (game decided/unplayed in
+    all sims). Each dict: ``{"team": str, "if_a": float, "if_b": float}``.
+    """
+    num_sims = len(outcome_matrix)
+    a_indices = [s for s in range(num_sims) if outcome_matrix[s][game_idx] is True]
+    b_indices = [s for s in range(num_sims) if outcome_matrix[s][game_idx] is False]
+    if not a_indices or not b_indices:
+        return []
+
+    movers: list[dict] = []
+    for team in team_names:
+        rate_a = sum(1 for s in a_indices if team in playoff_sets[s]) / len(a_indices)
+        rate_b = sum(1 for s in b_indices if team in playoff_sets[s]) / len(b_indices)
+        if abs(rate_a - rate_b) >= min_delta:
+            movers.append({"team": team, "if_a": rate_a, "if_b": rate_b})
+
+    movers.sort(key=lambda m: abs(m["if_a"] - m["if_b"]), reverse=True)
+    return movers[:top_n]
+
+
 def compute_postseason_swing_from_matrix(
     focal_slot: str,
     focal_game_num: int,
