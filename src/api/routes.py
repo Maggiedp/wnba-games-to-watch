@@ -2932,8 +2932,6 @@ def render_transparency() -> str:
             .chart {{ width: 100%; overflow-x: auto; }}
             .chart svg {{ max-width: 100%; height: auto; display: block; }}
             .legend {{ display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; font-size: .8rem; }}
-            .legend span {{ display: inline-flex; align-items: center; gap: 5px; }}
-            .legend i {{ width: 11px; height: 3px; border-radius: 2px; display: inline-block; }}
             .empty {{ color: var(--text-subtle); font-style: italic; }}
             a.back {{ color: var(--orange-deep); text-decoration: none; font-size: .9rem; }}
             .legend-row {{ display: inline-flex; align-items: baseline; gap: 7px; padding: 3px 11px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: .82rem; transition: background .12s ease, color .12s ease, border-color .12s ease; }}
@@ -2949,9 +2947,6 @@ def render_transparency() -> str:
             .cal-layout {{ display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: center; }}
             .cal-read p {{ margin: 0 0 12px; color: var(--text-muted); font-size: .92rem; line-height: 1.5; }}
             .cal-foot {{ color: var(--text-subtle) !important; font-size: .82rem !important; }}
-            .cal-stat {{ display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 220px; }}
-            .cal-brier {{ font-family: var(--display); font-size: 3.4rem; font-weight: 600; color: var(--navy); line-height: 1; font-variant-numeric: tabular-nums; }}
-            .cal-brier-lbl {{ margin-top: 8px; color: var(--text-subtle); font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }}
             .cal-sub {{ font-family: var(--display); font-size: 1rem; font-weight: 600; color: var(--navy); margin: 24px 0 12px; padding-top: 14px; border-top: 1px solid var(--line-soft); }}
             @media (max-width: 640px) {{ .cal-layout {{ grid-template-columns: 1fr; }} }}
         </style>
@@ -3051,9 +3046,13 @@ function buildLineChartSvg(series, opts) {
     if (paths[i]) svg += `<path class="elo-line" data-team="${i}" d="${paths[i]}"/>`;
   }
   // Direct end-of-line labels (abbreviation), nudged apart so they don't stack.
-  const ends = series
-    .map((s, i) => ({ i, abbr: s.abbr, y: sy(s.points[s.points.length - 1].y) }))
-    .sort((a, b) => a.y - b.y);
+  const ends = [];
+  for (let i = 0; i < series.length; i++) {
+    const pts = series[i].points;
+    if (!pts.length) continue;  // guard, mirroring the line/path loop
+    ends.push({ i, abbr: series[i].abbr, y: sy(pts[pts.length - 1].y) });
+  }
+  ends.sort((a, b) => a.y - b.y);
   const gap = 11;
   for (let k = 1; k < ends.length; k++) {
     if (ends[k].y - ends[k - 1].y < gap) ends[k].y = ends[k - 1].y + gap;
