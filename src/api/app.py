@@ -8,7 +8,7 @@ import time
 from collections import OrderedDict
 
 from fastapi import FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 from src.api.routes import GameResponse, PlayoffOddsResponse, format_games_response
 from src.constants import Broadcasters  # noqa: F401 — used in get_broadcasters endpoint
@@ -71,6 +71,34 @@ def game_detail(espn_id: str):
     if html is None:
         raise HTTPException(status_code=404, detail="Game not found")
     return html
+
+
+@app.get("/game/{espn_id}/og.png")
+def game_og_image(espn_id: str):
+    from src.api.og_image import render_game_card_png
+
+    cached = _og_cache.get(espn_id)
+    if cached and cached[0] > time.monotonic():
+        _og_cache.move_to_end(espn_id)
+        png = cached[1]
+    else:
+        session = get_session()
+        try:
+            png = render_game_card_png(session, espn_id)
+        finally:
+            session.close()
+        if png is None:
+            raise HTTPException(status_code=404, detail="Game not found")
+        _og_cache[espn_id] = (time.monotonic() + _OG_CACHE_TTL_S, png)
+        _og_cache.move_to_end(espn_id)
+        while len(_og_cache) > _OG_CACHE_MAX_ENTRIES:
+            _og_cache.popitem(last=False)
+
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/api/games/today", response_model=list[GameResponse])
@@ -269,6 +297,15 @@ _ESPN_ID_PATTERN = r"^\d{1,12}$"
 _KNOWN_IDS_TTL_S = 60
 _known_espn_ids_cache: tuple[float, frozenset[str]] | None = None
 _known_espn_ids_lock = threading.Lock()
+
+
+# --- og:image card cache: bytes keyed by espn_id, TTL + simple LRU. ---
+# og:image fetches are rare (a scraper crawls once per shared link), so this
+# is for repeat-hit tidiness, not load. TTL bounds staleness since a game's
+# overall_score can change between daily runs.
+_OG_CACHE_TTL_S = 3600
+_OG_CACHE_MAX_ENTRIES = 64
+_og_cache: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
 
 
 def _get_known_espn_ids() -> frozenset[str]:

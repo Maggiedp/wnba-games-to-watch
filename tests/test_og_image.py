@@ -140,3 +140,50 @@ def test_render_game_card_png_scoreless_game_renders(session, team_ids):
     # No daily_ranking row -> not simulated.
     png = render_game_card_png(session, "401999")
     assert isinstance(png, bytes) and png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    """File-backed sqlite shared across seed + request sessions (mirrors
+    tests/test_transparency_endpoints.py)."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    schema.init_db()
+    yield schema
+    schema._engine = None
+    schema._session_factory = None
+
+
+def _seed_game(schema, espn_id="401234", overall=87.0):
+    s = schema.get_session()
+    a = upsert_team(s, name="Storm", abbreviation="SEA", logo_url="", bpi_rating=0.0)
+    b = upsert_team(s, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_game(s, team_a_id=a.id, team_b_id=b.id, date="2026-06-04",
+                time="7:00 PM ET", broadcaster="ESPN", espn_id=espn_id)
+    upsert_daily_ranking(s, date="2026-06-04", team_a_id=a.id, team_b_id=b.id,
+                         quality_score=50.0, importance_score=0.3, overall_score=overall,
+                         broadcaster="ESPN")
+    s.close()
+
+
+def test_og_endpoint_returns_png(env):
+    _seed_game(env)
+    from src.api.app import app
+
+    r = TestClient(app).get("/game/401234/og.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_og_endpoint_unknown_id_404(env):
+    from src.api.app import app
+
+    r = TestClient(app).get("/game/nope/og.png")
+    assert r.status_code == 404
