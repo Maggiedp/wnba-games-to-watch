@@ -1,6 +1,9 @@
 import json
 from types import SimpleNamespace
-from src.api.routes import _importance_movers_html
+
+import pytest
+
+from src.api.routes import _coerce_fraction, _importance_movers_html
 
 
 def test_playoffs_movers_render():
@@ -64,3 +67,50 @@ def test_breakdown_section_includes_movers():
     team_b = SimpleNamespace(name="Chicago Sky", bpi_rating=1.0)
     html = _detail_breakdown_section(ranking, team_a, team_b)
     assert "Connecticut Sun" in html and "What's at stake" in html
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],  # valid JSON, wrong top-level type (not a dict)
+        {"movers": "bad"},  # movers not a list
+        {"movers": ["bad"]},  # mover not a dict
+        {"movers": [{"team": "X", "if_a": None, "if_b": 0.4}]},  # null odds
+        {"movers": [{"team": "X", "if_a": "lots", "if_b": 0.4}]},  # non-numeric odds
+        {"movers": [{"team": "X", "if_b": 0.4}]},  # missing if_a
+    ],
+)
+def test_schema_skewed_payloads_render_nothing(payload):
+    # Well-formed JSON with the wrong shape must degrade to "" (bar+blurb
+    # fallback), never raise and 500 the detail page.
+    ranking = SimpleNamespace(importance_detail=json.dumps(payload))
+    assert _importance_movers_html(ranking) == ""
+
+
+def test_mixed_valid_and_invalid_movers_keeps_valid_only():
+    ranking = SimpleNamespace(
+        importance_detail=json.dumps(
+            {
+                "metric": "playoffs",
+                "if_a_team": "Seattle Storm",
+                "if_b_team": "Chicago Sky",
+                "movers": [
+                    {"team": "Good", "if_a": 0.6, "if_b": 0.3},
+                    {"team": "Bad", "if_a": None, "if_b": 0.3},
+                    "not-a-dict",
+                ],
+            }
+        )
+    )
+    html = _importance_movers_html(ranking)
+    assert "Good" in html and "Bad" not in html
+
+
+def test_coerce_fraction_rejects_non_numbers_and_bools():
+    assert _coerce_fraction(0.5) == 0.5
+    assert _coerce_fraction(1) == 1.0
+    assert _coerce_fraction(None) is None
+    assert _coerce_fraction("0.5") is None
+    assert _coerce_fraction(True) is None
+    assert _coerce_fraction(float("nan")) is None
+    assert _coerce_fraction(float("inf")) is None
