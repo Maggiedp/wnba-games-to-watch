@@ -45,6 +45,5 @@ INTERVIEW_NOTES.md
 docs/
 .superpowers/
 
-# Claude Code local runtime state (lock files, etc.) — never track
-.claude/scheduled_tasks.lock
-.claude/*.lock
+# Claude Code local agent tooling/config — local-only, never track
+.claude/
