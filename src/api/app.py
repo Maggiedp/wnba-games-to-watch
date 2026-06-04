@@ -73,6 +73,15 @@ def game_detail(espn_id: str):
     return html
 
 
+def _png_response(content: bytes, max_age: int) -> Response:
+    """A PNG response with a public Cache-Control max-age (shared by og.png routes)."""
+    return Response(
+        content=content,
+        media_type="image/png",
+        headers={"Cache-Control": f"public, max-age={max_age}"},
+    )
+
+
 @app.api_route("/game/{espn_id}/og.png", methods=["GET", "HEAD"])
 def game_og_image(espn_id: str):
     from src.api.og_image import render_game_card_png
@@ -103,33 +112,21 @@ def game_og_image(espn_id: str):
     # Advertise the same freshness the server cache actually enforces. The
     # underlying overall_score can change between daily runs, so a longer public
     # max-age would let browsers/proxies serve a stale card after the data moved.
-    return Response(
-        content=png,
-        media_type="image/png",
-        headers={"Cache-Control": f"public, max-age={_OG_CACHE_TTL_S}"},
-    )
+    return _png_response(png, _OG_CACHE_TTL_S)
 
 
 @app.api_route("/og-home.png", methods=["GET", "HEAD"])
 def og_home_image():
     from src.api.og_image import render_home_card
 
-    return Response(
-        content=render_home_card(),
-        media_type="image/png",
-        headers={"Cache-Control": f"public, max-age={_OG_STATIC_CACHE_S}"},
-    )
+    return _png_response(render_home_card(), _OG_STATIC_CACHE_S)
 
 
 @app.api_route("/og-transparency.png", methods=["GET", "HEAD"])
 def og_transparency_image():
     from src.api.og_image import render_transparency_card
 
-    return Response(
-        content=render_transparency_card(),
-        media_type="image/png",
-        headers={"Cache-Control": f"public, max-age={_OG_STATIC_CACHE_S}"},
-    )
+    return _png_response(render_transparency_card(), _OG_STATIC_CACHE_S)
 
 
 @app.get("/api/games/today", response_model=list[GameResponse])

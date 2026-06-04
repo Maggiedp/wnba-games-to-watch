@@ -89,7 +89,14 @@ def _centered(
     draw.text(((WIDTH - w) / 2, y), text, font=font, fill=fill)
 
 
-@functools.lru_cache(maxsize=1)
+def _to_png(img: Image.Image) -> bytes:
+    """Encode a PIL image as PNG bytes."""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@functools.cache
 def render_home_card() -> bytes:
     """Static homepage brand card (1200x630 PNG bytes). Content is constant."""
     img, draw = _draw_base()
@@ -103,12 +110,10 @@ def render_home_card() -> bytes:
         _load_font(34, 400.0),
         _MUTED,
     )
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+    return _to_png(img)
 
 
-@functools.lru_cache(maxsize=1)
+@functools.cache
 def render_transparency_card() -> bytes:
     """Static /transparency brand card (1200x630 PNG bytes). Content is constant."""
     img, draw = _draw_base()
@@ -122,9 +127,7 @@ def render_transparency_card() -> bytes:
         _load_font(34, 400.0),
         _MUTED,
     )
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+    return _to_png(img)
 
 
 def render_game_card(
@@ -142,19 +145,13 @@ def render_game_card(
     # site's HTML separator), which renders as tofu in the rasterized card.
     matchup = f"{name_a}  /  {name_b}"
     matchup_font = _fit_font(draw, matchup, max_width=1080, start_size=72, weight=600.0)
-    mw = draw.textlength(matchup, font=matchup_font)
-    draw.text(((WIDTH - mw) / 2, 196), matchup, font=matchup_font, fill=_OFFWHITE)
+    _centered(draw, matchup, 196, matchup_font, _OFFWHITE)
 
     # --- Overall score, big and centered ---
     score_text = f"{overall:.0f}" if overall is not None else "—"
-    score_font = _load_font(170, 900.0)
-    sw = draw.textlength(score_text, font=score_font)
-    draw.text(((WIDTH - sw) / 2, 300), score_text, font=score_font, fill=_ORANGE)
+    _centered(draw, score_text, 300, _load_font(170, 900.0), _ORANGE)
 
-    label_font = _load_font(30, 600.0)
-    label = "OVERALL"
-    lw = draw.textlength(label, font=label_font)
-    draw.text(((WIDTH - lw) / 2, 500), label, font=label_font, fill=_OFFWHITE)
+    _centered(draw, "OVERALL", 500, _load_font(30, 600.0), _OFFWHITE)
 
     # --- Footer ---
     footer_font = _load_font(30, 400.0)
@@ -169,9 +166,7 @@ def render_game_card(
         rw = draw.textlength(right, font=footer_font)
         draw.text((WIDTH - 60 - rw, 556), right, font=footer_font, fill=_MUTED)
 
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+    return _to_png(img)
 
 
 def render_game_card_png(session: Session, espn_id: str) -> bytes | None:
