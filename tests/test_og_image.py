@@ -3,6 +3,7 @@
 import io
 
 import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -154,9 +155,6 @@ def test_render_game_card_png_scoreless_game_renders(session, team_ids):
     assert isinstance(png, bytes) and png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-from fastapi.testclient import TestClient
-
-
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """File-backed sqlite shared across seed + request sessions (mirrors
@@ -174,14 +172,32 @@ def env(tmp_path, monkeypatch):
 
 def _seed_game(schema, espn_id="401234", overall=87.0):
     s = schema.get_session()
-    a = upsert_team(s, name="Storm", abbreviation="SEA", logo_url="", bpi_rating=0.0)
-    b = upsert_team(s, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_game(s, team_a_id=a.id, team_b_id=b.id, date="2026-06-04",
-                time="7:00 PM ET", broadcaster="ESPN", espn_id=espn_id)
-    upsert_daily_ranking(s, date="2026-06-04", team_a_id=a.id, team_b_id=b.id,
-                         quality_score=50.0, importance_score=0.3, overall_score=overall,
-                         broadcaster="ESPN")
-    s.close()
+    try:
+        a = upsert_team(
+            s, name="Storm", abbreviation="SEA", logo_url="", bpi_rating=0.0
+        )
+        b = upsert_team(s, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+        upsert_game(
+            s,
+            team_a_id=a.id,
+            team_b_id=b.id,
+            date="2026-06-04",
+            time="7:00 PM ET",
+            broadcaster="ESPN",
+            espn_id=espn_id,
+        )
+        upsert_daily_ranking(
+            s,
+            date="2026-06-04",
+            team_a_id=a.id,
+            team_b_id=b.id,
+            quality_score=50.0,
+            importance_score=0.3,
+            overall_score=overall,
+            broadcaster="ESPN",
+        )
+    finally:
+        s.close()
 
 
 def test_og_endpoint_returns_png(env):
@@ -199,3 +215,22 @@ def test_og_endpoint_unknown_id_404(env):
 
     r = TestClient(app).get("/game/nope/og.png")
     assert r.status_code == 404
+
+
+def test_og_endpoint_serves_second_request_from_cache(env, monkeypatch):
+    _seed_game(env)
+    from src.api.app import app, _og_cache
+
+    client = TestClient(app)
+    first = client.get("/game/401234/og.png")
+    assert first.status_code == 200
+    assert "401234" in _og_cache
+
+    # The warm path must not re-render: blow up if the renderer is called again.
+    def _boom(*args, **kwargs):
+        raise AssertionError("render should not run on a cache hit")
+
+    monkeypatch.setattr("src.api.og_image.render_game_card_png", _boom)
+    second = client.get("/game/401234/og.png")
+    assert second.status_code == 200
+    assert second.content == first.content
