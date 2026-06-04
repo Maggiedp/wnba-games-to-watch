@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.api.og_image import _format_date, render_game_card, render_game_card_png
+from src.api.routes import render_game_detail
 from src.db.queries import upsert_daily_ranking, upsert_game, upsert_team
 from src.db.schema import Base
 
@@ -234,3 +235,35 @@ def test_og_endpoint_serves_second_request_from_cache(env, monkeypatch):
     second = client.get("/game/401234/og.png")
     assert second.status_code == 200
     assert second.content == first.content
+
+
+def test_detail_head_has_og_image_tags(session, team_ids):
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-04",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="401234",
+    )
+    upsert_daily_ranking(
+        session,
+        date="2026-06-04",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.3,
+        overall_score=87.0,
+        broadcaster="ESPN",
+    )
+    html = render_game_detail(session, "401234")
+    assert (
+        'property="og:image" content="https://wumbers.com/game/401234/og.png"' in html
+    )
+    assert 'name="twitter:card" content="summary_large_image"' in html
+    assert 'property="og:image:width" content="1200"' in html
+    assert (
+        'name="twitter:image" content="https://wumbers.com/game/401234/og.png"' in html
+    )

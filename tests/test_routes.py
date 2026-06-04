@@ -1105,7 +1105,7 @@ def test_render_game_detail_has_og_meta_tags(session, team_ids):
     assert 'property="og:description"' in html
     assert 'property="og:type" content="article"' in html
     assert 'property="og:url" content="https://wumbers.com/game/401736210"' in html
-    assert 'name="twitter:card" content="summary"' in html
+    assert 'name="twitter:card" content="summary_large_image"' in html
     assert 'name="twitter:title"' in html
     assert 'name="twitter:description"' in html
     assert "60% matchup quality" in html
