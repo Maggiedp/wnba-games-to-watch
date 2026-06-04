@@ -77,11 +77,16 @@ def game_detail(espn_id: str):
 def game_og_image(espn_id: str):
     from src.api.og_image import render_game_card_png
 
-    cached = _og_cache.get(espn_id)
-    if cached and cached[0] > time.monotonic():
-        _og_cache.move_to_end(espn_id)
-        png = cached[1]
-    else:
+    with _og_cache_lock:
+        cached = _og_cache.get(espn_id)
+        if cached and cached[0] > time.monotonic():
+            _og_cache.move_to_end(espn_id)
+            png = cached[1]
+        else:
+            png = None
+
+    # Render outside the lock — don't hold it across the DB read + PIL draw.
+    if png is None:
         session = get_session()
         try:
             png = render_game_card_png(session, espn_id)
@@ -89,10 +94,11 @@ def game_og_image(espn_id: str):
             session.close()
         if png is None:
             raise HTTPException(status_code=404, detail="Game not found")
-        _og_cache[espn_id] = (time.monotonic() + _OG_CACHE_TTL_S, png)
-        _og_cache.move_to_end(espn_id)
-        while len(_og_cache) > _OG_CACHE_MAX_ENTRIES:
-            _og_cache.popitem(last=False)
+        with _og_cache_lock:
+            _og_cache[espn_id] = (time.monotonic() + _OG_CACHE_TTL_S, png)
+            _og_cache.move_to_end(espn_id)
+            while len(_og_cache) > _OG_CACHE_MAX_ENTRIES:
+                _og_cache.popitem(last=False)
 
     return Response(
         content=png,
@@ -306,6 +312,9 @@ _known_espn_ids_lock = threading.Lock()
 _OG_CACHE_TTL_S = 3600
 _OG_CACHE_MAX_ENTRIES = 64
 _og_cache: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
+# Sync `def` endpoints run in FastAPI's threadpool, so guard the cache's
+# read-modify-write (move_to_end / eviction loop) like _live_wp_cache does.
+_og_cache_lock = threading.Lock()
 
 
 def _get_known_espn_ids() -> frozenset[str]:
