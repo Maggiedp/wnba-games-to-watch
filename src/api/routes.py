@@ -2910,9 +2910,15 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
         <meta property="og:description" content="{summary}">
         <meta property="og:type" content="article">
         <meta property="og:url" content="{_SITE_URL}/game/{espn_id}">
-        <meta name="twitter:card" content="summary">
+        <meta property="og:image" content="{_SITE_URL}/game/{espn_id}/og.png">
+        <meta property="og:image:width" content="1200">
+        <meta property="og:image:height" content="630">
+        <meta property="og:image:type" content="image/png">
+        <meta property="og:image:alt" content="{summary}">
+        <meta name="twitter:card" content="summary_large_image">
         <meta name="twitter:title" content="{title}">
         <meta name="twitter:description" content="{summary}">
+        <meta name="twitter:image" content="{_SITE_URL}/game/{espn_id}/og.png">
 {_SHARED_HEAD}
 {_DETAIL_STYLE}
         </style>
