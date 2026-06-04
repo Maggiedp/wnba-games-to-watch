@@ -7,6 +7,7 @@ delegates. Kept out of routes.py to keep that module focused.
 
 from __future__ import annotations
 
+import functools
 import io
 import os
 from datetime import datetime
@@ -75,6 +76,30 @@ def _draw_base() -> tuple[Image.Image, ImageDraw.ImageDraw]:
     draw.ellipse((60, 56, 88, 84), fill=_ORANGE)
     draw.text((100, 52), "wumbers", font=_load_font(34, 600.0), fill=_ORANGE)
     return img, draw
+
+
+def _centered(draw, text, y, font, fill):
+    w = draw.textlength(text, font=font)
+    draw.text(((WIDTH - w) / 2, y), text, font=font, fill=fill)
+
+
+@functools.lru_cache(maxsize=1)
+def render_home_card() -> bytes:
+    """Static homepage brand card (1200x630 PNG bytes). Content is constant."""
+    img, draw = _draw_base()
+    headline_font = _fit_font(draw, "watching tonight", 1080, 130, 900.0)
+    _centered(draw, "What's worth", 210, headline_font, _OFFWHITE)
+    _centered(draw, "watching tonight", 350, headline_font, _ORANGE)
+    _centered(
+        draw,
+        "WNBA games ranked by quality and playoff stakes",
+        520,
+        _load_font(34, 400.0),
+        _MUTED,
+    )
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def render_game_card(

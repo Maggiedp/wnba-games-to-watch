@@ -262,6 +262,21 @@ def test_draw_base_returns_navy_canvas_with_wordmark():
     assert img.getpixel((74, 70)) == _ORANGE
 
 
+def test_render_home_card_returns_1200x630_png():
+    from src.api.og_image import render_home_card
+
+    png = render_home_card()
+    assert isinstance(png, bytes)
+    assert png[:8] == _PNG_MAGIC
+    assert _open(png).size == (1200, 630)
+
+
+def test_render_home_card_is_memoized():
+    from src.api.og_image import render_home_card
+
+    assert render_home_card() is render_home_card()
+
+
 def test_detail_head_has_og_image_tags(session, team_ids):
     a_id, b_id = team_ids
     upsert_game(
