@@ -251,6 +251,17 @@ def test_og_endpoint_serves_second_request_from_cache(env, monkeypatch):
     assert second.content == first.content
 
 
+def test_draw_base_returns_navy_canvas_with_wordmark():
+    from src.api.og_image import _NAVY, _ORANGE, _draw_base
+
+    img, _draw = _draw_base()
+    assert img.size == (1200, 630)
+    # Background is navy at a far corner untouched by the wordmark.
+    assert img.getpixel((1190, 620)) == _NAVY
+    # The orange dot center (~x=74, y=70) is painted orange.
+    assert img.getpixel((74, 70)) == _ORANGE
+
+
 def test_detail_head_has_og_image_tags(session, team_ids):
     a_id, b_id = team_ids
     upsert_game(

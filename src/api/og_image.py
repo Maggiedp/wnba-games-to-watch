@@ -68,6 +68,15 @@ def _format_date(date_str: str) -> str:
     return f"{dt.strftime('%b')} {dt.day}"
 
 
+def _draw_base() -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    """A fresh navy 1200x630 canvas with the top-left wumbers wordmark drawn."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), _NAVY)
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((60, 56, 88, 84), fill=_ORANGE)
+    draw.text((100, 52), "wumbers", font=_load_font(34, 600.0), fill=_ORANGE)
+    return img, draw
+
+
 def render_game_card(
     name_a: str,
     name_b: str,
@@ -76,13 +85,7 @@ def render_game_card(
     broadcaster: str,
 ) -> bytes:
     """Render the 1200x630 social card as PNG bytes."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), _NAVY)
-    draw = ImageDraw.Draw(img)
-
-    # --- Wordmark: orange dot + "wumbers", top-left ---
-    draw.ellipse((60, 56, 88, 84), fill=_ORANGE)
-    mark_font = _load_font(34, 600.0)
-    draw.text((100, 52), "wumbers", font=mark_font, fill=_ORANGE)
+    img, draw = _draw_base()
 
     # --- Matchup, centered, shrink-to-fit ---
     # Use a plain ASCII slash: Fraunces has no U+2571 box-drawing glyph (the
