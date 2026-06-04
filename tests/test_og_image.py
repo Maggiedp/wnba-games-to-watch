@@ -293,22 +293,22 @@ def test_render_transparency_card_is_memoized():
 
 
 def test_og_home_endpoint_returns_png(env):
-    from src.api.app import app
+    from src.api.app import _OG_STATIC_CACHE_S, app
 
     r = TestClient(app).get("/og-home.png")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
-    assert r.headers["cache-control"] == "public, max-age=86400"
+    assert r.headers["cache-control"] == f"public, max-age={_OG_STATIC_CACHE_S}"
     assert r.content[:8] == _PNG_MAGIC
 
 
 def test_og_transparency_endpoint_returns_png(env):
-    from src.api.app import app
+    from src.api.app import _OG_STATIC_CACHE_S, app
 
     r = TestClient(app).get("/og-transparency.png")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
-    assert r.headers["cache-control"] == "public, max-age=86400"
+    assert r.headers["cache-control"] == f"public, max-age={_OG_STATIC_CACHE_S}"
     assert r.content[:8] == _PNG_MAGIC
 
 
