@@ -85,7 +85,9 @@ def render_game_card(
     draw.text((100, 52), "wumbers", font=mark_font, fill=_ORANGE)
 
     # --- Matchup, centered, shrink-to-fit ---
-    matchup = f"{name_a}  ╱  {name_b}"
+    # Use a plain ASCII slash: Fraunces has no U+2571 box-drawing glyph (the
+    # site's HTML separator), which renders as tofu in the rasterized card.
+    matchup = f"{name_a}  /  {name_b}"
     matchup_font = _fit_font(draw, matchup, max_width=1080, start_size=72, weight=600.0)
     mw = draw.textlength(matchup, font=matchup_font)
     draw.text(((WIDTH - mw) / 2, 196), matchup, font=matchup_font, fill=_OFFWHITE)
