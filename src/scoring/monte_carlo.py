@@ -210,68 +210,6 @@ def run_monte_carlo_simulation(
     return result
 
 
-def compute_importance_swing(
-    current_standings: dict[str, dict],
-    remaining_games: list[tuple[str, str]],
-    game_index: int,
-    num_simulations: int = 2000,
-    home_advantage: float = DEFAULT_HOME_ADVANTAGE,
-) -> float:
-    """Compute playoff odds swing for a specific game.
-
-    For a game between team_a and team_b at game_index:
-    1. Apply team_a win to standings, simulate remaining games → playoff probs
-    2. Apply team_b win to standings, simulate remaining games → playoff probs
-    3. Return sum of |P(playoffs | a wins) - P(playoffs | b wins)| across **all** teams.
-
-    Summing across every team (not just the two on the court) captures bubble
-    watchers — games whose outcome shifts the playoff fate of teams not playing
-    in them. Locked-in or locked-out teams contribute 0 naturally.
-    """
-    if game_index >= len(remaining_games):
-        return 0.0
-
-    team_a, team_b = remaining_games[game_index]
-
-    if team_a not in current_standings or team_b not in current_standings:
-        return 0.0
-
-    games_without = remaining_games[:game_index] + remaining_games[game_index + 1 :]
-
-    standings_a_wins = {name: dict(data) for name, data in current_standings.items()}
-    standings_a_wins[team_a]["wins"] += 1
-    standings_a_wins[team_b]["losses"] += 1
-    probs_a_win = run_monte_carlo_simulation(
-        standings_a_wins,
-        games_without,
-        num_simulations=num_simulations,
-        home_advantage=home_advantage,
-    ).make_playoffs
-
-    standings_b_wins = {name: dict(data) for name, data in current_standings.items()}
-    standings_b_wins[team_b]["wins"] += 1
-    standings_b_wins[team_a]["losses"] += 1
-    probs_b_win = run_monte_carlo_simulation(
-        standings_b_wins,
-        games_without,
-        num_simulations=num_simulations,
-        home_advantage=home_advantage,
-    ).make_playoffs
-
-    total_swing = sum(
-        abs(probs_a_win.get(name, 0.0) - probs_b_win.get(name, 0.0))
-        for name in current_standings
-    )
-    swing_a = abs(probs_a_win.get(team_a, 0.0) - probs_b_win.get(team_a, 0.0))
-    swing_b = abs(probs_b_win.get(team_b, 0.0) - probs_a_win.get(team_b, 0.0))
-    logger.debug(
-        f"Game swing ({team_a} vs {team_b}): "
-        f"{team_a}={swing_a:.3f}, {team_b}={swing_b:.3f}, "
-        f"all-team total={total_swing:.3f}"
-    )
-    return total_swing
-
-
 def _partition_outcomes(
     outcome_matrix: list[list[bool | None]], game_idx: int
 ) -> tuple[list[int], list[int]]:

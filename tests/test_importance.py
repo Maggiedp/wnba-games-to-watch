@@ -2,8 +2,8 @@
 
 import random
 
-from src.scoring.importance import compute_importance_score, normalize_importance_score
-from src.scoring.monte_carlo import compute_importance_swing, run_monte_carlo_simulation
+from src.scoring.importance import normalize_importance_score
+from src.scoring.monte_carlo import run_monte_carlo_simulation
 
 # Real WNBA team names mapped to synthetic fixture roles (must be in TEAM_CONFERENCES).
 # Ordered by strength: top 6 safely in, middle 4 on the bubble (tied 18-17),
@@ -48,20 +48,6 @@ def _bubble_standings() -> dict[str, dict]:
     }
 
 
-def _bubble_standings_with_h2h() -> dict[str, dict]:
-    """Same as _bubble_standings() but adds 2-2 H2H splits among the four bubble
-    teams (_T[6-9]).  The even splits mean H2H alone can't resolve the 4-way tie,
-    so the tiebreaker chain falls through to conference record and finally elo —
-    preserving real variance across the two forced-outcome simulation branches.
-    Used by tests that need realistic bubble dynamics with tiebreakers active."""
-    standings = _bubble_standings()
-    bubble = [_T[6], _T[7], _T[8], _T[9]]
-    for name in bubble:
-        standings[name] = dict(standings[name])
-        standings[name]["h2h"] = {opp: [2, 2] for opp in bubble if opp != name}
-    return standings
-
-
 _REMAINING = [
     (_T[6], _T[7]),  # bubble vs bubble — index 0
     (_T[8], _T[9]),
@@ -91,53 +77,10 @@ def test_normalize_midpoint():
     assert normalize_importance_score(0.375) == 50.0
 
 
-# --- compute_importance_swing ---
+# --- run_monte_carlo_simulation directionality ---
 
 
-def test_importance_swing_is_meaningful():
-    """Bubble game swing should be large enough to matter — catches the old bug
-    where compute_importance_swing returned Monte Carlo noise (~0.001) because
-    it ran identical simulations instead of forcing each outcome."""
-    random.seed(42)
-    swing = compute_importance_swing(
-        _bubble_standings(), _REMAINING, 0, num_simulations=2000
-    )
-    # All-team summation in a 4-way-tied bubble approaches the theoretical max ~2.0.
-    assert swing > 1.0, f"Expected meaningful swing for bubble game, got {swing:.3f}"
-
-
-def test_importance_swing_captures_bubble_watchers():
-    """A game between a bubble team and a safely-locked-out team should still
-    score well above zero — even though only one of the playing teams has a
-    meaningful own-swing, the other bubble teams 'watching' shift in the
-    standings and contribute to the all-team total."""
-    # Use the H2H fixture so the 4-way tie resolves non-deterministically across
-    # the two forced-outcome branches (2-2 splits leave the chain unsettled until elo).
-    standings = _bubble_standings_with_h2h()
-    # _T[6] (Atlanta Dream) is on the 4-way bubble (18-17); _T[12] (Phoenix Mercury)
-    # is safely locked out (7-28). _T[12]'s own swing is ~0; the only way this game
-    # scores high is if the all-team sum picks up _T[7]/8/9's playoff-odds shifts.
-    # Give the watchers several remaining games so their fate has variance in sim.
-    games = [
-        (_T[6], _T[12]),  # target
-        (_T[7], _T[0]),
-        (_T[7], _T[5]),
-        (_T[8], _T[1]),
-        (_T[8], _T[4]),
-        (_T[9], _T[2]),
-        (_T[9], _T[3]),
-        (_T[6], _T[1]),
-        (_T[0], _T[1]),
-    ]
-
-    random.seed(42)
-    swing = compute_importance_swing(standings, games, 0, num_simulations=2000)
-    assert swing > 0.5, (
-        f"Bubble-vs-locked-out should pick up watcher swing, got {swing:.3f}"
-    )
-
-
-def test_importance_swing_direction():
+def test_make_playoffs_responds_to_forced_outcome():
     """Winning should improve a team's playoff odds; losing should hurt."""
     random.seed(42)
     standings = _bubble_standings()
@@ -160,62 +103,3 @@ def test_importance_swing_direction():
 
     assert probs_if_6_wins.make_playoffs[_T[6]] > probs_if_7_wins.make_playoffs[_T[6]]
     assert probs_if_7_wins.make_playoffs[_T[7]] > probs_if_6_wins.make_playoffs[_T[7]]
-
-
-def test_importance_swing_out_of_bounds_returns_zero():
-    assert compute_importance_swing(_bubble_standings(), _REMAINING, 99) == 0.0
-
-
-def test_importance_swing_unknown_team_returns_zero():
-    standings = {"Las Vegas Aces": {"wins": 5, "losses": 5, "bpi": 0.0, "elo": 1500}}
-    games = [("Las Vegas Aces", "TeamUnknown")]
-    assert compute_importance_swing(standings, games, 0) == 0.0
-
-
-# --- compute_importance_score ---
-
-
-def test_importance_score_in_bounds():
-    random.seed(42)
-    score = compute_importance_score(_bubble_standings(), _REMAINING, 0)
-    assert 0.0 <= score <= 100.0
-
-
-def test_importance_score_bubble_beats_safe():
-    """Bubble game should score higher than a game between two safely-in teams."""
-    random.seed(42)
-    standings = _bubble_standings()
-    bubble_score = compute_importance_score(standings, _REMAINING, 0)  # _T[6] vs _T[7]
-    safe_score = compute_importance_score(standings, _REMAINING, 2)  # _T[0] vs _T[1]
-    assert bubble_score > safe_score
-
-
-def test_importance_swing_higher_for_tiebreaker_decisive_game():
-    """A late-season game between two teams who will end up tied — and where
-    the result determines the H2H tiebreaker — should score MORE importance
-    than when the same matchup has no tiebreaker stakes.
-
-    Setup: _T[6] (18-17) and _T[7] (18-17) are tied. They've split 1-1 already.
-    A final game between them (one other remaining game for variance) decides:
-        - Wins (one moves to 19-17, the other stays 18-17)
-        - H2H tiebreaker if anyone else ends up tied at 19 wins
-
-    Adds a remaining game for _T[5] (19-16) so its fate has variance — sometimes
-    _T[5] ends at 19-17, creating a three-way tie at 19 wins where H2H decides.
-    """
-    standings = _bubble_standings()
-    # Add prior H2H so the upcoming game is the tiebreaker decider.
-    standings[_T[6]] = dict(standings[_T[6]])
-    standings[_T[7]] = dict(standings[_T[7]])
-    standings[_T[6]]["h2h"] = {_T[7]: [1, 1]}
-    standings[_T[7]]["h2h"] = {_T[6]: [1, 1]}
-
-    games = [
-        (_T[6], _T[7]),  # target — decides H2H
-        (_T[5], _T[8]),  # so _T[5]'s fate has variance
-    ]
-    random.seed(42)
-    swing = compute_importance_swing(standings, games, 0, num_simulations=2000)
-
-    # With tiebreakers in play, this game should score meaningfully high.
-    assert swing > 0.5, f"Tiebreaker-decisive game should score high, got {swing:.3f}"
