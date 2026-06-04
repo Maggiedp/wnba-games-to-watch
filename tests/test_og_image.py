@@ -339,6 +339,7 @@ def test_transparency_has_og_image_meta():
         in html
     )
     assert '<meta name="twitter:card" content="summary_large_image">' in html
+    assert '<meta name="twitter:card" content="summary">' not in html
 
 
 def test_detail_head_has_og_image_tags(session, team_ids):
