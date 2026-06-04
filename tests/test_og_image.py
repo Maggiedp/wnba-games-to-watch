@@ -251,6 +251,130 @@ def test_og_endpoint_serves_second_request_from_cache(env, monkeypatch):
     assert second.content == first.content
 
 
+def test_draw_base_returns_navy_canvas_with_wordmark():
+    from src.api.og_image import _NAVY, _ORANGE, _draw_base
+
+    img, _draw = _draw_base()
+    assert img.size == (1200, 630)
+    # Background is navy at a far corner untouched by the wordmark.
+    assert img.getpixel((1190, 620)) == _NAVY
+    # The orange dot center (~x=74, y=70) is painted orange.
+    assert img.getpixel((74, 70)) == _ORANGE
+
+
+def test_render_home_card_returns_1200x630_png():
+    from src.api.og_image import render_home_card
+
+    png = render_home_card()
+    assert isinstance(png, bytes)
+    assert png[:8] == _PNG_MAGIC
+    assert _open(png).size == (1200, 630)
+
+
+def test_render_home_card_is_memoized():
+    from src.api.og_image import render_home_card
+
+    assert render_home_card() is render_home_card()
+
+
+def test_render_transparency_card_returns_1200x630_png():
+    from src.api.og_image import render_transparency_card
+
+    png = render_transparency_card()
+    assert isinstance(png, bytes)
+    assert png[:8] == _PNG_MAGIC
+    assert _open(png).size == (1200, 630)
+
+
+def test_render_transparency_card_is_memoized():
+    from src.api.og_image import render_transparency_card
+
+    assert render_transparency_card() is render_transparency_card()
+
+
+def test_og_home_endpoint_returns_png(env):
+    from src.api.app import _OG_STATIC_CACHE_S, app
+
+    r = TestClient(app).get("/og-home.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.headers["cache-control"] == f"public, max-age={_OG_STATIC_CACHE_S}"
+    assert r.content[:8] == _PNG_MAGIC
+
+
+def test_og_transparency_endpoint_returns_png(env):
+    from src.api.app import _OG_STATIC_CACHE_S, app
+
+    r = TestClient(app).get("/og-transparency.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.headers["cache-control"] == f"public, max-age={_OG_STATIC_CACHE_S}"
+    assert r.content[:8] == _PNG_MAGIC
+
+
+# Crawlers/link unfurlers that HEAD-probe an advertised og:image before GETting
+# it must get the same 200 + headers, not a 405. All three og.png routes answer
+# HEAD as well as GET.
+def test_og_static_endpoints_answer_head(env):
+    from src.api.app import _OG_STATIC_CACHE_S, app
+
+    client = TestClient(app)
+    for path in ("/og-home.png", "/og-transparency.png"):
+        r = client.head(path)
+        assert r.status_code == 200, path
+        assert r.headers["content-type"] == "image/png", path
+        assert r.headers["cache-control"] == f"public, max-age={_OG_STATIC_CACHE_S}", (
+            path
+        )
+
+
+def test_og_game_endpoint_answers_head(env):
+    _seed_game(env)
+    from src.api.app import _OG_CACHE_TTL_S, app
+
+    r = TestClient(app).head("/game/401234/og.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.headers["cache-control"] == f"public, max-age={_OG_CACHE_TTL_S}"
+
+
+def test_og_game_endpoint_head_unknown_id_404(env):
+    from src.api.app import app
+
+    r = TestClient(app).head("/game/nope/og.png")
+    assert r.status_code == 404
+
+
+def test_homepage_has_og_image_meta():
+    from src.api.routes import render_homepage
+
+    html = render_homepage()
+    assert (
+        '<meta property="og:image" content="https://wumbers.com/og-home.png">' in html
+    )
+    assert (
+        '<meta name="twitter:image" content="https://wumbers.com/og-home.png">' in html
+    )
+    assert '<meta name="twitter:card" content="summary_large_image">' in html
+    assert '<meta name="twitter:card" content="summary">' not in html
+
+
+def test_transparency_has_og_image_meta():
+    from src.api.routes import render_transparency
+
+    html = render_transparency()
+    assert (
+        '<meta property="og:image" content="https://wumbers.com/og-transparency.png">'
+        in html
+    )
+    assert (
+        '<meta name="twitter:image" content="https://wumbers.com/og-transparency.png">'
+        in html
+    )
+    assert '<meta name="twitter:card" content="summary_large_image">' in html
+    assert '<meta name="twitter:card" content="summary">' not in html
+
+
 def test_detail_head_has_og_image_tags(session, team_ids):
     a_id, b_id = team_ids
     upsert_game(

@@ -7,6 +7,7 @@ delegates. Kept out of routes.py to keep that module focused.
 
 from __future__ import annotations
 
+import functools
 import io
 import os
 from datetime import datetime
@@ -68,6 +69,67 @@ def _format_date(date_str: str) -> str:
     return f"{dt.strftime('%b')} {dt.day}"
 
 
+def _draw_base() -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    """A fresh navy 1200x630 canvas with the top-left wumbers wordmark drawn."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), _NAVY)
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((60, 56, 88, 84), fill=_ORANGE)
+    draw.text((100, 52), "wumbers", font=_load_font(34, 600.0), fill=_ORANGE)
+    return img, draw
+
+
+def _centered(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    y: float,
+    font: ImageFont.FreeTypeFont,
+    fill: tuple,
+) -> None:
+    w = draw.textlength(text, font=font)
+    draw.text(((WIDTH - w) / 2, y), text, font=font, fill=fill)
+
+
+def _to_png(img: Image.Image) -> bytes:
+    """Encode a PIL image as PNG bytes."""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@functools.cache
+def render_home_card() -> bytes:
+    """Static homepage brand card (1200x630 PNG bytes). Content is constant."""
+    img, draw = _draw_base()
+    headline_font = _fit_font(draw, "watching tonight", 1080, 130, 900.0)
+    _centered(draw, "What's worth", 210, headline_font, _OFFWHITE)
+    _centered(draw, "watching tonight", 350, headline_font, _ORANGE)
+    _centered(
+        draw,
+        "WNBA games ranked by quality and playoff stakes",
+        520,
+        _load_font(34, 400.0),
+        _MUTED,
+    )
+    return _to_png(img)
+
+
+@functools.cache
+def render_transparency_card() -> bytes:
+    """Static /transparency brand card (1200x630 PNG bytes). Content is constant."""
+    img, draw = _draw_base()
+    headline_font = _fit_font(draw, "the numbers", 1080, 150, 900.0)
+    _centered(draw, "Behind", 190, headline_font, _OFFWHITE)
+    _centered(draw, "the numbers", 350, headline_font, _ORANGE)
+    _centered(
+        draw,
+        "How wumbers scores every WNBA game",
+        540,
+        _load_font(34, 400.0),
+        _MUTED,
+    )
+    return _to_png(img)
+
+
 def render_game_card(
     name_a: str,
     name_b: str,
@@ -76,32 +138,20 @@ def render_game_card(
     broadcaster: str,
 ) -> bytes:
     """Render the 1200x630 social card as PNG bytes."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), _NAVY)
-    draw = ImageDraw.Draw(img)
-
-    # --- Wordmark: orange dot + "wumbers", top-left ---
-    draw.ellipse((60, 56, 88, 84), fill=_ORANGE)
-    mark_font = _load_font(34, 600.0)
-    draw.text((100, 52), "wumbers", font=mark_font, fill=_ORANGE)
+    img, draw = _draw_base()
 
     # --- Matchup, centered, shrink-to-fit ---
     # Use a plain ASCII slash: Fraunces has no U+2571 box-drawing glyph (the
     # site's HTML separator), which renders as tofu in the rasterized card.
     matchup = f"{name_a}  /  {name_b}"
     matchup_font = _fit_font(draw, matchup, max_width=1080, start_size=72, weight=600.0)
-    mw = draw.textlength(matchup, font=matchup_font)
-    draw.text(((WIDTH - mw) / 2, 196), matchup, font=matchup_font, fill=_OFFWHITE)
+    _centered(draw, matchup, 196, matchup_font, _OFFWHITE)
 
     # --- Overall score, big and centered ---
     score_text = f"{overall:.0f}" if overall is not None else "—"
-    score_font = _load_font(170, 900.0)
-    sw = draw.textlength(score_text, font=score_font)
-    draw.text(((WIDTH - sw) / 2, 300), score_text, font=score_font, fill=_ORANGE)
+    _centered(draw, score_text, 300, _load_font(170, 900.0), _ORANGE)
 
-    label_font = _load_font(30, 600.0)
-    label = "OVERALL"
-    lw = draw.textlength(label, font=label_font)
-    draw.text(((WIDTH - lw) / 2, 500), label, font=label_font, fill=_OFFWHITE)
+    _centered(draw, "OVERALL", 500, _load_font(30, 600.0), _OFFWHITE)
 
     # --- Footer ---
     footer_font = _load_font(30, 400.0)
@@ -116,9 +166,7 @@ def render_game_card(
         rw = draw.textlength(right, font=footer_font)
         draw.text((WIDTH - 60 - rw, 556), right, font=footer_font, fill=_MUTED)
 
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+    return _to_png(img)
 
 
 def render_game_card_png(session: Session, espn_id: str) -> bytes | None:
