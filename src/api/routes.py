@@ -287,9 +287,15 @@ _HOMEPAGE_HTML = f"""
         <meta property="og:description" content="{_SITE_DESCRIPTION}">
         <meta property="og:type" content="website">
         <meta property="og:url" content="{_SITE_URL}">
-        <meta name="twitter:card" content="summary">
+        <meta property="og:image" content="{_SITE_URL}/og-home.png">
+        <meta property="og:image:width" content="1200">
+        <meta property="og:image:height" content="630">
+        <meta property="og:image:type" content="image/png">
+        <meta property="og:image:alt" content="WNBA games ranked by quality and playoff stakes">
+        <meta name="twitter:card" content="summary_large_image">
         <meta name="twitter:title" content="{_SITE_TITLE}">
         <meta name="twitter:description" content="{_SITE_DESCRIPTION}">
+        <meta name="twitter:image" content="{_SITE_URL}/og-home.png">
 
         <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23ff6b00'/><path d='M2 16 h28 M16 2 v28' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 7 C 11 12 21 12 27 7' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 25 C 11 20 21 20 27 25' stroke='%230d1b2a' stroke-width='2' fill='none'/></svg>">
 
@@ -3127,9 +3133,15 @@ def render_transparency() -> str:
 <meta property="og:description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="{_SITE_URL}/transparency">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="{_SITE_URL}/og-transparency.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="How wumbers scores every WNBA game">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Behind the numbers · {_SITE_TITLE}">
 <meta name="twitter:description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
+<meta name="twitter:image" content="{_SITE_URL}/og-transparency.png">
 
 <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23ff6b00'/><path d='M2 16 h28 M16 2 v28' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 7 C 11 12 21 12 27 7' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 25 C 11 20 21 20 27 25' stroke='%230d1b2a' stroke-width='2' fill='none'/></svg>">
 

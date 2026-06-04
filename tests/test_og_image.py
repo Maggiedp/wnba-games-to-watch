@@ -312,6 +312,35 @@ def test_og_transparency_endpoint_returns_png(env):
     assert r.content[:8] == _PNG_MAGIC
 
 
+def test_homepage_has_og_image_meta():
+    from src.api.routes import render_homepage
+
+    html = render_homepage()
+    assert (
+        '<meta property="og:image" content="https://wumbers.com/og-home.png">' in html
+    )
+    assert (
+        '<meta name="twitter:image" content="https://wumbers.com/og-home.png">' in html
+    )
+    assert '<meta name="twitter:card" content="summary_large_image">' in html
+    assert '<meta name="twitter:card" content="summary">' not in html
+
+
+def test_transparency_has_og_image_meta():
+    from src.api.routes import render_transparency
+
+    html = render_transparency()
+    assert (
+        '<meta property="og:image" content="https://wumbers.com/og-transparency.png">'
+        in html
+    )
+    assert (
+        '<meta name="twitter:image" content="https://wumbers.com/og-transparency.png">'
+        in html
+    )
+    assert '<meta name="twitter:card" content="summary_large_image">' in html
+
+
 def test_detail_head_has_og_image_tags(session, team_ids):
     a_id, b_id = team_ids
     upsert_game(
