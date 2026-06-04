@@ -312,6 +312,39 @@ def test_og_transparency_endpoint_returns_png(env):
     assert r.content[:8] == _PNG_MAGIC
 
 
+# Crawlers/link unfurlers that HEAD-probe an advertised og:image before GETting
+# it must get the same 200 + headers, not a 405. All three og.png routes answer
+# HEAD as well as GET.
+def test_og_static_endpoints_answer_head(env):
+    from src.api.app import _OG_STATIC_CACHE_S, app
+
+    client = TestClient(app)
+    for path in ("/og-home.png", "/og-transparency.png"):
+        r = client.head(path)
+        assert r.status_code == 200, path
+        assert r.headers["content-type"] == "image/png", path
+        assert r.headers["cache-control"] == f"public, max-age={_OG_STATIC_CACHE_S}", (
+            path
+        )
+
+
+def test_og_game_endpoint_answers_head(env):
+    _seed_game(env)
+    from src.api.app import _OG_CACHE_TTL_S, app
+
+    r = TestClient(app).head("/game/401234/og.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.headers["cache-control"] == f"public, max-age={_OG_CACHE_TTL_S}"
+
+
+def test_og_game_endpoint_head_unknown_id_404(env):
+    from src.api.app import app
+
+    r = TestClient(app).head("/game/nope/og.png")
+    assert r.status_code == 404
+
+
 def test_homepage_has_og_image_meta():
     from src.api.routes import render_homepage
 

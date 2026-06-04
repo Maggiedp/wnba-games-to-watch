@@ -73,7 +73,7 @@ def game_detail(espn_id: str):
     return html
 
 
-@app.get("/game/{espn_id}/og.png")
+@app.api_route("/game/{espn_id}/og.png", methods=["GET", "HEAD"])
 def game_og_image(espn_id: str):
     from src.api.og_image import render_game_card_png
 
@@ -110,7 +110,7 @@ def game_og_image(espn_id: str):
     )
 
 
-@app.get("/og-home.png")
+@app.api_route("/og-home.png", methods=["GET", "HEAD"])
 def og_home_image():
     from src.api.og_image import render_home_card
 
@@ -121,7 +121,7 @@ def og_home_image():
     )
 
 
-@app.get("/og-transparency.png")
+@app.api_route("/og-transparency.png", methods=["GET", "HEAD"])
 def og_transparency_image():
     from src.api.og_image import render_transparency_card
 
