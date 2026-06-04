@@ -100,10 +100,13 @@ def game_og_image(espn_id: str):
             while len(_og_cache) > _OG_CACHE_MAX_ENTRIES:
                 _og_cache.popitem(last=False)
 
+    # Advertise the same freshness the server cache actually enforces. The
+    # underlying overall_score can change between daily runs, so a longer public
+    # max-age would let browsers/proxies serve a stale card after the data moved.
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": f"public, max-age={_OG_CACHE_TTL_S}"},
     )
 
 

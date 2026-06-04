@@ -218,6 +218,21 @@ def test_og_endpoint_unknown_id_404(env):
     assert r.status_code == 404
 
 
+def test_og_public_max_age_does_not_exceed_server_cache_ttl(env):
+    """The unversioned og.png URL must not advertise a longer public cache than
+    the server actually enforces — otherwise a browser/proxy could serve a stale
+    card after the daily run recomputes overall_score."""
+    _seed_game(env)
+    from src.api.app import _OG_CACHE_TTL_S, app
+
+    r = TestClient(app).get("/game/401234/og.png")
+    cache_control = r.headers["cache-control"]
+    max_age = int(
+        next(p for p in cache_control.split(",") if "max-age" in p).split("=")[1]
+    )
+    assert max_age <= _OG_CACHE_TTL_S
+
+
 def test_og_endpoint_serves_second_request_from_cache(env, monkeypatch):
     _seed_game(env)
     from src.api.app import app, _og_cache
