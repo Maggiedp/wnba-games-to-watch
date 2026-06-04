@@ -110,6 +110,28 @@ def game_og_image(espn_id: str):
     )
 
 
+@app.get("/og-home.png")
+def og_home_image():
+    from src.api.og_image import render_home_card
+
+    return Response(
+        content=render_home_card(),
+        media_type="image/png",
+        headers={"Cache-Control": f"public, max-age={_OG_STATIC_CACHE_S}"},
+    )
+
+
+@app.get("/og-transparency.png")
+def og_transparency_image():
+    from src.api.og_image import render_transparency_card
+
+    return Response(
+        content=render_transparency_card(),
+        media_type="image/png",
+        headers={"Cache-Control": f"public, max-age={_OG_STATIC_CACHE_S}"},
+    )
+
+
 @app.get("/api/games/today", response_model=list[GameResponse])
 def get_today_games():
     today = today_et()
@@ -314,6 +336,7 @@ _known_espn_ids_lock = threading.Lock()
 # overall_score can change between daily runs.
 _OG_CACHE_TTL_S = 3600
 _OG_CACHE_MAX_ENTRIES = 64
+_OG_STATIC_CACHE_S = 86400  # brand cards change only on deploy — safe to cache 1 day
 _og_cache: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
 # Sync `def` endpoints run in FastAPI's threadpool, so guard the cache's
 # read-modify-write (move_to_end / eviction loop) like _live_wp_cache does.
