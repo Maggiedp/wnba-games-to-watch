@@ -1286,7 +1286,7 @@ _HOMEPAGE_HTML = f"""
             <div class="header-inner">
                 <div class="header-text">
                     <h1 class="wordmark">WNBA Games to <em>Watch</em></h1>
-                    <p class="tagline">Tonight&rsquo;s best matchups, ranked by team quality and playoff stakes.</p>
+                    <p class="tagline">The WNBA games worth watching this week, ranked by team quality and playoff stakes.</p>
                 </div>
                 <button class="header-link" id="how-it-works-btn" type="button">How it works</button>
             </div>
@@ -1335,9 +1335,9 @@ _HOMEPAGE_HTML = f"""
                             <span class="filter-label">Date</span>
                             <div class="pill-group" id="preset-pills">
                                 <button class="pill preset-pill" data-preset="today" type="button" aria-pressed="false">Today</button>
-                                <button class="pill preset-pill" data-preset="7" type="button" aria-pressed="false">Next 7 days</button>
+                                <button class="pill preset-pill" data-preset="7" type="button" aria-pressed="true">Next 7 days</button>
                                 <button class="pill preset-pill" data-preset="30" type="button" aria-pressed="false">Next 30 days</button>
-                                <button class="pill preset-pill" data-preset="all" type="button" aria-pressed="true">All</button>
+                                <button class="pill preset-pill" data-preset="all" type="button" aria-pressed="false">All</button>
                             </div>
                             <div class="filter-group">
                                 <input type="date" id="from-date" aria-label="From date">
@@ -1412,7 +1412,7 @@ _HOMEPAGE_HTML = f"""
                 <h3>Importance (40%)</h3>
                 <p>
                     How much does this game matter for playoff seeding? A Monte Carlo simulation
-                    runs the rest of the season 2,000 times per outcome, using Elo ratings with
+                    runs the rest of the season 10,000 times, using Elo ratings with
                     home-court advantage and a margin-of-victory multiplier to decide each
                     simulated game. We sum how much every team&rsquo;s playoff odds swing
                     depending on who wins tonight &mdash; including bubble teams watching from
@@ -2356,6 +2356,7 @@ _HOMEPAGE_HTML = f"""
             }}
 
             document.addEventListener('DOMContentLoaded', () => {{
+                setPreset('7');  // Default view: the next 7 days, matching the tagline.
                 loadGames();
                 fetchPlayoffOdds();
                 document.getElementById('from-date').addEventListener('change', () => {{ clearActivePreset(); applyFilters(); }});
