@@ -26,6 +26,9 @@ def _clear_og_cache():
     app_module._og_cache.clear()
 
 
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
 def _open(png_bytes):
     return Image.open(io.BytesIO(png_bytes))
 
@@ -137,7 +140,7 @@ def test_render_game_card_png_scored_returns_png_bytes(session, team_ids):
         broadcaster="ESPN",
     )
     png = render_game_card_png(session, "401234")
-    assert isinstance(png, bytes) and png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
 
 
 def test_render_game_card_png_scoreless_game_renders(session, team_ids):
@@ -153,7 +156,7 @@ def test_render_game_card_png_scoreless_game_renders(session, team_ids):
     )
     # No daily_ranking row -> not simulated.
     png = render_game_card_png(session, "401999")
-    assert isinstance(png, bytes) and png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
 
 
 @pytest.fixture
@@ -208,7 +211,7 @@ def test_og_endpoint_returns_png(env):
     r = TestClient(app).get("/game/401234/og.png")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
-    assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert r.content[:8] == _PNG_MAGIC
 
 
 def test_og_endpoint_unknown_id_404(env):
@@ -226,11 +229,7 @@ def test_og_public_max_age_does_not_exceed_server_cache_ttl(env):
     from src.api.app import _OG_CACHE_TTL_S, app
 
     r = TestClient(app).get("/game/401234/og.png")
-    cache_control = r.headers["cache-control"]
-    max_age = int(
-        next(p for p in cache_control.split(",") if "max-age" in p).split("=")[1]
-    )
-    assert max_age <= _OG_CACHE_TTL_S
+    assert r.headers["cache-control"] == f"public, max-age={_OG_CACHE_TTL_S}"
 
 
 def test_og_endpoint_serves_second_request_from_cache(env, monkeypatch):

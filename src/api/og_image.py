@@ -51,7 +51,7 @@ def _fit_font(
 ) -> ImageFont.FreeTypeFont:
     """A weight-`weight` font at the largest tried size whose `text` width fits `max_width`."""
     size = start_size
-    while size > min_size:
+    while size >= min_size:
         font = _load_font(size, weight)
         if draw.textlength(text, font=font) <= max_width:
             return font
@@ -108,7 +108,7 @@ def render_game_card(
     left_parts = [_format_date(date_str)]
     if broadcaster:
         left_parts.append(broadcaster)
-    left = " · ".join(p for p in left_parts if p)
+    left = " · ".join(left_parts)
     draw.text((60, 556), left, font=footer_font, fill=_OFFWHITE)
 
     if overall is not None:
