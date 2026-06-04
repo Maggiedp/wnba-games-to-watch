@@ -78,7 +78,13 @@ def _draw_base() -> tuple[Image.Image, ImageDraw.ImageDraw]:
     return img, draw
 
 
-def _centered(draw, text, y, font, fill):
+def _centered(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    y: float,
+    font: ImageFont.FreeTypeFont,
+    fill: tuple,
+) -> None:
     w = draw.textlength(text, font=font)
     draw.text(((WIDTH - w) / 2, y), text, font=font, fill=fill)
 
@@ -94,6 +100,25 @@ def render_home_card() -> bytes:
         draw,
         "WNBA games ranked by quality and playoff stakes",
         520,
+        _load_font(34, 400.0),
+        _MUTED,
+    )
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@functools.lru_cache(maxsize=1)
+def render_transparency_card() -> bytes:
+    """Static /transparency brand card (1200x630 PNG bytes). Content is constant."""
+    img, draw = _draw_base()
+    headline_font = _fit_font(draw, "the numbers", 1080, 150, 900.0)
+    _centered(draw, "Behind", 190, headline_font, _OFFWHITE)
+    _centered(draw, "the numbers", 350, headline_font, _ORANGE)
+    _centered(
+        draw,
+        "How wumbers scores every WNBA game",
+        540,
         _load_font(34, 400.0),
         _MUTED,
     )

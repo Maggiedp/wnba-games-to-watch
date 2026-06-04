@@ -277,6 +277,21 @@ def test_render_home_card_is_memoized():
     assert render_home_card() is render_home_card()
 
 
+def test_render_transparency_card_returns_1200x630_png():
+    from src.api.og_image import render_transparency_card
+
+    png = render_transparency_card()
+    assert isinstance(png, bytes)
+    assert png[:8] == _PNG_MAGIC
+    assert _open(png).size == (1200, 630)
+
+
+def test_render_transparency_card_is_memoized():
+    from src.api.og_image import render_transparency_card
+
+    assert render_transparency_card() is render_transparency_card()
+
+
 def test_detail_head_has_og_image_tags(session, team_ids):
     a_id, b_id = team_ids
     upsert_game(
