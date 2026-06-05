@@ -354,8 +354,11 @@ _HOMEPAGE_HTML = f"""
             .header-link:hover {{ color: var(--orange); border-color: var(--orange); }}
 
             /* ---------- Playoff Picture ---------- */
-            .playoff-picture {{
+            #playoff-section {{
                 margin: 24px 0;
+            }}
+            .playoff-picture {{
+                margin: 16px 0 0;
             }}
             .playoff-picture-inner {{
                 padding: 0;
@@ -418,7 +421,7 @@ _HOMEPAGE_HTML = f"""
                 .playoff-table th, .playoff-table td {{
                     padding: 5px 6px;
                 }}
-                .playoff-picture {{
+                #playoff-section {{
                     margin: 16px 0;
                 }}
             }}
@@ -1292,24 +1295,6 @@ _HOMEPAGE_HTML = f"""
             </div>
         </header>
 
-        <div class="playoff-picture" id="playoff-picture" style="display:none">
-            <div class="playoff-picture-inner">
-                <div class="playoff-picture-header">Playoff Picture &middot; Updated daily</div>
-                <table class="playoff-table" id="playoff-table">
-                    <thead>
-                        <tr>
-                            <th class="team-col">Team</th>
-                            <th>Playoffs</th>
-                            <th>Semis</th>
-                            <th>Finals</th>
-                            <th>Champ</th>
-                        </tr>
-                    </thead>
-                    <tbody id="playoff-tbody"></tbody>
-                </table>
-            </div>
-        </div>
-
         <div id="controls-sentinel" aria-hidden="true"></div>
         <div class="controls">
             <div class="controls-inner">
@@ -1365,6 +1350,31 @@ _HOMEPAGE_HTML = f"""
         <main class="content">
             <div id="featured-container"></div>
             <div id="games-container"></div>
+            <section id="playoff-section" aria-labelledby="playoff-heading">
+                <button type="button" id="playoff-toggle"
+                        class="completed-toggle" aria-expanded="false"
+                        aria-controls="playoff-content" hidden>
+                    <span class="playoff-toggle-text">Show playoff picture</span>
+                    <span class="completed-toggle-chevron" aria-hidden="true">&#9662;</span>
+                </button>
+                <div id="playoff-content" class="playoff-picture" hidden>
+                    <div class="playoff-picture-inner">
+                        <div class="playoff-picture-header" id="playoff-heading">Playoff Picture &middot; Updated daily</div>
+                        <table class="playoff-table" id="playoff-table">
+                            <thead>
+                                <tr>
+                                    <th class="team-col">Team</th>
+                                    <th>Playoffs</th>
+                                    <th>Semis</th>
+                                    <th>Finals</th>
+                                    <th>Champ</th>
+                                </tr>
+                            </thead>
+                            <tbody id="playoff-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
             <section id="completed-section" aria-labelledby="completed-heading">
                 <button type="button" id="completed-toggle"
                         class="completed-toggle" aria-expanded="false"
@@ -1620,30 +1630,46 @@ _HOMEPAGE_HTML = f"""
 
             function renderPlayoffPicture(odds) {{
                 const tbody = document.getElementById('playoff-tbody');
-                const section = document.getElementById('playoff-picture');
                 tbody.innerHTML = odds.map(t => {{
-                    const mp = Math.round(t.make_playoffs_prob * 100);
-                    const sf = Math.round(t.reach_semis_prob * 100);
-                    const fn = Math.round(t.reach_finals_prob * 100);
-                    const ch = Math.round(t.win_championship_prob * 100);
-                    const eliminated = (mp === 0 && sf === 0 && fn === 0 && ch === 0);
+                    // True elimination = exactly 0 odds to make the playoffs, not
+                    // a sub-0.5% value that merely rounds to 0% on display.
+                    const eliminated = t.make_playoffs_prob === 0;
                     const logoHtml = t.logo_url
                         ? `<img class="playoff-logo" src="${{escapeHtml(t.logo_url)}}" alt="" aria-hidden="true">`
                         : `<span class="playoff-logo"></span>`;
-                    const cell = (pct, label) => {{
+                    const cell = (frac, label) => {{
+                        const pct = Math.round(frac * 100);
+                        // Show "<1%" for live-but-tiny odds so a team isn't
+                        // misrepresented as 0% when it still has a real chance.
+                        const display = (frac > 0 && pct === 0) ? '<1%' : pct + '%';
                         const fill = `linear-gradient(to right, rgba(255,107,0,0.20) ${{pct}}%, transparent ${{pct}}%)`;
-                        return `<td class="prob-cell" style="background: ${{fill}}" aria-label="${{pct}}% ${{label}}">${{pct}}%</td>`;
+                        return `<td class="prob-cell" style="background: ${{fill}}" aria-label="${{display}} ${{label}}">${{display}}</td>`;
                     }};
                     return `
                         <tr${{eliminated ? ' class="eliminated"' : ''}}>
                             <td class="team-cell">${{logoHtml}}<span class="playoff-team-name">${{escapeHtml(t.team)}}</span></td>
-                            ${{cell(mp, 'chance to make the playoffs')}}
-                            ${{cell(sf, 'chance to reach the semifinals')}}
-                            ${{cell(fn, 'chance to reach the finals')}}
-                            ${{cell(ch, 'chance to win the championship')}}
+                            ${{cell(t.make_playoffs_prob, 'chance to make the playoffs')}}
+                            ${{cell(t.reach_semis_prob, 'chance to reach the semifinals')}}
+                            ${{cell(t.reach_finals_prob, 'chance to reach the finals')}}
+                            ${{cell(t.win_championship_prob, 'chance to win the championship')}}
                         </tr>`;
                 }}).join('');
-                section.style.display = '';
+                const btn = document.getElementById('playoff-toggle');
+                if (btn) btn.hidden = false;
+            }}
+
+            function setupPlayoffToggle() {{
+                const btn = document.getElementById('playoff-toggle');
+                const content = document.getElementById('playoff-content');
+                if (!btn || !content || btn.dataset.toggleReady) return;
+                btn.dataset.toggleReady = '1';
+                btn.addEventListener('click', () => {{
+                    const next = btn.getAttribute('aria-expanded') !== 'true';
+                    btn.setAttribute('aria-expanded', String(next));
+                    content.hidden = !next;
+                    btn.querySelector('.playoff-toggle-text').textContent =
+                        next ? 'Hide playoff picture' : 'Show playoff picture';
+                }});
             }}
 
             // Idempotent: sources options from the union of upcoming and
@@ -2363,6 +2389,7 @@ _HOMEPAGE_HTML = f"""
             document.addEventListener('DOMContentLoaded', () => {{
                 setPreset('7');  // Default view: the next 7 days, matching the tagline.
                 loadGames();
+                setupPlayoffToggle();
                 fetchPlayoffOdds();
                 document.getElementById('from-date').addEventListener('change', () => {{ clearActivePreset(); applyFilters(); }});
                 document.getElementById('to-date').addEventListener('change', () => {{ clearActivePreset(); applyFilters(); }});

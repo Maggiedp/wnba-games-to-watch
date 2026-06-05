@@ -373,7 +373,9 @@ def get_live_win_probability(espn_id: str = Query(..., pattern=_ESPN_ID_PATTERN)
 async def get_playoff_odds(date: str = Query(default=None)):
     """Return per-team round-by-round playoff probabilities.
 
-    Sorted by win_championship_prob desc, with team name as tiebreaker.
+    Sorted by make_playoffs_prob desc (the leftmost, most-read column, so the
+    table reads monotonically), then win_championship_prob desc, then team name
+    as tiebreakers.
     """
     if date is None:
         date = today_et()
@@ -405,7 +407,10 @@ async def get_playoff_odds(date: str = Query(default=None)):
             for tid in recs
             if tid in teams
         ]
-        return sorted(rows, key=lambda x: (-x.win_championship_prob, x.team))
+        return sorted(
+            rows,
+            key=lambda x: (-x.make_playoffs_prob, -x.win_championship_prob, x.team),
+        )
     finally:
         session.close()
 
