@@ -56,7 +56,9 @@ def test_run_monte_carlo_simulation():
         (_ALL_TEAMS[4], _ALL_TEAMS[5]),
     ]
 
-    result = run_monte_carlo_simulation(standings, remaining_games, num_simulations=1000)
+    result = run_monte_carlo_simulation(
+        standings, remaining_games, num_simulations=1000
+    )
     assert len(result.make_playoffs) == 13
     for _, prob in result.make_playoffs.items():
         assert 0.0 <= prob <= 1.0
@@ -264,9 +266,9 @@ def test_compute_standings_skips_null_season_type(monkeypatch):
 # ---------------------------------------------------------------------------
 
 _S3 = {
-    "Las Vegas Aces":   {"wins": 20, "losses": 5,  "elo": 1650, "h2h": {}},
+    "Las Vegas Aces": {"wins": 20, "losses": 5, "elo": 1650, "h2h": {}},
     "New York Liberty": {"wins": 15, "losses": 10, "elo": 1500, "h2h": {}},
-    "Indiana Fever":    {"wins": 5,  "losses": 20, "elo": 1350, "h2h": {}},
+    "Indiana Fever": {"wins": 5, "losses": 20, "elo": 1350, "h2h": {}},
 }
 _G2 = [
     ("Las Vegas Aces", "New York Liberty"),
@@ -276,8 +278,10 @@ _G2 = [
 
 def test_return_matrix_shape():
     """return_matrix=True yields a 5-tuple; matrix has shape (num_sims, num_games)."""
-    import random; random.seed(0)
-    result = run_monte_carlo_simulation(_S3, _G2, num_simulations=50, return_matrix=True)
+    random.seed(0)
+    result = run_monte_carlo_simulation(
+        _S3, _G2, num_simulations=50, return_matrix=True
+    )
     assert isinstance(result, tuple) and len(result) == 5
     round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions = result
     assert isinstance(round_probs, RoundProbabilities)
@@ -290,7 +294,7 @@ def test_return_matrix_shape():
 
 def test_bracket_outcomes_populated_when_eight_teams_seed():
     """When 8 teams reach the playoffs, bracket_outcomes for that sim is non-empty."""
-    import random; random.seed(0)
+    random.seed(0)
     # 8-team fixture so every sim has a full bracket. Real WNBA names required
     # by assert_all_teams_have_conferences.
     eight_teams = [
@@ -321,7 +325,7 @@ def test_bracket_outcomes_populated_when_eight_teams_seed():
 
 def test_champions_none_when_fewer_than_eight_teams():
     """3-team fixture can never seed 8 → champions list is all None."""
-    import random; random.seed(0)
+    random.seed(0)
     _, _, _, bracket_outcomes, champions = run_monte_carlo_simulation(
         _S3, _G2, num_simulations=10, return_matrix=True
     )
@@ -331,7 +335,7 @@ def test_champions_none_when_fewer_than_eight_teams():
 
 def test_return_matrix_false_returns_round_probabilities():
     """Without return_matrix, returns RoundProbabilities directly."""
-    import random; random.seed(0)
+    random.seed(0)
     result = run_monte_carlo_simulation(_S3, _G2, num_simulations=50)
     assert isinstance(result, RoundProbabilities)
 
@@ -339,18 +343,23 @@ def test_return_matrix_false_returns_round_probabilities():
 def test_return_matrix_probs_match_non_matrix():
     """Playoff probs from matrix mode match non-matrix mode within noise."""
     import random
+
     random.seed(42)
     probs_plain = run_monte_carlo_simulation(_S3, _G2, num_simulations=5000)
     random.seed(42)
-    probs_matrix, _, _, _, _ = run_monte_carlo_simulation(_S3, _G2, num_simulations=5000, return_matrix=True)
+    probs_matrix, _, _, _, _ = run_monte_carlo_simulation(
+        _S3, _G2, num_simulations=5000, return_matrix=True
+    )
     for name in probs_plain.make_playoffs:
         assert probs_plain.make_playoffs[name] == probs_matrix.make_playoffs[name]
 
 
 def test_playoff_sets_are_sets_of_team_names():
     """Each playoff_set entry is a set of team name strings."""
-    import random; random.seed(0)
-    _, _, playoff_sets, _, _ = run_monte_carlo_simulation(_S3, _G2, num_simulations=20, return_matrix=True)
+    random.seed(0)
+    _, _, playoff_sets, _, _ = run_monte_carlo_simulation(
+        _S3, _G2, num_simulations=20, return_matrix=True
+    )
     for s in playoff_sets:
         assert isinstance(s, set)
         for name in s:
@@ -364,56 +373,62 @@ def test_playoff_sets_are_sets_of_team_names():
 
 # Minimal bubble fixture for matrix importance tests
 _BUBBLE = {
-    "Las Vegas Aces":         {"wins": 28, "losses": 7,  "elo": 1650, "h2h": {}},
-    "New York Liberty":       {"wins": 26, "losses": 9,  "elo": 1620, "h2h": {}},
-    "Minnesota Lynx":         {"wins": 24, "losses": 11, "elo": 1590, "h2h": {}},
-    "Indiana Fever":          {"wins": 22, "losses": 13, "elo": 1560, "h2h": {}},
-    "Connecticut Sun":        {"wins": 20, "losses": 15, "elo": 1530, "h2h": {}},
-    "Seattle Storm":          {"wins": 19, "losses": 16, "elo": 1515, "h2h": {}},
-    "Atlanta Dream":          {"wins": 18, "losses": 17, "elo": 1500, "h2h": {}},
-    "Chicago Sky":            {"wins": 18, "losses": 17, "elo": 1485, "h2h": {}},
-    "Washington Mystics":     {"wins": 18, "losses": 17, "elo": 1470, "h2h": {}},
-    "Dallas Wings":           {"wins": 18, "losses": 17, "elo": 1455, "h2h": {}},
+    "Las Vegas Aces": {"wins": 28, "losses": 7, "elo": 1650, "h2h": {}},
+    "New York Liberty": {"wins": 26, "losses": 9, "elo": 1620, "h2h": {}},
+    "Minnesota Lynx": {"wins": 24, "losses": 11, "elo": 1590, "h2h": {}},
+    "Indiana Fever": {"wins": 22, "losses": 13, "elo": 1560, "h2h": {}},
+    "Connecticut Sun": {"wins": 20, "losses": 15, "elo": 1530, "h2h": {}},
+    "Seattle Storm": {"wins": 19, "losses": 16, "elo": 1515, "h2h": {}},
+    "Atlanta Dream": {"wins": 18, "losses": 17, "elo": 1500, "h2h": {}},
+    "Chicago Sky": {"wins": 18, "losses": 17, "elo": 1485, "h2h": {}},
+    "Washington Mystics": {"wins": 18, "losses": 17, "elo": 1470, "h2h": {}},
+    "Dallas Wings": {"wins": 18, "losses": 17, "elo": 1455, "h2h": {}},
     "Golden State Valkyries": {"wins": 14, "losses": 21, "elo": 1410, "h2h": {}},
-    "Los Angeles Sparks":     {"wins": 10, "losses": 25, "elo": 1350, "h2h": {}},
-    "Phoenix Mercury":        {"wins": 7,  "losses": 28, "elo": 1320, "h2h": {}},
+    "Los Angeles Sparks": {"wins": 10, "losses": 25, "elo": 1350, "h2h": {}},
+    "Phoenix Mercury": {"wins": 7, "losses": 28, "elo": 1320, "h2h": {}},
 }
 _BUBBLE_GAMES = [
-    ("Atlanta Dream",      "Chicago Sky"),        # index 0 — bubble vs bubble
-    ("Washington Mystics", "Dallas Wings"),        # index 1 — bubble vs bubble
-    ("Las Vegas Aces",     "New York Liberty"),    # index 2 — safely in vs safely in
-    ("Minnesota Lynx",     "Indiana Fever"),       # index 3
-    ("Connecticut Sun",    "Seattle Storm"),       # index 4
+    ("Atlanta Dream", "Chicago Sky"),  # index 0 — bubble vs bubble
+    ("Washington Mystics", "Dallas Wings"),  # index 1 — bubble vs bubble
+    ("Las Vegas Aces", "New York Liberty"),  # index 2 — safely in vs safely in
+    ("Minnesota Lynx", "Indiana Fever"),  # index 3
+    ("Connecticut Sun", "Seattle Storm"),  # index 4
 ]
 
 
 def test_compute_importance_from_matrix_length():
     """Returns one swing value per remaining game."""
-    import random; random.seed(0)
+    random.seed(0)
     _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
         _BUBBLE, _BUBBLE_GAMES, num_simulations=200, return_matrix=True
     )
-    swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys()))
+    swings = compute_importance_from_matrix(
+        outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys())
+    )
     assert len(swings) == len(_BUBBLE_GAMES)
 
 
 def test_compute_importance_from_matrix_non_negative():
     """All swing values are >= 0."""
-    import random; random.seed(0)
+    random.seed(0)
     _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
         _BUBBLE, _BUBBLE_GAMES, num_simulations=500, return_matrix=True
     )
-    swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys()))
+    swings = compute_importance_from_matrix(
+        outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys())
+    )
     assert all(s >= 0.0 for s in swings)
 
 
 def test_compute_importance_from_matrix_bubble_beats_safe():
     """Bubble game (index 0) has higher swing than safely-in game (index 2)."""
-    import random; random.seed(42)
+    random.seed(42)
     _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
         _BUBBLE, _BUBBLE_GAMES, num_simulations=5000, return_matrix=True
     )
-    swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys()))
+    swings = compute_importance_from_matrix(
+        outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys())
+    )
     assert swings[0] > swings[2], f"bubble={swings[0]:.3f} safe={swings[2]:.3f}"
 
 
@@ -423,7 +438,12 @@ def test_compute_importance_from_matrix_empty_subset_returns_zero():
     outcome_matrix = [[True, False]] * 100
     playoff_sets = [{"Las Vegas Aces", "New York Liberty"} for _ in range(100)]
     games = [("Las Vegas Aces", "Indiana Fever"), ("New York Liberty", "Indiana Fever")]
-    swings = compute_importance_from_matrix(outcome_matrix, playoff_sets, games, ["Las Vegas Aces", "New York Liberty", "Indiana Fever"])
+    swings = compute_importance_from_matrix(
+        outcome_matrix,
+        playoff_sets,
+        games,
+        ["Las Vegas Aces", "New York Liberty", "Indiana Fever"],
+    )
     assert swings[0] == 0.0  # b_won is empty — no split possible
 
 
