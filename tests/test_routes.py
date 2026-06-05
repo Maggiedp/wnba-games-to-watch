@@ -752,7 +752,7 @@ def test_format_games_response_clears_both_time_fields_on_tbd(session, team_ids)
 
 
 def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
-    """GET /api/playoff-odds returns 4 round probs sorted by win_championship_prob desc."""
+    """GET /api/playoff-odds returns 4 round probs sorted by make_playoffs_prob desc."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     from src.db import schema
 
@@ -796,7 +796,8 @@ def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
     resp = client.get("/api/playoff-odds")
     assert resp.status_code == 200
     rows = resp.json()
-    assert [r["team"] for r in rows] == ["Aces", "Liberty"]
+    # Liberty leads on make_playoffs (0.90 > 0.85) despite a lower title shot.
+    assert [r["team"] for r in rows] == ["Liberty", "Aces"]
     assert set(rows[0].keys()) == {
         "team",
         "abbreviation",
@@ -806,8 +807,8 @@ def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
         "reach_finals_prob",
         "win_championship_prob",
     }
-    assert rows[0]["make_playoffs_prob"] == pytest.approx(0.85)
-    assert rows[0]["win_championship_prob"] == pytest.approx(0.25)
+    assert rows[0]["make_playoffs_prob"] == pytest.approx(0.90)
+    assert rows[0]["win_championship_prob"] == pytest.approx(0.10)
     schema._engine = None
     schema._session_factory = None
 
