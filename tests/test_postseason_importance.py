@@ -2,6 +2,7 @@
 
 import pytest
 
+from scripts.daily_update import _find_bracket_slot, _importance_for_game
 from src.scoring.importance import (
     POSTSEASON_MAX_SWING,
     normalize_postseason_importance,
@@ -124,17 +125,16 @@ def test_postseason_swing_ignores_none_champion_sims():
     assert swing == pytest.approx(2.0, abs=1e-9)
 
 
-from scripts.daily_update import _find_bracket_slot
-
-
 def test_find_bracket_slot_matches_pair():
     """Returns (slot_id, next_game_num) when teams match an in-progress slot."""
     from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
 
     state = {
         "qf1": SeriesState(
-            higher="A", lower="B",
-            higher_wins=1, lower_wins=0,
+            higher="A",
+            lower="B",
+            higher_wins=1,
+            lower_wins=0,
             games_needed=_GAMES_NEEDED_BO3,
         ),
         "qf2": SeriesState(games_needed=_GAMES_NEEDED_BO3),
@@ -150,8 +150,10 @@ def test_find_bracket_slot_game_number_includes_pre_played():
 
     state = {
         "f": SeriesState(
-            higher="A", lower="B",
-            higher_wins=3, lower_wins=3,
+            higher="A",
+            lower="B",
+            higher_wins=3,
+            lower_wins=3,
             games_needed=_GAMES_NEEDED_BO7,
         ),
     }
@@ -164,7 +166,8 @@ def test_find_bracket_slot_no_match_returns_none():
 
     state = {
         "qf1": SeriesState(
-            higher="A", lower="B",
+            higher="A",
+            lower="B",
             games_needed=_GAMES_NEEDED_BO3,
         ),
     }
@@ -177,8 +180,10 @@ def test_find_bracket_slot_skips_decided_series():
 
     state = {
         "qf1": SeriesState(
-            higher="A", lower="B",
-            higher_wins=2, lower_wins=0,
+            higher="A",
+            lower="B",
+            higher_wins=2,
+            lower_wins=0,
             winner="A",
             games_needed=_GAMES_NEEDED_BO3,
         ),
@@ -196,16 +201,22 @@ def test_find_bracket_slot_skips_unseeded_slots():
     assert _find_bracket_slot(state, "A", "B") is None
 
 
-from scripts.daily_update import _importance_for_game
-
-
 def test_importance_for_game_postseason_fallback_when_no_bracket_state():
     """season_type=3 + no bracket_state → fallback 100.0."""
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
-    assert _importance_for_game(
-        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
-        bracket_state=None, bracket_outcomes=None, champions=None, team_names=None,
-    ) == 100.0
+    assert (
+        _importance_for_game(
+            game,
+            raw_swings=[],
+            remaining_event_index={},
+            importance_ceiling=0.75,
+            bracket_state=None,
+            bracket_outcomes=None,
+            champions=None,
+            team_names=None,
+        )
+        == 100.0
+    )
 
 
 def test_importance_for_game_postseason_fallback_when_teams_not_in_bracket():
@@ -215,8 +226,13 @@ def test_importance_for_game_postseason_fallback_when_teams_not_in_bracket():
     state = {"qf1": SeriesState(higher="X", lower="Y", games_needed=_GAMES_NEEDED_BO3)}
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
     result = _importance_for_game(
-        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
-        bracket_state=state, bracket_outcomes=[], champions=[],
+        game,
+        raw_swings=[],
+        remaining_event_index={},
+        importance_ceiling=0.75,
+        bracket_state=state,
+        bracket_outcomes=[],
+        champions=[],
         team_names=["A", "B"],
     )
     assert result == 100.0
@@ -228,22 +244,26 @@ def test_importance_for_game_postseason_derives_from_swing():
 
     state = {
         "f": SeriesState(
-            higher="A", lower="B",
-            higher_wins=3, lower_wins=3,
+            higher="A",
+            lower="B",
+            higher_wins=3,
+            lower_wins=3,
             games_needed=_GAMES_NEEDED_BO7,
         ),
     }
     # Construct synthetic sims where Finals Game 7 cleanly flips the champion.
-    bracket_outcomes = (
-        [{("f", 7): True}] * 500
-        + [{("f", 7): False}] * 500
-    )
+    bracket_outcomes = [{("f", 7): True}] * 500 + [{("f", 7): False}] * 500
     champions = ["A"] * 500 + ["B"] * 500
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
     result = _importance_for_game(
-        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
-        bracket_state=state, bracket_outcomes=bracket_outcomes,
-        champions=champions, team_names=["A", "B", "C"],
+        game,
+        raw_swings=[],
+        remaining_event_index={},
+        importance_ceiling=0.75,
+        bracket_state=state,
+        bracket_outcomes=bracket_outcomes,
+        champions=champions,
+        team_names=["A", "B", "C"],
     )
     # Swing = 2.0 → normalized = 100.
     assert result == pytest.approx(100.0, abs=1e-6)
@@ -255,8 +275,10 @@ def test_importance_for_game_postseason_partial_swing():
 
     state = {
         "qf1": SeriesState(
-            higher="A", lower="B",
-            higher_wins=0, lower_wins=0,
+            higher="A",
+            lower="B",
+            higher_wins=0,
+            lower_wins=0,
             games_needed=_GAMES_NEEDED_BO3,
         ),
     }
@@ -282,9 +304,14 @@ def test_importance_for_game_postseason_partial_swing():
 
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
     result = _importance_for_game(
-        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
-        bracket_state=state, bracket_outcomes=bracket_outcomes,
-        champions=champions, team_names=["A", "B", "C"],
+        game,
+        raw_swings=[],
+        remaining_event_index={},
+        importance_ceiling=0.75,
+        bracket_state=state,
+        bracket_outcomes=bracket_outcomes,
+        champions=champions,
+        team_names=["A", "B", "C"],
     )
     assert result == pytest.approx(50.0, abs=1e-6)
 
@@ -295,7 +322,9 @@ def test_importance_for_game_regular_season_unchanged():
     raw_swings = [0.375]  # half the default ceiling
     remaining_event_index = {"evt-1": 0}
     result = _importance_for_game(
-        game, raw_swings=raw_swings, remaining_event_index=remaining_event_index,
+        game,
+        raw_swings=raw_swings,
+        remaining_event_index=remaining_event_index,
         importance_ceiling=0.75,
     )
     assert result == pytest.approx(50.0, abs=1e-6)
@@ -304,9 +333,15 @@ def test_importance_for_game_regular_season_unchanged():
 def test_importance_for_game_preseason_returns_zero():
     """Preseason (season_type=1) returns 0 regardless of new kwargs."""
     game = {"season_type": 1, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
-    assert _importance_for_game(
-        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
-    ) == 0.0
+    assert (
+        _importance_for_game(
+            game,
+            raw_swings=[],
+            remaining_event_index={},
+            importance_ceiling=0.75,
+        )
+        == 0.0
+    )
 
 
 def test_impute_missing_importance_uses_mean_of_computed():
@@ -412,17 +447,38 @@ def test_assign_postseason_slot_lookup_distinct_game_nums_in_same_series():
     from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
-        "Las Vegas Aces", "New York Liberty", "Minnesota Lynx", "Indiana Fever",
-        "Connecticut Sun", "Seattle Storm", "Atlanta Dream", "Chicago Sky",
+        "Las Vegas Aces",
+        "New York Liberty",
+        "Minnesota Lynx",
+        "Indiana Fever",
+        "Connecticut Sun",
+        "Seattle Storm",
+        "Atlanta Dream",
+        "Chicago Sky",
     ]
     state = empty_bracket_state(seeded)
     upcoming = [
-        {"season_type": 3, "team_a": "Las Vegas Aces", "team_b": "Chicago Sky",
-         "date": "2026-09-19", "event_id": "g1"},
-        {"season_type": 3, "team_a": "Las Vegas Aces", "team_b": "Chicago Sky",
-         "date": "2026-09-21", "event_id": "g2"},
-        {"season_type": 3, "team_a": "Las Vegas Aces", "team_b": "Chicago Sky",
-         "date": "2026-09-23", "event_id": "g3"},
+        {
+            "season_type": 3,
+            "team_a": "Las Vegas Aces",
+            "team_b": "Chicago Sky",
+            "date": "2026-09-19",
+            "event_id": "g1",
+        },
+        {
+            "season_type": 3,
+            "team_a": "Las Vegas Aces",
+            "team_b": "Chicago Sky",
+            "date": "2026-09-21",
+            "event_id": "g2",
+        },
+        {
+            "season_type": 3,
+            "team_a": "Las Vegas Aces",
+            "team_b": "Chicago Sky",
+            "date": "2026-09-23",
+            "event_id": "g3",
+        },
     ]
     lookup = _assign_postseason_slot_lookup(upcoming, state)
     assert lookup == {
@@ -437,23 +493,44 @@ def test_assign_postseason_slot_lookup_respects_completed_games_in_slot():
     not 1 and 2."""
     from scripts.daily_update import _assign_postseason_slot_lookup
     from src.scoring.playoffs import (
-        SeriesState, _GAMES_NEEDED_BO3, empty_bracket_state,
+        SeriesState,
+        _GAMES_NEEDED_BO3,
+        empty_bracket_state,
     )
 
     seeded = [
-        "Las Vegas Aces", "New York Liberty", "Minnesota Lynx", "Indiana Fever",
-        "Connecticut Sun", "Seattle Storm", "Atlanta Dream", "Chicago Sky",
+        "Las Vegas Aces",
+        "New York Liberty",
+        "Minnesota Lynx",
+        "Indiana Fever",
+        "Connecticut Sun",
+        "Seattle Storm",
+        "Atlanta Dream",
+        "Chicago Sky",
     ]
     state = empty_bracket_state(seeded)
     state["qf1"] = SeriesState(
-        higher="Las Vegas Aces", lower="Chicago Sky",
-        higher_wins=1, lower_wins=0, games_needed=_GAMES_NEEDED_BO3,
+        higher="Las Vegas Aces",
+        lower="Chicago Sky",
+        higher_wins=1,
+        lower_wins=0,
+        games_needed=_GAMES_NEEDED_BO3,
     )
     upcoming = [
-        {"season_type": 3, "team_a": "Las Vegas Aces", "team_b": "Chicago Sky",
-         "date": "2026-09-21", "event_id": "g2"},
-        {"season_type": 3, "team_a": "Las Vegas Aces", "team_b": "Chicago Sky",
-         "date": "2026-09-23", "event_id": "g3"},
+        {
+            "season_type": 3,
+            "team_a": "Las Vegas Aces",
+            "team_b": "Chicago Sky",
+            "date": "2026-09-21",
+            "event_id": "g2",
+        },
+        {
+            "season_type": 3,
+            "team_a": "Las Vegas Aces",
+            "team_b": "Chicago Sky",
+            "date": "2026-09-23",
+            "event_id": "g3",
+        },
     ]
     lookup = _assign_postseason_slot_lookup(upcoming, state)
     assert lookup == {"g2": ("qf1", 2), "g3": ("qf1", 3)}
@@ -465,17 +542,38 @@ def test_assign_postseason_slot_lookup_handles_multiple_slots_independently():
     from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
-        "Las Vegas Aces", "New York Liberty", "Minnesota Lynx", "Indiana Fever",
-        "Connecticut Sun", "Seattle Storm", "Atlanta Dream", "Chicago Sky",
+        "Las Vegas Aces",
+        "New York Liberty",
+        "Minnesota Lynx",
+        "Indiana Fever",
+        "Connecticut Sun",
+        "Seattle Storm",
+        "Atlanta Dream",
+        "Chicago Sky",
     ]
     state = empty_bracket_state(seeded)
     upcoming = [
-        {"season_type": 3, "team_a": "Las Vegas Aces", "team_b": "Chicago Sky",
-         "date": "2026-09-19", "event_id": "qf1g1"},
-        {"season_type": 3, "team_a": "Indiana Fever", "team_b": "Connecticut Sun",
-         "date": "2026-09-19", "event_id": "qf2g1"},
-        {"season_type": 3, "team_a": "Las Vegas Aces", "team_b": "Chicago Sky",
-         "date": "2026-09-21", "event_id": "qf1g2"},
+        {
+            "season_type": 3,
+            "team_a": "Las Vegas Aces",
+            "team_b": "Chicago Sky",
+            "date": "2026-09-19",
+            "event_id": "qf1g1",
+        },
+        {
+            "season_type": 3,
+            "team_a": "Indiana Fever",
+            "team_b": "Connecticut Sun",
+            "date": "2026-09-19",
+            "event_id": "qf2g1",
+        },
+        {
+            "season_type": 3,
+            "team_a": "Las Vegas Aces",
+            "team_b": "Chicago Sky",
+            "date": "2026-09-21",
+            "event_id": "qf1g2",
+        },
     ]
     lookup = _assign_postseason_slot_lookup(upcoming, state)
     assert lookup == {
@@ -492,14 +590,25 @@ def test_assign_postseason_slot_lookup_skips_unmatchable_games():
     from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
-        "Las Vegas Aces", "New York Liberty", "Minnesota Lynx", "Indiana Fever",
-        "Connecticut Sun", "Seattle Storm", "Atlanta Dream", "Chicago Sky",
+        "Las Vegas Aces",
+        "New York Liberty",
+        "Minnesota Lynx",
+        "Indiana Fever",
+        "Connecticut Sun",
+        "Seattle Storm",
+        "Atlanta Dream",
+        "Chicago Sky",
     ]
     state = empty_bracket_state(seeded)
     upcoming = [
         # Mystics weren't seeded — can't be in any bracket slot.
-        {"season_type": 3, "team_a": "Washington Mystics", "team_b": "Chicago Sky",
-         "date": "2026-09-19", "event_id": "mystery"},
+        {
+            "season_type": 3,
+            "team_a": "Washington Mystics",
+            "team_b": "Chicago Sky",
+            "date": "2026-09-19",
+            "event_id": "mystery",
+        },
     ]
     lookup = _assign_postseason_slot_lookup(upcoming, state)
     assert lookup == {}
@@ -512,13 +621,24 @@ def test_assign_postseason_slot_lookup_ignores_regular_season_rows():
     from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
-        "Las Vegas Aces", "New York Liberty", "Minnesota Lynx", "Indiana Fever",
-        "Connecticut Sun", "Seattle Storm", "Atlanta Dream", "Chicago Sky",
+        "Las Vegas Aces",
+        "New York Liberty",
+        "Minnesota Lynx",
+        "Indiana Fever",
+        "Connecticut Sun",
+        "Seattle Storm",
+        "Atlanta Dream",
+        "Chicago Sky",
     ]
     state = empty_bracket_state(seeded)
     upcoming = [
-        {"season_type": 2, "team_a": "Las Vegas Aces", "team_b": "Chicago Sky",
-         "date": "2026-08-01", "event_id": "reg"},
+        {
+            "season_type": 2,
+            "team_a": "Las Vegas Aces",
+            "team_b": "Chicago Sky",
+            "date": "2026-08-01",
+            "event_id": "reg",
+        },
     ]
     lookup = _assign_postseason_slot_lookup(upcoming, state)
     assert lookup == {}
@@ -532,7 +652,10 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
 
     state = {
         "qf1": SeriesState(
-            higher="A", lower="B", higher_wins=0, lower_wins=0,
+            higher="A",
+            lower="B",
+            higher_wins=0,
+            lower_wins=0,
             games_needed=_GAMES_NEEDED_BO3,
         ),
     }
@@ -551,9 +674,14 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
 
     # Lookup says this is Game 1 of qf1 → swing 2.0 → importance 100.
     result_game1 = _importance_for_game(
-        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
-        bracket_state=state, bracket_outcomes=bracket_outcomes,
-        champions=champions, team_names=["A", "B"],
+        game,
+        raw_swings=[],
+        remaining_event_index={},
+        importance_ceiling=0.75,
+        bracket_state=state,
+        bracket_outcomes=bracket_outcomes,
+        champions=champions,
+        team_names=["A", "B"],
         postseason_slot_lookup={"g1": ("qf1", 1)},
     )
     assert result_game1 == pytest.approx(100.0, abs=1e-6)
@@ -561,9 +689,14 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
     # Same game dict, lookup overrides to Game 2 → all sims have Game 2 = True,
     # so the lower-bucket is empty → swing 0 → importance 0.
     result_game2 = _importance_for_game(
-        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
-        bracket_state=state, bracket_outcomes=bracket_outcomes,
-        champions=champions, team_names=["A", "B"],
+        game,
+        raw_swings=[],
+        remaining_event_index={},
+        importance_ceiling=0.75,
+        bracket_state=state,
+        bracket_outcomes=bracket_outcomes,
+        champions=champions,
+        team_names=["A", "B"],
         postseason_slot_lookup={"g1": ("qf1", 2)},
     )
     assert result_game2 == pytest.approx(0.0, abs=1e-6)
@@ -578,15 +711,23 @@ def test_importance_for_game_lookup_miss_falls_back_to_max():
 
     state = {
         "qf1": SeriesState(
-            higher="A", lower="B", higher_wins=0, lower_wins=0,
+            higher="A",
+            lower="B",
+            higher_wins=0,
+            lower_wins=0,
             games_needed=_GAMES_NEEDED_BO3,
         ),
     }
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "unknown"}
     result = _importance_for_game(
-        game, raw_swings=[], remaining_event_index={}, importance_ceiling=0.75,
-        bracket_state=state, bracket_outcomes=[{("qf1", 1): True}],
-        champions=["A"], team_names=["A", "B"],
+        game,
+        raw_swings=[],
+        remaining_event_index={},
+        importance_ceiling=0.75,
+        bracket_state=state,
+        bracket_outcomes=[{("qf1", 1): True}],
+        champions=["A"],
+        team_names=["A", "B"],
         postseason_slot_lookup={"g1": ("qf1", 1)},
     )
     assert result == 100.0
