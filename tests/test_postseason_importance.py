@@ -309,6 +309,29 @@ def test_importance_for_game_preseason_returns_zero():
     ) == 0.0
 
 
+def test_impute_missing_importance_uses_mean_of_computed():
+    """A None importance imputes the mean of the games that were simulated,
+    not 0 — so an unsimulated game blends in at typical stakes."""
+    from scripts.daily_update import _impute_missing_importance
+
+    assert _impute_missing_importance([60.0, None, 40.0]) == pytest.approx(50.0)
+
+
+def test_impute_missing_importance_ignores_nones_in_mean():
+    from scripts.daily_update import _impute_missing_importance
+
+    assert _impute_missing_importance([80.0, None, None, 20.0]) == pytest.approx(50.0)
+
+
+def test_impute_missing_importance_falls_back_to_zero_when_all_missing():
+    """Degenerate case: nothing simulated today → 0.0 (ranking is quality-order
+    regardless, since the same constant is added to every game)."""
+    from scripts.daily_update import _impute_missing_importance
+
+    assert _impute_missing_importance([None, None]) == 0.0
+    assert _impute_missing_importance([]) == 0.0
+
+
 def test_build_current_bracket_state_no_completed_postseason_yields_empty_bracket(
     monkeypatch,
 ):

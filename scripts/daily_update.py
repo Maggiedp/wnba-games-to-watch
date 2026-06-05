@@ -631,6 +631,19 @@ def _assign_postseason_slot_lookup(
     return lookup
 
 
+def _impute_missing_importance(importances: list[float | None]) -> float:
+    """Value to stand in for an unsimulated game's importance in the overall blend.
+
+    A None importance means "stakes unknown" (e.g. an unclassified NULL-season_type
+    row), not "zero stakes" — collapsing it to 0 would systematically bury the game.
+    Impute the mean of the games that DID get a computed importance so it blends in
+    at typical stakes. Falls back to 0.0 only when nothing today was simulated (a
+    degenerate case where ranking is quality-order regardless of the constant).
+    """
+    computed = [i for i in importances if i is not None]
+    return sum(computed) / len(computed) if computed else 0.0
+
+
 def _importance_for_game(
     game: dict,
     raw_swings: list[float],
@@ -887,7 +900,10 @@ def compute_daily_scores(
         f"importance_ceiling={importance_ceiling:.3f}"
     )
 
-    scored = []
+    # First pass: score quality + importance per game. `importance` is None when
+    # the game wasn't simulated (e.g. an unclassified NULL-season_type row), which
+    # is "stakes unknown", NOT "zero stakes" — see the overall-score imputation below.
+    partial = []
     for game in upcoming_games:
         team_a, team_b = game["team_a"], game["team_b"]
         bpi_a = standings.get(team_a, {}).get("bpi", 0.0)
@@ -897,7 +913,6 @@ def compute_daily_scores(
         elo_b = standings.get(team_b, {}).get("elo", INITIAL_RATING)
         win_prob_a = expected_win_prob(elo_a, elo_b, DEFAULT_HOME_ADVANTAGE)
 
-        game_date = game.get("date", today)
         importance = _importance_for_game(
             game,
             raw_swings,
@@ -920,13 +935,42 @@ def compute_daily_scores(
             team_names=team_names,
             postseason_slot_lookup=postseason_slot_lookup,
         )
+        partial.append(
+            {
+                "game": game,
+                "quality": quality,
+                "importance": importance,
+                "win_prob_a": win_prob_a,
+                "importance_detail": importance_detail,
+            }
+        )
 
-        importance_for_overall = importance if importance is not None else 0.0
-        overall = quality * 0.6 + importance_for_overall * 0.4
-        imp_log = f"{importance:.1f}" if importance is not None else "—"
+    # Impute a missing importance with the mean importance of the other games
+    # ranked today, so an unsimulated game blends in at "typical stakes" rather
+    # than being deflated to 0 (which would systematically bury it). The stored
+    # importance_score stays None (renders as em-dash); only `overall` uses the
+    # imputed value. Fallback 0.0 only when no game today has a computed
+    # importance — a degenerate case where ranking is quality-order regardless.
+    imputed_importance = _impute_missing_importance([p["importance"] for p in partial])
+
+    scored = []
+    for p in partial:
+        game = p["game"]
+        team_a, team_b = game["team_a"], game["team_b"]
+        game_date = game.get("date", today)
+        importance = p["importance"]
+        importance_for_overall = (
+            importance if importance is not None else imputed_importance
+        )
+        overall = p["quality"] * 0.6 + importance_for_overall * 0.4
+        imp_log = (
+            f"{importance:.1f}"
+            if importance is not None
+            else f"~{imputed_importance:.1f}(imp)"
+        )
         logger.info(
             f"{game_date} {team_a} vs {team_b}: "
-            f"quality={quality:.1f} importance={imp_log} overall={overall:.1f}"
+            f"quality={p['quality']:.1f} importance={imp_log} overall={overall:.1f}"
         )
         scored.append(
             {
@@ -934,12 +978,12 @@ def compute_daily_scores(
                 "team_b": team_b,
                 "date": game_date,
                 "time": game.get("time", ""),
-                "quality": quality,
+                "quality": p["quality"],
                 "importance": importance,
                 "overall": overall,
                 "broadcaster": game.get("broadcaster", ""),
-                "win_prob_a": win_prob_a,
-                "importance_detail": importance_detail,
+                "win_prob_a": p["win_prob_a"],
+                "importance_detail": p["importance_detail"],
             }
         )
 
