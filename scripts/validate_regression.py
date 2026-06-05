@@ -32,6 +32,7 @@ from src.scoring.elo import (
     DEFAULT_K,
     DEFAULT_SEASON_REGRESSION,
     INITIAL_RATING,
+    _regress_toward_mean,
     expected_win_prob,
     replay_games,
 )
@@ -75,8 +76,6 @@ def _test_boundary(
     NOTE: the 2019→2021 year gap (skipping 2020) applies regression once
     rather than twice — an acceptable approximation at this sample size.
     """
-    prior_year = prior_years[idx]
-
     # Cumulative training: all seasons from CALIBRATION_START through prior_year.
     training: list[dict] = []
     for y in prior_years[: idx + 1]:
@@ -174,8 +173,14 @@ def main() -> None:
         for label, b in per_boundary.items():
             boundary_briers.setdefault(label, []).append(b)
 
-        marker = " ← current default" if abs(regression - DEFAULT_SEASON_REGRESSION) < 1e-6 else ""
-        print(f"regression={regression:.3f}  brier={overall:.4f}  n={len(all_probs)}{marker}")
+        marker = (
+            " ← current default"
+            if abs(regression - DEFAULT_SEASON_REGRESSION) < 1e-6
+            else ""
+        )
+        print(
+            f"regression={regression:.3f}  brier={overall:.4f}  n={len(all_probs)}{marker}"
+        )
 
     if not rows:
         print("No results — check data fetch.")
@@ -196,9 +201,7 @@ def main() -> None:
     # Per-boundary breakdown
     print("\nPer-boundary Brier score:")
     all_labels = [f"{a}→{b}" for _, a, b in boundaries if f"{a}→{b}" in boundary_briers]
-    header = f"{'Boundary':>12}" + "".join(
-        f"  {r[0]:.2f}" for r in rows
-    )
+    header = f"{'Boundary':>12}" + "".join(f"  {r[0]:.2f}" for r in rows)
     print(header)
     for label in all_labels:
         row_str = f"{label:>12}"
@@ -224,7 +227,9 @@ def main() -> None:
 
     if default_row and abs(default_row[0] - best_row[0]) > 1e-6:
         print(f"\nCalibration at current default ({DEFAULT_SEASON_REGRESSION:.3f}):")
-        print(f"  {'Bucket':<12} {'N':>5} {'Predicted':>10} {'Actual':>10} {'Error':>8}")
+        print(
+            f"  {'Bucket':<12} {'N':>5} {'Predicted':>10} {'Actual':>10} {'Error':>8}"
+        )
         for row in calibration_table(default_row[4], default_row[5]):
             err = row["actual"] - row["avg_pred"]
             print(
@@ -240,9 +245,7 @@ def main() -> None:
             f"No change recommended."
         )
     else:
-        print(
-            f"  Optimal regression: {best_row[0]:.3f} (Brier={best_row[1]:.4f})"
-        )
+        print(f"  Optimal regression: {best_row[0]:.3f} (Brier={best_row[1]:.4f})")
         if default_row:
             print(
                 f"  Current default:    {DEFAULT_SEASON_REGRESSION:.3f} "
