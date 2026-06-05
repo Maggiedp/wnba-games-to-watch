@@ -2,14 +2,16 @@
 
 A nightly ranking of the best WNBA matchups, weighing team quality and playoff stakes. Filter by where you can watch.
 
-**Live site:** https://wnba-games-to-watch-1068218371131.us-central1.run.app
+**Live site:** https://wumbers.com
 
 ## How it works
 
 Every upcoming game gets a score out of 100:
 
 - **Quality (60%)** — harmonic mean of both teams' [ESPN BPI](https://www.espn.com/wnba/bpi) ratings. Penalizes lopsided matchups: a +5 vs +5 game scores much higher than +5 vs -5.
-- **Importance (40%)** — Monte Carlo simulation (2,000 runs per forced outcome) over the next 30 days, summing how much every team's playoff odds swing on tonight's result — including bubble teams not on the court whose fate hinges on the outcome. Per-game win probabilities use Elo ratings with home-court advantage and a margin-of-victory multiplier, replayed chronologically from 2024 with a 1/3 regression toward the mean at each season boundary.
+- **Importance (40%)** — a single 10,000-run Monte Carlo simulation of the rest of the season, partitioned by tonight's outcome, summing how much every team's playoff odds swing on the result — including bubble teams not on the court whose fate hinges on it. Per-game win probabilities use Elo ratings with home-court advantage and a margin-of-victory multiplier, replayed chronologically from 2024 with a 0.5 regression toward the mean at each season boundary.
+
+The **60/40 weighting is an editorial choice, not a fitted parameter** — there's no ground truth for how "watchable" a game is. For what's empirically validated (Elo calibration) versus what's a design decision, and the model's known limitations, see [METHODOLOGY.md](METHODOLOGY.md).
 
 ## Tech stack
 

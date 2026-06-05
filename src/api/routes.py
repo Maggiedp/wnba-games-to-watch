@@ -1423,6 +1423,11 @@ _HOMEPAGE_HTML = f"""
 
                 <h3>Notes</h3>
                 <p>
+                    The 60/40 split is an editorial choice, not a fitted number &mdash; there&rsquo;s no
+                    objective measure of how &ldquo;watchable&rdquo; a game is. Quality and importance are
+                    each scaled 0&ndash;100 on their own terms, then blended.
+                </p>
+                <p>
                     Non-regular-season games are not simulated and show no importance score. Expansion teams
                     start at league-average strength until they have a real BPI.
                 </p>
