@@ -12,15 +12,16 @@ from src.scoring.excitement import (
 
 
 def test_constants_match_js():
-    """Python constants must match the JS values in src/api/routes.py.
+    """Python constants must match the JS values in the homepage template.
 
     If this test fails, update one to match the other — drift causes the
     on-page and stored excitement values to diverge.
     """
     import re
-    from pathlib import Path
 
-    src = Path("src/api/routes.py").read_text()
+    from src.api.routes import render_homepage
+
+    src = render_homepage()
     js_close = float(re.search(r"EXCITEMENT_CLOSE\s*=\s*([\d.]+)", src).group(1))
     js_thriller = float(re.search(r"EXCITEMENT_THRILLER\s*=\s*([\d.]+)", src).group(1))
     js_future = float(
