@@ -1163,3 +1163,20 @@ def test_buildwpsvg_escapes_team_abbreviations(session, team_ids):
     assert "${homeLbl}</text>" in html
     assert "${awayAbbr}</text>" not in html
     assert "${homeAbbr}</text>" not in html
+
+
+def test_homepage_template_is_packaged_and_renders():
+    """The homepage HTML lives in src/api/templates/homepage.html and is read
+    at import time. If that file is missing from the shipped revision (e.g.
+    untracked and left out of a deploy), importing src.api.routes fails and the
+    whole API 500s on startup. This guards that the template ships and that all
+    token placeholders were substituted (no %% markers leak to the page)."""
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+
+    resp = TestClient(app).get("/")
+    assert resp.status_code == 200
+    body = resp.text
+    assert body.lstrip().startswith("<!DOCTYPE")
+    assert "%%" not in body  # every token placeholder was replaced
