@@ -3,6 +3,7 @@
 
 import json
 import logging
+import os
 import random
 import sys
 from datetime import date, datetime, timedelta
@@ -67,6 +68,7 @@ from src.scoring.monte_carlo import (
 from src.scoring.quality import compute_quality_score
 from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
 
+os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

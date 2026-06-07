@@ -326,7 +326,14 @@ def _dedupe_games_by_espn_id(conn) -> int:
 def get_engine():
     global _engine
     if _engine is None:
-        _engine = create_engine(get_database_url(), echo=False)
+        url = get_database_url()
+        # Ensure the parent dir of a sqlite file DB exists — a clean checkout has
+        # no data/ dir (it's gitignored), so create_engine would fail to open it.
+        if url.startswith("sqlite:///") and ":memory:" not in url:
+            db_dir = os.path.dirname(url.replace("sqlite:///", "", 1))
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
+        _engine = create_engine(url, echo=False)
     return _engine
 
 
