@@ -1603,8 +1603,11 @@
                 renderGames(filtered, null, 'completed-games-container', SCORE_MODES.EXCITEMENT);
                 filtered.forEach(g => {
                     if (!g.espn_id) return;
-                    const eyebrow = container.querySelector(`[data-espn-id="${g.espn_id}"] .excitement-eyebrow`);
-                    if (eyebrow) applyExcitementClass(eyebrow, excitementLabelFor(g.excitement_index));
+                    // querySelectorAll, not querySelector: renderGames emits BOTH a desktop
+                    // <tr> and a mobile .games-card, each with its own .excitement-eyebrow.
+                    container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .excitement-eyebrow`).forEach(eyebrow => {
+                        applyExcitementClass(eyebrow, excitementLabelFor(g.excitement_index));
+                    });
                 });
             }
 
@@ -1624,7 +1627,7 @@
 
                 container.innerHTML = `
                     <div class="featured-eyebrow">Top pick &middot; Next 7 days</div>
-                    <article class="featured" aria-label="Top pick game">
+                    <article class="featured"${game.espn_id ? ` data-espn-id="${escapeHtml(game.espn_id)}" role="link" tabindex="0"` : ''} aria-label="Top pick game">
                         <div>
                             <div class="featured-meta">${formatLocalDate(game, { weekday: 'long', month: 'long', day: 'numeric' })} &middot; ${escapeHtml(formatLocalTime(game.time_utc, game.time))}</div>
                             <div class="featured-teams">
@@ -2145,7 +2148,7 @@
                     if (!target || !target.dataset.espnId) return;
                     window.location.href = '/game/' + encodeURIComponent(target.dataset.espnId);
                 };
-                ['games-container', 'completed-games-container'].forEach(id => {
+                ['games-container', 'completed-games-container', 'featured-container'].forEach(id => {
                     const el = document.getElementById(id);
                     el.addEventListener('click', navToGame);
                     el.addEventListener('keydown', navToGame);

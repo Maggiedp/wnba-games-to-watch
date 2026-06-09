@@ -1235,3 +1235,34 @@ def test_homepage_template_is_packaged_and_renders():
     body = resp.text
     assert body.lstrip().startswith("<!DOCTYPE")
     assert "%%" not in body  # every token placeholder was replaced
+
+
+def test_completed_excitement_badge_paints_all_eyebrows():
+    """renderCompleted must use querySelectorAll, not querySelector — renderGames
+    emits both a desktop <tr> and a mobile .games-card, each with its own
+    .excitement-eyebrow. querySelector (singular) painted only the desktop one,
+    leaving the mobile card badge blank."""
+    from src.api.routes import render_homepage
+
+    src = render_homepage()
+    # The completed-section paint loop must select ALL matching eyebrows.
+    assert (
+        'container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .excitement-eyebrow`)'
+        in src
+    )
+
+
+def test_featured_hero_card_is_clickable():
+    """The top-pick hero card must navigate to /game/{espn_id} like the rows/cards:
+    it needs data-espn-id/role=link/tabindex on the <article>, and the
+    featured-container must be wired into the navToGame click/keydown listener."""
+    from src.api.routes import render_homepage
+
+    src = render_homepage()
+    # The hero <article> gets a nav-attribute block guarded on espn_id (same contract as
+    # the rows/cards), so a click/Enter on it routes through navToGame to /game/{espn_id}.
+    assert '<article class="featured"${game.espn_id ?' in src
+    # And featured-container is wired into the navToGame click/keydown listener.
+    assert (
+        "['games-container', 'completed-games-container', 'featured-container']" in src
+    )
