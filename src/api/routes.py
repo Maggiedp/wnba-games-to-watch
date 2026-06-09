@@ -7,6 +7,7 @@ import math
 import os
 from datetime import datetime
 
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,12 @@ def _load_template(name: str) -> str:
     """
     with open(os.path.join(_TEMPLATE_DIR, name), encoding="utf-8") as f:
         return f.read()
+
+
+_jinja_env = Environment(
+    loader=FileSystemLoader(_TEMPLATE_DIR),
+    autoescape=select_autoescape(["html"]),
+)
 
 
 def escape_html(s: object) -> str:
@@ -779,11 +786,9 @@ def _detail_h2h_section(game, team_a, team_b, h2h) -> str:
 
 
 def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
-    name_a = escape_html(team_a.name)
-    name_b = escape_html(team_b.name)
-    # name_a/name_b are already escape_html'd; title is safe in attribute position.
+    name_a = team_a.name
+    name_b = team_b.name
     title = f"{name_a} vs {name_b} — {_SITE_TITLE}"
-
     meta_line = _detail_meta_line(game)
 
     if ranking is None or ranking.overall_score is None:
@@ -792,225 +797,31 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
     else:
         overall_html = f'<span class="overall-num">{ranking.overall_score:.0f}</span>'
         summary = (
-            f"{team_a.name} vs {team_b.name} scores "
+            f"{name_a} vs {name_b} scores "
             f"{ranking.overall_score:.0f} out of 100 overall — "
             "60% matchup quality, 40% playoff importance."
         )
-    summary = escape_html(summary)
 
-    wp_section = _detail_win_prob_section(ranking, team_a, team_b)
-    breakdown_section = _detail_breakdown_section(ranking, team_a, team_b)
-    h2h_section = _detail_h2h_section(game, team_a, team_b, h2h)
-    espn_id = escape_html(game.espn_id or "")
-    home_abbr_js = json.dumps(team_a.abbreviation or "")
-    away_abbr_js = json.dumps(team_b.abbreviation or "")
-
-    return f"""<!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{title}</title>
-        <meta name="description" content="{summary}">
-        <meta property="og:title" content="{title}">
-        <meta property="og:description" content="{summary}">
-        <meta property="og:type" content="article">
-        <meta property="og:url" content="{_SITE_URL}/game/{espn_id}">
-        <meta property="og:image" content="{_SITE_URL}/game/{espn_id}/og.png">
-        <meta property="og:image:width" content="1200">
-        <meta property="og:image:height" content="630">
-        <meta property="og:image:type" content="image/png">
-        <meta property="og:image:alt" content="{summary}">
-        <meta name="twitter:card" content="summary_large_image">
-        <meta name="twitter:title" content="{title}">
-        <meta name="twitter:description" content="{summary}">
-        <meta name="twitter:image" content="{_SITE_URL}/game/{espn_id}/og.png">
-{_SHARED_HEAD}
-{_DETAIL_STYLE}
-        </style>
-    </head>
-    <body>
-        <header class="header">
-            <div class="header-inner">
-                <a class="back-link" href="/">&larr; back to rankings</a>
-            </div>
-        </header>
-        <main>
-            <p class="eyebrow">{meta_line}</p>
-            <h1 class="matchup">{name_a} <span class="slash">&#9585;</span> {name_b}</h1>
-
-            <div class="overall-block">
-                {overall_html}
-                <span class="overall-label">Overall</span>
-            </div>
-            <p class="summary">{summary}</p>
-
-            <section>
-                <h2 class="section-title">Win probability</h2>
-                {wp_section}
-            </section>
-
-            <section>
-                <h2 class="section-title">Why it's ranked here</h2>
-                {breakdown_section}
-                <details class="scored">
-                    <summary>How this is scored</summary>
-                    <p>Overall is a weighted blend: 60% matchup quality plus 40% playoff importance.</p>
-                    <p>Quality is the harmonic mean of the two teams' ESPN BPI ratings, normalized on the live &plusmn;8 BPI spread — it rewards games where both teams are strong, not just one.</p>
-                    <p>Importance is the swing in playoff odds this game produces in a Monte Carlo simulation, measured against a season-start ceiling.</p>
-                    <p>Win probability is separate from quality: it's an Elo rating (with a +50 home-court bump), not BPI.</p>
-                </details>
-            </section>
-
-            <section>
-                <h2 class="section-title">Head-to-head &middot; {game.date[:4]}</h2>
-                {h2h_section}
-            </section>
-
-            <section>
-                <h2 class="section-title">Win-probability chart</h2>
-                <div id="wp-chart" data-espn-id="{espn_id}"></div>
-                <p class="chart-placeholder">Appears once the game tips off.</p>
-            </section>
-        </main>
-        <script>
-{_WP_CHART_JS}
-{_SHARED_JS}
-
-            // Localize the eyebrow date/time to the viewer's timezone (the ET
-            // text rendered server-side is the fallback), matching the rest of
-            // the site, which derives local display from time_utc.
-            (function () {{
-                const el = document.querySelector('.meta-when');
-                if (!el || !el.dataset.timeUtc) return;
-                const d = new Date(el.dataset.timeUtc);
-                if (isNaN(d)) return;
-                const ds = d.toLocaleDateString(undefined, {{ weekday: 'short', month: 'short', day: 'numeric' }});
-                const ts = d.toLocaleTimeString(undefined, {{ hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }});
-                el.textContent = ds + ' · ' + ts;
-            }})();
-
-            (function () {{
-                const HOME_ABBR = {home_abbr_js};
-                const AWAY_ABBR = {away_abbr_js};
-                const chartEl = document.getElementById('wp-chart');
-                const placeholderEl = document.querySelector('.chart-placeholder');
-                if (!chartEl) return;
-                const espnId = chartEl.dataset.espnId;
-                if (!espnId) return;
-
-                let pollTimer = null;
-                let backoffIdx = 0;
-                let hasChart = false;  // true once a real chart has been drawn
-
-                const LIVE_INTERVAL = 30000;
-                // Backoff for transient failures, mirroring the homepage
-                // live-status poll (30s → 60s → 120s → 300s, then holds).
-                const BACKOFF_MS = [30000, 60000, 120000, 300000];
-
-                function stopPoll() {{
-                    if (pollTimer) {{ clearTimeout(pollTimer); pollTimer = null; }}
-                }}
-
-                function scheduleNext(delayMs) {{
-                    stopPoll();
-                    pollTimer = setTimeout(load, delayMs);
-                }}
-
-                function showPlaceholder() {{
-                    chartEl.innerHTML = '';
-                    if (placeholderEl) placeholderEl.style.display = '';
-                }}
-
-                function showMessage(msg) {{
-                    if (placeholderEl) placeholderEl.style.display = 'none';
-                    chartEl.innerHTML = `<p class="chart-placeholder" style="display:block">${{escapeHtml(msg)}}</p>`;
-                }}
-
-                // Transient ESPN/API blip (network error, 5xx, or bad JSON):
-                // /api/live-wp returns 502 on ESPN failure by design, so a single
-                // hiccup must NOT kill the chart. Keep any chart already drawn and
-                // retry with backoff instead of replacing it with an error.
-                function transientFail() {{
-                    if (!hasChart) showPlaceholder();
-                    const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)];
-                    backoffIdx++;
-                    scheduleNext(delay);
-                }}
-
-                // Header line: away score / home score, then period+clock (live) or "Final".
-                function headerHtml(data) {{
-                    const away = `${{escapeHtml(AWAY_ABBR)}} ${{escapeHtml(String(data.away_score))}}`;
-                    const home = `${{escapeHtml(HOME_ABBR)}} ${{escapeHtml(String(data.home_score))}}`;
-                    const last = data.plays[data.plays.length - 1];
-                    const period = last && last.period ? last.period : 0;
-                    let status;
-                    if (data.status === 'STATUS_HALFTIME') {{
-                        status = 'Halftime';
-                    }} else if (data.status === 'STATUS_END_PERIOD') {{
-                        status = period <= 4 ? `End Q${{escapeHtml(String(period))}}` : 'End OT';
-                    }} else if (isLiveStatus(data.status)) {{
-                        const q = period <= 4 ? `Q${{escapeHtml(String(period))}}` : 'OT';
-                        const clock = last && last.clock ? ` ${{escapeHtml(String(last.clock))}}` : '';
-                        status = `${{q}}${{clock}}`;
-                    }} else {{
-                        status = 'Final';
-                    }}
-                    const statusHtml = status ? ` <span class="wp-chart-status">&middot; ${{status}}</span>` : '';
-                    return `<div class="wp-chart-header">${{away}} &nbsp; ${{home}}${{statusHtml}}</div>`;
-                }}
-
-                function render(data) {{
-                    const plays = (data && data.plays) || [];
-                    if (!data || !data.status || data.status === 'STATUS_SCHEDULED' || plays.length === 0) {{
-                        showPlaceholder();
-                        return;
-                    }}
-                    if (placeholderEl) placeholderEl.style.display = 'none';
-                    chartEl.innerHTML = headerHtml(data) + buildWpSvg(plays, HOME_ABBR, AWAY_ABBR);
-                    hasChart = true;
-                }}
-
-                async function load() {{
-                    let resp;
-                    try {{
-                        resp = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
-                    }} catch (e) {{
-                        transientFail();  // network error — retry with backoff
-                        return;
-                    }}
-                    if (resp.status === 404) {{
-                        // Terminal: unknown/removed id. Stop; show the message only
-                        // if we never managed to draw a chart.
-                        stopPoll();
-                        if (!hasChart) showMessage('Chart unavailable.');
-                        return;
-                    }}
-                    if (!resp.ok) {{
-                        transientFail();  // 5xx etc. — retry with backoff
-                        return;
-                    }}
-                    let data;
-                    try {{
-                        data = await resp.json();
-                    }} catch (e) {{
-                        transientFail();  // bad JSON — retry with backoff
-                        return;
-                    }}
-                    backoffIdx = 0;  // success resets the backoff sequence
-                    render(data);
-                    if (isLiveStatus(data.status)) {{
-                        scheduleNext(LIVE_INTERVAL);
-                    }} else {{
-                        stopPoll();  // final / scheduled — nothing more to poll
-                    }}
-                }}
-
-                load();
-            }})();
-        </script>
-    </body>
-    </html>"""
+    return _jinja_env.get_template("game_detail.html").render(
+        title=title,
+        summary=summary,
+        name_a=name_a,
+        name_b=name_b,
+        abbr_a=team_a.abbreviation or "",
+        abbr_b=team_b.abbreviation or "",
+        espn_id=game.espn_id or "",
+        season_year=game.date[:4],
+        site_url=_SITE_URL,
+        meta_line=meta_line,
+        overall_html=overall_html,
+        wp_section=_detail_win_prob_section(ranking, team_a, team_b),
+        breakdown_section=_detail_breakdown_section(ranking, team_a, team_b),
+        h2h_section=_detail_h2h_section(game, team_a, team_b, h2h),
+        shared_head=_SHARED_HEAD,
+        detail_style=_DETAIL_STYLE,
+        wp_chart_js=_WP_CHART_JS,
+        shared_js=_SHARED_JS,
+    )
 
 
 def render_homepage() -> str:

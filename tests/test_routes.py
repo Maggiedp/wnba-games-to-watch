@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from src.api.routes import format_games_response, render_game_detail
 from src.data.espn_api import today_et
 from src.db.queries import (
+    get_team_by_id,
     upsert_daily_ranking,
     upsert_game,
     upsert_playoff_probability,
@@ -1131,6 +1132,61 @@ def test_render_game_detail_og_description_uses_not_simulated_fallback(
     html = render_game_detail(session, "401736211")
 
     assert 'property="og:description" content="Not simulated' in html
+
+
+def test_render_game_detail_passes_abbreviations_via_data_attributes(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_team(session, name="Team A", abbreviation="TMA", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Team B", abbreviation="TMB", logo_url="", bpi_rating=0.0)
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736213",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736213")
+
+    # Abbreviations reach the chart JS via data-attributes on #wp-chart, read
+    # through chartEl.dataset — never injected into a <script> literal.
+    assert 'data-home-abbr="TMA"' in html
+    assert 'data-away-abbr="TMB"' in html
+    assert "chartEl.dataset.homeAbbr" in html
+    assert "chartEl.dataset.awayAbbr" in html
+    # The old json.dumps-into-script injection is gone.
+    assert "const HOME_ABBR = " not in html or "dataset.homeAbbr" in html
+
+
+def test_render_game_detail_autoescapes_team_names(session, team_ids):
+    a_id, b_id = team_ids
+    # Rename team_a's record (the one referenced by a_id) in place so the
+    # rendered team_a name is the malicious string. upsert_team keys by name,
+    # so it would create a NEW team rather than rename a_id's record.
+    team_a = get_team_by_id(session, a_id)
+    team_a.name = "<script>x</script>"
+    team_a.abbreviation = 'X"Y'
+    session.commit()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=today_et(),
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736214",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736214")
+
+    assert "<script>x</script>" not in html  # raw markup never emitted
+    assert "&lt;script&gt;x&lt;/script&gt;" in html  # autoescaped in h1/summary/og
+    assert 'data-home-abbr="X"Y"' not in html  # quote escaped, not raw
 
 
 def test_buildwpsvg_escapes_team_abbreviations(session, team_ids):
