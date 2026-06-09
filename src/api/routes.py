@@ -41,6 +41,10 @@ def _load_template(name: str) -> str:
 _jinja_env = Environment(
     loader=FileSystemLoader(_TEMPLATE_DIR),
     autoescape=select_autoescape(["html"]),
+    # Templates ship frozen in the container image and never change at runtime
+    # (the homepage/transparency pages are likewise precomputed at import), so
+    # skip the per-request mtime stat that auto_reload would otherwise do.
+    auto_reload=False,
 )
 
 

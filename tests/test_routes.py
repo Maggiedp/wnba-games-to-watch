@@ -1135,10 +1135,8 @@ def test_render_game_detail_og_description_uses_not_simulated_fallback(
 
 
 def test_render_game_detail_passes_abbreviations_via_data_attributes(session, team_ids):
-    a_id, b_id = team_ids
+    a_id, b_id = team_ids  # fixture creates Team A/Team B with abbr TMA/TMB
     date = today_et()
-    upsert_team(session, name="Team A", abbreviation="TMA", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Team B", abbreviation="TMB", logo_url="", bpi_rating=0.0)
     upsert_game(
         session,
         team_a_id=a_id,
@@ -1158,8 +1156,9 @@ def test_render_game_detail_passes_abbreviations_via_data_attributes(session, te
     assert 'data-away-abbr="TMB"' in html
     assert "chartEl.dataset.homeAbbr" in html
     assert "chartEl.dataset.awayAbbr" in html
-    # The old json.dumps-into-script injection is gone.
-    assert "const HOME_ABBR = " not in html or "dataset.homeAbbr" in html
+    # The old json.dumps-into-script injection (const HOME_ABBR = "TMA";) is gone:
+    # the value now comes from the data-attribute, never a quoted JS literal.
+    assert 'const HOME_ABBR = "' not in html
 
 
 def test_render_game_detail_autoescapes_team_names(session, team_ids):
