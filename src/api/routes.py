@@ -28,11 +28,11 @@ _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 def _load_template(name: str) -> str:
     """Read an HTML template shipped alongside this module.
 
-    For FULLY-STATIC pages only: the caller substitutes build-time constants
-    with plain ``str.replace`` of ``%%TOKEN%%`` markers, which does no HTML
-    escaping. Don't extend that pattern to data-bearing pages (the detail /
-    transparency pages interpolate per-request game data) — move those to a
-    real template engine (jinja2) with autoescaping instead.
+    For STATIC pages only (homepage, transparency): the caller substitutes
+    trusted build-time constants with plain ``str.replace`` of ``%%TOKEN%%``
+    markers, which does no HTML escaping. Data-bearing pages (the game detail
+    page) render through the jinja2 ``_jinja_env`` with autoescaping instead —
+    never feed ESPN/DB-derived values through the ``%%TOKEN%%`` path.
     """
     with open(os.path.join(_TEMPLATE_DIR, name), encoding="utf-8") as f:
         return f.read()
@@ -278,10 +278,11 @@ _WP_CHART_JS = """
             }
 """
 
-# Shared client-side JS helpers used by both the homepage and the detail page.
-# Plain string (not f-string) — braces are SINGLE. Interpolated via
-# {_SHARED_JS} into each page's <script> so the XSS-escaping table and the
-# live-status check are single-sourced and can't drift between pages.
+# Shared client-side JS helpers used by all rendered pages (homepage,
+# transparency, detail). Plain string (not f-string) — braces are SINGLE.
+# Injected via %%SHARED_JS%% (.replace pages) or {{ shared_js | safe }} (jinja
+# detail page) so the XSS-escaping table and the live-status check are
+# single-sourced and can't drift between pages.
 _SHARED_JS = """
             function escapeHtml(s) {
                 return String(s).replace(/[&<>"']/g, c => ({
