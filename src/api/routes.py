@@ -198,6 +198,7 @@ _SHARED_HEAD = """\
                 --navy-3: #2b3a52;
                 --orange: #ff6b00;
                 --orange-deep: #a03c00;
+                --live: #d6442e;
                 --bg: #f7f5f0;
                 --surface: #ffffff;
                 --text: #0d1b2a;
@@ -220,6 +221,33 @@ _SHARED_HEAD = """\
                 flex-direction: column;
                 font-size: 16px;
                 line-height: 1.45;
+            }
+            .live-pill {
+                display: none;
+                align-items: center;
+                gap: 5px;
+                font-family: var(--display);
+                font-weight: 700;
+                font-size: 0.8rem;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                color: var(--live);
+                line-height: 1;
+            }
+            .live-pill.is-live { display: inline-flex; }
+            .live-dot {
+                width: 7px;
+                height: 7px;
+                border-radius: 50%;
+                background: var(--live);
+                flex: none;
+            }
+            @media (prefers-reduced-motion: no-preference) {
+                .live-dot { animation: live-breathe 1.8s ease-in-out infinite; }
+            }
+            @keyframes live-breathe {
+                0%, 100% { opacity: 1; transform: scale(1); }
+                50% { opacity: 0.35; transform: scale(0.78); }
             }\
 """
 
