@@ -71,6 +71,8 @@ def test_transparency_page_renders():
     assert 'id="calibration-chart"' in r.text
     assert "loadCalibration" in r.text
     assert "Behind the numbers" in r.text
+    assert r.text.lstrip().startswith("<!DOCTYPE")  # full document
+    assert "%%" not in r.text  # every token placeholder was substituted
 
 
 def test_calibration_endpoint(env):

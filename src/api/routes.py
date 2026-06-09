@@ -7,6 +7,7 @@ import math
 import os
 from datetime import datetime
 
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -27,14 +28,24 @@ _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 def _load_template(name: str) -> str:
     """Read an HTML template shipped alongside this module.
 
-    For FULLY-STATIC pages only: the caller substitutes build-time constants
-    with plain ``str.replace`` of ``%%TOKEN%%`` markers, which does no HTML
-    escaping. Don't extend that pattern to data-bearing pages (the detail /
-    transparency pages interpolate per-request game data) — move those to a
-    real template engine (jinja2) with autoescaping instead.
+    For STATIC pages only (homepage, transparency): the caller substitutes
+    trusted build-time constants with plain ``str.replace`` of ``%%TOKEN%%``
+    markers, which does no HTML escaping. Data-bearing pages (the game detail
+    page) render through the jinja2 ``_jinja_env`` with autoescaping instead —
+    never feed ESPN/DB-derived values through the ``%%TOKEN%%`` path.
     """
     with open(os.path.join(_TEMPLATE_DIR, name), encoding="utf-8") as f:
         return f.read()
+
+
+_jinja_env = Environment(
+    loader=FileSystemLoader(_TEMPLATE_DIR),
+    autoescape=select_autoescape(["html"]),
+    # Templates ship frozen in the container image and never change at runtime
+    # (the homepage/transparency pages are likewise precomputed at import), so
+    # skip the per-request mtime stat that auto_reload would otherwise do.
+    auto_reload=False,
+)
 
 
 def escape_html(s: object) -> str:
@@ -271,10 +282,11 @@ _WP_CHART_JS = """
             }
 """
 
-# Shared client-side JS helpers used by both the homepage and the detail page.
-# Plain string (not f-string) — braces are SINGLE. Interpolated via
-# {_SHARED_JS} into each page's <script> so the XSS-escaping table and the
-# live-status check are single-sourced and can't drift between pages.
+# Shared client-side JS helpers used by all rendered pages (homepage,
+# transparency, detail). Plain string (not f-string) — braces are SINGLE.
+# Injected via %%SHARED_JS%% (.replace pages) or {{ shared_js | safe }} (jinja
+# detail page) so the XSS-escaping table and the live-status check are
+# single-sourced and can't drift between pages.
 _SHARED_JS = """
             function escapeHtml(s) {
                 return String(s).replace(/[&<>"']/g, c => ({
@@ -295,6 +307,14 @@ _HOMEPAGE_HTML = (
     _load_template("homepage.html")
     .replace("%%SITE_TITLE%%", _SITE_TITLE)
     .replace("%%SITE_DESCRIPTION%%", _SITE_DESCRIPTION)
+    .replace("%%SITE_URL%%", _SITE_URL)
+    .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
+    .replace("%%SHARED_JS%%", _SHARED_JS)
+)
+
+_TRANSPARENCY_HTML = (
+    _load_template("transparency.html")
+    .replace("%%SITE_TITLE%%", _SITE_TITLE)
     .replace("%%SITE_URL%%", _SITE_URL)
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
@@ -771,11 +791,9 @@ def _detail_h2h_section(game, team_a, team_b, h2h) -> str:
 
 
 def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
-    name_a = escape_html(team_a.name)
-    name_b = escape_html(team_b.name)
-    # name_a/name_b are already escape_html'd; title is safe in attribute position.
+    name_a = team_a.name
+    name_b = team_b.name
     title = f"{name_a} vs {name_b} — {_SITE_TITLE}"
-
     meta_line = _detail_meta_line(game)
 
     if ranking is None or ranking.overall_score is None:
@@ -784,225 +802,31 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
     else:
         overall_html = f'<span class="overall-num">{ranking.overall_score:.0f}</span>'
         summary = (
-            f"{team_a.name} vs {team_b.name} scores "
+            f"{name_a} vs {name_b} scores "
             f"{ranking.overall_score:.0f} out of 100 overall — "
             "60% matchup quality, 40% playoff importance."
         )
-    summary = escape_html(summary)
 
-    wp_section = _detail_win_prob_section(ranking, team_a, team_b)
-    breakdown_section = _detail_breakdown_section(ranking, team_a, team_b)
-    h2h_section = _detail_h2h_section(game, team_a, team_b, h2h)
-    espn_id = escape_html(game.espn_id or "")
-    home_abbr_js = json.dumps(team_a.abbreviation or "")
-    away_abbr_js = json.dumps(team_b.abbreviation or "")
-
-    return f"""<!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{title}</title>
-        <meta name="description" content="{summary}">
-        <meta property="og:title" content="{title}">
-        <meta property="og:description" content="{summary}">
-        <meta property="og:type" content="article">
-        <meta property="og:url" content="{_SITE_URL}/game/{espn_id}">
-        <meta property="og:image" content="{_SITE_URL}/game/{espn_id}/og.png">
-        <meta property="og:image:width" content="1200">
-        <meta property="og:image:height" content="630">
-        <meta property="og:image:type" content="image/png">
-        <meta property="og:image:alt" content="{summary}">
-        <meta name="twitter:card" content="summary_large_image">
-        <meta name="twitter:title" content="{title}">
-        <meta name="twitter:description" content="{summary}">
-        <meta name="twitter:image" content="{_SITE_URL}/game/{espn_id}/og.png">
-{_SHARED_HEAD}
-{_DETAIL_STYLE}
-        </style>
-    </head>
-    <body>
-        <header class="header">
-            <div class="header-inner">
-                <a class="back-link" href="/">&larr; back to rankings</a>
-            </div>
-        </header>
-        <main>
-            <p class="eyebrow">{meta_line}</p>
-            <h1 class="matchup">{name_a} <span class="slash">&#9585;</span> {name_b}</h1>
-
-            <div class="overall-block">
-                {overall_html}
-                <span class="overall-label">Overall</span>
-            </div>
-            <p class="summary">{summary}</p>
-
-            <section>
-                <h2 class="section-title">Win probability</h2>
-                {wp_section}
-            </section>
-
-            <section>
-                <h2 class="section-title">Why it's ranked here</h2>
-                {breakdown_section}
-                <details class="scored">
-                    <summary>How this is scored</summary>
-                    <p>Overall is a weighted blend: 60% matchup quality plus 40% playoff importance.</p>
-                    <p>Quality is the harmonic mean of the two teams' ESPN BPI ratings, normalized on the live &plusmn;8 BPI spread — it rewards games where both teams are strong, not just one.</p>
-                    <p>Importance is the swing in playoff odds this game produces in a Monte Carlo simulation, measured against a season-start ceiling.</p>
-                    <p>Win probability is separate from quality: it's an Elo rating (with a +50 home-court bump), not BPI.</p>
-                </details>
-            </section>
-
-            <section>
-                <h2 class="section-title">Head-to-head &middot; {game.date[:4]}</h2>
-                {h2h_section}
-            </section>
-
-            <section>
-                <h2 class="section-title">Win-probability chart</h2>
-                <div id="wp-chart" data-espn-id="{espn_id}"></div>
-                <p class="chart-placeholder">Appears once the game tips off.</p>
-            </section>
-        </main>
-        <script>
-{_WP_CHART_JS}
-{_SHARED_JS}
-
-            // Localize the eyebrow date/time to the viewer's timezone (the ET
-            // text rendered server-side is the fallback), matching the rest of
-            // the site, which derives local display from time_utc.
-            (function () {{
-                const el = document.querySelector('.meta-when');
-                if (!el || !el.dataset.timeUtc) return;
-                const d = new Date(el.dataset.timeUtc);
-                if (isNaN(d)) return;
-                const ds = d.toLocaleDateString(undefined, {{ weekday: 'short', month: 'short', day: 'numeric' }});
-                const ts = d.toLocaleTimeString(undefined, {{ hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }});
-                el.textContent = ds + ' · ' + ts;
-            }})();
-
-            (function () {{
-                const HOME_ABBR = {home_abbr_js};
-                const AWAY_ABBR = {away_abbr_js};
-                const chartEl = document.getElementById('wp-chart');
-                const placeholderEl = document.querySelector('.chart-placeholder');
-                if (!chartEl) return;
-                const espnId = chartEl.dataset.espnId;
-                if (!espnId) return;
-
-                let pollTimer = null;
-                let backoffIdx = 0;
-                let hasChart = false;  // true once a real chart has been drawn
-
-                const LIVE_INTERVAL = 30000;
-                // Backoff for transient failures, mirroring the homepage
-                // live-status poll (30s → 60s → 120s → 300s, then holds).
-                const BACKOFF_MS = [30000, 60000, 120000, 300000];
-
-                function stopPoll() {{
-                    if (pollTimer) {{ clearTimeout(pollTimer); pollTimer = null; }}
-                }}
-
-                function scheduleNext(delayMs) {{
-                    stopPoll();
-                    pollTimer = setTimeout(load, delayMs);
-                }}
-
-                function showPlaceholder() {{
-                    chartEl.innerHTML = '';
-                    if (placeholderEl) placeholderEl.style.display = '';
-                }}
-
-                function showMessage(msg) {{
-                    if (placeholderEl) placeholderEl.style.display = 'none';
-                    chartEl.innerHTML = `<p class="chart-placeholder" style="display:block">${{escapeHtml(msg)}}</p>`;
-                }}
-
-                // Transient ESPN/API blip (network error, 5xx, or bad JSON):
-                // /api/live-wp returns 502 on ESPN failure by design, so a single
-                // hiccup must NOT kill the chart. Keep any chart already drawn and
-                // retry with backoff instead of replacing it with an error.
-                function transientFail() {{
-                    if (!hasChart) showPlaceholder();
-                    const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)];
-                    backoffIdx++;
-                    scheduleNext(delay);
-                }}
-
-                // Header line: away score / home score, then period+clock (live) or "Final".
-                function headerHtml(data) {{
-                    const away = `${{escapeHtml(AWAY_ABBR)}} ${{escapeHtml(String(data.away_score))}}`;
-                    const home = `${{escapeHtml(HOME_ABBR)}} ${{escapeHtml(String(data.home_score))}}`;
-                    const last = data.plays[data.plays.length - 1];
-                    const period = last && last.period ? last.period : 0;
-                    let status;
-                    if (data.status === 'STATUS_HALFTIME') {{
-                        status = 'Halftime';
-                    }} else if (data.status === 'STATUS_END_PERIOD') {{
-                        status = period <= 4 ? `End Q${{escapeHtml(String(period))}}` : 'End OT';
-                    }} else if (isLiveStatus(data.status)) {{
-                        const q = period <= 4 ? `Q${{escapeHtml(String(period))}}` : 'OT';
-                        const clock = last && last.clock ? ` ${{escapeHtml(String(last.clock))}}` : '';
-                        status = `${{q}}${{clock}}`;
-                    }} else {{
-                        status = 'Final';
-                    }}
-                    const statusHtml = status ? ` <span class="wp-chart-status">&middot; ${{status}}</span>` : '';
-                    return `<div class="wp-chart-header">${{away}} &nbsp; ${{home}}${{statusHtml}}</div>`;
-                }}
-
-                function render(data) {{
-                    const plays = (data && data.plays) || [];
-                    if (!data || !data.status || data.status === 'STATUS_SCHEDULED' || plays.length === 0) {{
-                        showPlaceholder();
-                        return;
-                    }}
-                    if (placeholderEl) placeholderEl.style.display = 'none';
-                    chartEl.innerHTML = headerHtml(data) + buildWpSvg(plays, HOME_ABBR, AWAY_ABBR);
-                    hasChart = true;
-                }}
-
-                async function load() {{
-                    let resp;
-                    try {{
-                        resp = await fetch(`/api/live-wp?espn_id=${{encodeURIComponent(espnId)}}`);
-                    }} catch (e) {{
-                        transientFail();  // network error — retry with backoff
-                        return;
-                    }}
-                    if (resp.status === 404) {{
-                        // Terminal: unknown/removed id. Stop; show the message only
-                        // if we never managed to draw a chart.
-                        stopPoll();
-                        if (!hasChart) showMessage('Chart unavailable.');
-                        return;
-                    }}
-                    if (!resp.ok) {{
-                        transientFail();  // 5xx etc. — retry with backoff
-                        return;
-                    }}
-                    let data;
-                    try {{
-                        data = await resp.json();
-                    }} catch (e) {{
-                        transientFail();  // bad JSON — retry with backoff
-                        return;
-                    }}
-                    backoffIdx = 0;  // success resets the backoff sequence
-                    render(data);
-                    if (isLiveStatus(data.status)) {{
-                        scheduleNext(LIVE_INTERVAL);
-                    }} else {{
-                        stopPoll();  // final / scheduled — nothing more to poll
-                    }}
-                }}
-
-                load();
-            }})();
-        </script>
-    </body>
-    </html>"""
+    return _jinja_env.get_template("game_detail.html").render(
+        title=title,
+        summary=summary,
+        name_a=name_a,
+        name_b=name_b,
+        abbr_a=team_a.abbreviation or "",
+        abbr_b=team_b.abbreviation or "",
+        espn_id=game.espn_id or "",
+        season_year=game.date[:4],
+        site_url=_SITE_URL,
+        meta_line=meta_line,
+        overall_html=overall_html,
+        wp_section=_detail_win_prob_section(ranking, team_a, team_b),
+        breakdown_section=_detail_breakdown_section(ranking, team_a, team_b),
+        h2h_section=_detail_h2h_section(game, team_a, team_b, h2h),
+        shared_head=_SHARED_HEAD,
+        detail_style=_DETAIL_STYLE,
+        wp_chart_js=_WP_CHART_JS,
+        shared_js=_SHARED_JS,
+    )
 
 
 def render_homepage() -> str:
@@ -1010,303 +834,8 @@ def render_homepage() -> str:
 
 
 def render_transparency() -> str:
-    """Server-rendered /transparency page. Data is fetched client-side from
-    /api/elo-history and /api/calibration so this stays a thin shell."""
-    return (
-        f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Behind the numbers · {_SITE_TITLE}</title>
-<meta name="description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
-
-<meta property="og:title" content="Behind the numbers · {_SITE_TITLE}">
-<meta property="og:description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
-<meta property="og:type" content="website">
-<meta property="og:url" content="{_SITE_URL}/transparency">
-<meta property="og:image" content="{_SITE_URL}/og-transparency.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta property="og:image:type" content="image/png">
-<meta property="og:image:alt" content="How wumbers scores every WNBA game">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Behind the numbers · {_SITE_TITLE}">
-<meta name="twitter:description" content="How {_SITE_TITLE} scores games: team Elo over time and win-probability calibration.">
-<meta name="twitter:image" content="{_SITE_URL}/og-transparency.png">
-
-<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23ff6b00'/><path d='M2 16 h28 M16 2 v28' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 7 C 11 12 21 12 27 7' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 25 C 11 20 21 20 27 25' stroke='%230d1b2a' stroke-width='2' fill='none'/></svg>">
-
-{_SHARED_HEAD}
-            .wrap {{ max-width: 920px; width: 100%; margin: 0 auto; padding: 24px 16px 64px; }}
-            h1 {{ font-family: var(--display); font-size: 1.7rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }}
-            h2 {{ font-family: var(--display); font-size: 1.2rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }}
-            .sub {{ color: var(--text-muted); margin: 0 0 28px; }}
-            section {{ background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 24px; }}
-            .desc {{ color: var(--text-muted); font-size: .9rem; margin: 0 0 16px; }}
-            .chart {{ width: 100%; overflow-x: auto; }}
-            .chart svg {{ max-width: 100%; height: auto; display: block; }}
-            .legend {{ display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; font-size: .8rem; }}
-            .empty {{ color: var(--text-subtle); font-style: italic; }}
-            a.back {{ color: var(--orange-deep); text-decoration: none; font-size: .9rem; }}
-            .legend-row {{ display: inline-flex; align-items: baseline; gap: 7px; padding: 3px 11px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: .82rem; transition: background .12s ease, color .12s ease, border-color .12s ease; }}
-            .legend-row .rank {{ color: var(--text-subtle); font-variant-numeric: tabular-nums; font-size: .72rem; }}
-            .legend-row .rating {{ color: var(--text-subtle); font-variant-numeric: tabular-nums; }}
-            .legend-row:hover, .legend-row.active, .legend-row:focus-visible {{ background: var(--orange); border-color: var(--orange); color: #fff; outline: none; }}
-            .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .rating, .legend-row.active .rating {{ color: rgba(255, 255, 255, .82); }}
-            .elo-line {{ fill: none; stroke: var(--navy); stroke-opacity: .15; stroke-width: 1.4; pointer-events: none; transition: stroke-opacity .12s ease, stroke-width .12s ease; }}
-            .elo-line.hi {{ stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }}
-            .elo-hit {{ fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }}
-            .elo-label {{ fill: var(--text-subtle); font-size: 9.5px; font-variant-numeric: tabular-nums; cursor: pointer; }}
-            .elo-label.hi {{ fill: var(--orange); font-weight: 600; }}
-            .cal-layout {{ display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: center; }}
-            .cal-read p {{ margin: 0 0 12px; color: var(--text-muted); font-size: .92rem; line-height: 1.5; }}
-            .cal-foot {{ color: var(--text-subtle) !important; font-size: .82rem !important; }}
-            .cal-sub {{ font-family: var(--display); font-size: 1rem; font-weight: 600; color: var(--navy); margin: 24px 0 12px; padding-top: 14px; border-top: 1px solid var(--line-soft); }}
-            @media (max-width: 640px) {{ .cal-layout {{ grid-template-columns: 1fr; }} }}
-        </style>
-</head>
-<body>
-<div class="wrap">
-  <a class="back" href="/">&larr; Back to games</a>
-  <h1>Behind the numbers</h1>
-  <p class="sub">How the model moves, and how accurate it has been.</p>
-
-  <section>
-    <h2>Elo ratings over time</h2>
-    <p class="desc">Each team's Elo rating entering every game this season.
-       Replayed from results — higher is stronger.</p>
-    <div id="elo-chart" class="chart"><p class="empty">Loading…</p></div>
-    <div id="elo-legend" class="legend"></div>
-  </section>
-  <section>
-    <h2>Win-probability calibration</h2>
-    <p class="desc">How our predicted win probabilities line up with how often teams
-       actually win — dots on the dashed line are perfectly calibrated.</p>
-    <h3 class="cal-sub">This season</h3>
-    <div class="cal-layout">
-      <div id="calibration-chart" class="chart"><p class="empty">Loading…</p></div>
-      <div id="calibration-summary" class="cal-read"></div>
-    </div>
-    <h3 class="cal-sub">Backtest · 2017&ndash;2025</h3>
-    <div class="cal-layout">
-      <div id="backtest-chart" class="chart"></div>
-      <div id="backtest-summary" class="cal-read"></div>
-    </div>
-  </section>
-</div>
-
-<script>
-"""
-        + _SHARED_JS
-        + """
-const MIN_CAL_GAMES = 25;
-
-// Static 2017-2025 backtest of the deployed Elo model (K=16, H=50, reg=0.5,
-// MOV on), from `python -m scripts.validate_elo`. Time-honest (each prediction
-// uses only prior games). Regenerate and update if the Elo hyperparameters or
-// historical data change.
-const BACKTEST = {
-  brier: 0.214, pickAcc: 0.671, n: 1910, seasons: '2017–2025',
-  buckets: [
-    { predicted_mean: 0.164, actual_rate: 0.250, count: 44 },
-    { predicted_mean: 0.319, actual_rate: 0.315, count: 349 },
-    { predicted_mean: 0.504, actual_rate: 0.492, count: 664 },
-    { predicted_mean: 0.693, actual_rate: 0.684, count: 686 },
-    { predicted_mean: 0.844, actual_rate: 0.898, count: 167 },
-  ],
-};
-
-function renderBacktest() {
-  const mount = document.getElementById('backtest-chart');
-  const summary = document.getElementById('backtest-summary');
-  if (!mount) return;
-  mount.innerHTML = buildReliabilitySvg(BACKTEST.buckets);
-  summary.innerHTML =
-    `<p>Replaying every game from ${BACKTEST.seasons} and scoring each prediction against ` +
-    `what actually happened — no peeking ahead. The model picks the winner about ` +
-    `<strong>${Math.round(BACKTEST.pickAcc * 100)}%</strong> of the time, and predicted ` +
-    `win rates match actual within about 1% across the middle of the range.</p>` +
-    `<p class="cal-foot">Across ${BACKTEST.n.toLocaleString()} games (2017&ndash;2025).</p>`;
-}
-
-function buildLineChartSvg(series, opts) {
-  // series: [{label, abbr, points:[{x,y}]}] — lines styled/highlighted via CSS
-  // (.elo-line[.hi]); each path and its end-label carry data-team = the index.
-  const W = opts.width, H = opts.height;
-  const PL = 40, PR = 48, PT = 16, PB = 28;  // extra right pad for end-labels
-  const xs = series.flatMap(s => s.points.map(p => p.x));
-  const ys = series.flatMap(s => s.points.map(p => p.y));
-  if (!xs.length) return '<p class="empty">No data yet.</p>';
-  const xmin = Math.min(...xs), xmax = Math.max(...xs);
-  const ymin = Math.min(...ys), ymax = Math.max(...ys);
-  const sx = x => PL + (xmax === xmin ? 0 : (x - xmin) / (xmax - xmin)) * (W - PL - PR);
-  const sy = y => H - PB - (ymax === ymin ? 0 : (y - ymin) / (ymax - ymin)) * (H - PT - PB);
-  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Team Elo ratings over time">`;
-  for (let i = 0; i <= 4; i++) {
-    const val = ymin + (ymax - ymin) * i / 4;
-    const y = sy(val);
-    svg += `<line x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}" stroke="#ece6da"/>`;
-    svg += `<text x="${PL-8}" y="${y+3}" text-anchor="end" font-size="10" fill="#8a929d">${Math.round(val)}</text>`;
-  }
-  for (const t of (opts.xTicks || [])) {
-    const x = sx(t.x);
-    svg += `<line x1="${x}" y1="${PT}" x2="${x}" y2="${H-PB}" stroke="#f2ede3"/>`;
-    svg += `<text x="${x}" y="${H-PB+15}" text-anchor="middle" font-size="10" fill="#8a929d">${t.label}</text>`;
-  }
-  const paths = series.map(s => s.points.length
-    ? s.points.map((p, k) => `${k ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ')
-    : '');
-  for (let i = 0; i < series.length; i++) {
-    if (paths[i]) svg += `<path class="elo-line" data-team="${i}" d="${paths[i]}"/>`;
-  }
-  // Direct end-of-line labels (abbreviation), nudged apart so they don't stack.
-  const ends = [];
-  for (let i = 0; i < series.length; i++) {
-    const pts = series[i].points;
-    if (!pts.length) continue;  // guard, mirroring the line/path loop
-    ends.push({ i, abbr: series[i].abbr, y: sy(pts[pts.length - 1].y) });
-  }
-  ends.sort((a, b) => a.y - b.y);
-  const gap = 11;
-  for (let k = 1; k < ends.length; k++) {
-    if (ends[k].y - ends[k - 1].y < gap) ends[k].y = ends[k - 1].y + gap;
-  }
-  const overflow = ends.length ? ends[ends.length - 1].y - (H - PB) : 0;
-  if (overflow > 0) for (const e of ends) e.y -= overflow;  // shift stack up to fit
-  for (const e of ends) {
-    svg += `<text class="elo-label" data-team="${e.i}" x="${W-PR+5}" y="${e.y.toFixed(1)}" dominant-baseline="middle">${escapeHtml(e.abbr)}</text>`;
-  }
-  // Invisible wide hit paths on top so the thin lines are easy to hover.
-  for (let i = 0; i < series.length; i++) {
-    if (paths[i]) svg += `<path class="elo-hit" data-team="${i}" d="${paths[i]}"/>`;
-  }
-  svg += '</svg>';
-  return svg;
-}
-
-async function loadElo() {
-  const mount = document.getElementById('elo-chart');
-  const legend = document.getElementById('elo-legend');
-  try {
-    const res = await fetch('/api/elo-history');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    const names = Object.keys(data.teams || {});
-    if (!names.length) { mount.innerHTML = '<p class="empty">No Elo history yet.</p>'; return; }
-    const allDates = [...new Set(names.flatMap(n => data.teams[n].map(p => p.date)))].sort();
-    const dayIndex = Object.fromEntries(allDates.map((d, i) => [d, i]));
-    const abbrevs = data.abbrevs || {};
-    const series = names.map(n => {
-      const pts = data.teams[n];
-      return { label: n, abbr: abbrevs[n] || n.slice(0, 3).toUpperCase(),
-               last: pts[pts.length - 1].rating,
-               points: pts.map(p => ({ x: dayIndex[p.date], y: p.rating })) };
-    });
-    series.sort((a, b) => b.last - a.last);  // legend doubles as a standings list
-    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const seen = new Set();
-    const xTicks = [];
-    for (const d of allDates) {
-      const ym = d.slice(0, 7);
-      if (seen.has(ym)) continue;
-      seen.add(ym);
-      xTicks.push({ x: dayIndex[d], label: MONTHS[parseInt(d.slice(5, 7), 10) - 1] });
-    }
-    mount.innerHTML = buildLineChartSvg(series, { width: 860, height: 360, xTicks });
-    const svg = mount.querySelector('svg');
-    legend.innerHTML = series.map((s, i) =>
-      `<button class="legend-row" type="button" data-team="${i}">` +
-      `<span class="rank">${i + 1}</span>${escapeHtml(s.label)}` +
-      `<span class="rating">${Math.round(s.last)}</span></button>`).join('');
-    // Hover/focus a team to lift its line out of the muted cloud.
-    const setHi = (i, on) => {
-      const path = svg && svg.querySelector(`.elo-line[data-team="${i}"]`);
-      const label = svg && svg.querySelector(`.elo-label[data-team="${i}"]`);
-      const row = legend.querySelector(`.legend-row[data-team="${i}"]`);
-      if (path) { path.classList.toggle('hi', on); if (on) path.parentNode.appendChild(path); }
-      if (label) { label.classList.toggle('hi', on); if (on) label.parentNode.appendChild(label); }
-      if (row) row.classList.toggle('active', on);
-    };
-    legend.querySelectorAll('.legend-row').forEach(row => {
-      const i = row.dataset.team;
-      row.addEventListener('mouseenter', () => setHi(i, true));
-      row.addEventListener('mouseleave', () => setHi(i, false));
-      row.addEventListener('focus', () => setHi(i, true));
-      row.addEventListener('blur', () => setHi(i, false));
-    });
-    // Hovering the line itself (via a wide transparent hit path) or its end
-    // label highlights the same team.
-    (svg ? svg.querySelectorAll('.elo-hit, .elo-label') : []).forEach(el => {
-      const i = el.dataset.team;
-      el.addEventListener('mouseenter', () => setHi(i, true));
-      el.addEventListener('mouseleave', () => setHi(i, false));
-    });
-  } catch (e) {
-    mount.innerHTML = '<p class="empty">Could not load Elo history.</p>';
-  }
-}
-
-function buildReliabilitySvg(buckets) {
-  const W = 360, H = 360, P = 44;
-  const sx = v => P + v * (W - 2*P);
-  const sy = v => H - P - v * (H - 2*P);
-  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Win-probability calibration">`;
-  svg += `<rect x="${P}" y="${P}" width="${W-2*P}" height="${H-2*P}" fill="none" stroke="#e7e2d8"/>`;
-  // perfect-calibration identity line (navy, dashed)
-  svg += `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(1)}" y2="${sy(1)}" stroke="#0d1b2a" stroke-opacity="0.3" stroke-dasharray="4 4"/>`;
-  svg += `<text x="${W/2}" y="${H-8}" text-anchor="middle" font-size="11" fill="#5a6573">Predicted win probability</text>`;
-  svg += `<text x="14" y="${H/2}" text-anchor="middle" font-size="11" fill="#5a6573" transform="rotate(-90 14 ${H/2})">Actual win rate</text>`;
-  const maxN = Math.max(1, ...buckets.map(b => b.count));
-  for (const b of buckets) {
-    const cx = sx(b.predicted_mean), cy = sy(b.actual_rate);
-    const rad = 4 + 8 * (b.count / maxN);  // dot size ~ games in the bucket
-    svg += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="#ff6b00" fill-opacity="0.85" stroke="#a03c00" stroke-width="1"/>`;
-    svg += `<text x="${cx.toFixed(1)}" y="${(cy - rad - 4).toFixed(1)}" text-anchor="middle" font-size="9" fill="#8a929d">${b.count}</text>`;
-  }
-  svg += '</svg>';
-  return svg;
-}
-
-async function loadCalibration() {
-  const mount = document.getElementById('calibration-chart');
-  const summary = document.getElementById('calibration-summary');
-  try {
-    const res = await fetch('/api/calibration');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    if (!data.n) {
-      mount.innerHTML = '<p class="empty">No completed games yet.</p>';
-      summary.innerHTML = '';
-      return;
-    }
-    if (data.n < MIN_CAL_GAMES) {
-      // Not enough games for a stable curve — collapse to one quiet line (no
-      // loud placeholder); the 2017-2025 backtest below carries model quality.
-      const layout = mount.closest('.cal-layout');
-      if (layout) layout.style.display = 'block';
-      mount.innerHTML = '';
-      summary.innerHTML =
-        `<p class="cal-foot" style="margin:0">This season's calibration appears once about ` +
-        `<strong>${MIN_CAL_GAMES}</strong> games are completed — <strong>${data.n}</strong> ` +
-        `so far. The backtest below shows how the model does over a full history.</p>`;
-      return;
-    }
-    mount.innerHTML = buildReliabilitySvg(data.buckets || []);
-    summary.innerHTML =
-      `<p>Each dot groups games we gave a similar win chance; its height is how often those ` +
-      `teams actually won. Dots on the dashed line are perfectly calibrated, and a dot's size ` +
-      `is how many games it covers.</p>` +
-      `<p class="cal-foot">Across ${data.n} completed games this season.</p>`;
-  } catch (e) {
-    mount.innerHTML = '<p class="empty">Could not load calibration.</p>';
-  }
-}
-
-loadElo();
-loadCalibration();
-renderBacktest();
-</script>
-</body>
-</html>"""
-    )
+    """Server-rendered /transparency page. Static shell — all data is fetched
+    client-side from /api/elo-history and /api/calibration, so it carries no
+    per-request data and uses the same trusted-constant %%TOKEN%% substitution
+    as the homepage (see _load_template)."""
+    return _TRANSPARENCY_HTML
