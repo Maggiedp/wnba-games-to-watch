@@ -1971,7 +1971,7 @@
             // row AND a mobile card (PR #66 lesson). Idempotent.
             function paintLivePills() {
                 for (const g of (allGames || [])) {
-                    if (!g.espn_id) continue;
+                    if (!g.espn_id || !renderedEspnIds.has(g.espn_id)) continue;
                     const live = isLiveStatus(g.game_status);
                     document.querySelectorAll(`[data-live-id="${CSS.escape(g.espn_id)}"]`).forEach(el => {
                         el.classList.toggle('is-live', live);
@@ -1994,7 +1994,6 @@
                     // the last upcoming-list fetch; update local cache so the
                     // poll stops including it.
                     if (data.status) game.game_status = data.status;
-                    paintLivePills();
                     const plays = data.plays || [];
                     if (plays.length === 0) return;
                     const last = plays[plays.length - 1];
@@ -2016,6 +2015,9 @@
                 const live = liveGamesInList();
                 if (live.length === 0) return;
                 await Promise.all(live.map(hydrateOneLiveWp));
+                // Repaint once after all statuses settle (each hydrateOneLiveWp
+                // may have flipped game_status), not once per live game.
+                paintLivePills();
             }
 
             function armLiveWpPoll() {

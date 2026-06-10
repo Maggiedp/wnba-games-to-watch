@@ -63,7 +63,7 @@
 
             <section>
                 <h2 class="section-title">Win-probability chart</h2>
-                <div id="wp-chart" data-espn-id="{{ espn_id }}" data-home-abbr="{{ abbr_a }}" data-away-abbr="{{ abbr_b }}" data-is-today="{{ is_today }}"></div>
+                <div id="wp-chart" data-espn-id="{{ espn_id }}" data-home-abbr="{{ abbr_a }}" data-away-abbr="{{ abbr_b }}" data-is-today="{{ is_today | lower }}"></div>
                 <p class="chart-placeholder">Appears once the game tips off.</p>
             </section>
         </main>
@@ -87,6 +87,7 @@
             (function () {
                 const chartEl = document.getElementById('wp-chart');
                 const placeholderEl = document.querySelector('.chart-placeholder');
+                const pillEl = document.querySelector('.live-pill[data-live-id]');
                 if (!chartEl) return;
                 const espnId = chartEl.dataset.espnId;
                 if (!espnId) return;
@@ -199,8 +200,7 @@
                     }
                     backoffIdx = 0;  // success resets the backoff sequence
                     render(data);
-                    const pill = document.querySelector('.live-pill[data-live-id]');
-                    if (pill) pill.classList.toggle('is-live', isLiveStatus(data.status));
+                    if (pillEl) pillEl.classList.toggle('is-live', isLiveStatus(data.status));
                     if (isLiveStatus(data.status)) {
                         scheduleNext(LIVE_INTERVAL);
                     } else if (IS_TODAY && data.status === 'STATUS_SCHEDULED') {
