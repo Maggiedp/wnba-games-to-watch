@@ -1271,6 +1271,21 @@
             let statusRetryStep = 0;
             let statusRetryTimer = null;
 
+            // For a game flipped to FINAL by the status poll (no scores in that
+            // payload), fetch /api/live-wp to get scores + plays, then splice it
+            // into Completed. Best-effort: silent on failure.
+            async function rebucketFinalFromStatusPoll(game) {
+                if (!game.espn_id) return;
+                if (allCompleted.some(g => g.espn_id === game.espn_id)) return;
+                try {
+                    const resp = await fetch(`/api/live-wp?espn_id=${encodeURIComponent(game.espn_id)}`);
+                    if (!resp.ok) return;
+                    rebucketIntoCompleted(game, await resp.json());
+                } catch (e) {
+                    console.warn('Completed rebucket (status poll) failed:', e);
+                }
+            }
+
             async function hydrateGameStatuses() {
                 try {
                     const resp = await fetch('/api/games/live-status');
@@ -1286,13 +1301,13 @@
                     }
                     todaysEspnIds = new Set(Object.keys(statuses));
                     let changed = false;
-                    let anyFinal = false;
+                    const newlyFinal = [];
                     for (const g of allGames) {
                         const next = g.espn_id ? statuses[g.espn_id] : null;
                         if (next && g.game_status !== next) {
                             g.game_status = next;
                             changed = true;
-                            if (isFinalStatus(next)) anyFinal = true;
+                            if (isFinalStatus(next)) newlyFinal.push(g);
                         }
                     }
                     if (changed) {
@@ -1305,8 +1320,14 @@
                         // applyFilters() re-renders (repainting pills), rehydrates
                         // live WP, and rearms the poll, so it's a superset of the
                         // non-final repaint path below.
-                        if (anyFinal) {
+                        if (newlyFinal.length) {
                             applyFilters();
+                            // These games were likely already FINAL at page load
+                            // (stale /api/games/upcoming). live-status carries no
+                            // scores, so fetch each one's /api/live-wp to splice it
+                            // into Completed. Best-effort: a failure leaves the game
+                            // dropped-from-upcoming (as before) until reload.
+                            newlyFinal.forEach(rebucketFinalFromStatusPoll);
                         } else {
                             paintLivePills();
                             hydrateLiveWp();

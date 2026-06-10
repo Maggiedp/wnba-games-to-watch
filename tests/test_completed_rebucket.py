@@ -30,6 +30,14 @@ def test_hydrate_game_statuses_refilters_on_final():
     # e.g. a game already final at page load, corrected here from stale
     # /api/games/upcoming data (the feature's primary scenario). Such a game
     # was never live in-session, so the live-WP re-filter path never fires.
-    assert "let anyFinal = false;" in html
-    assert "if (isFinalStatus(next)) anyFinal = true;" in html
-    assert "if (anyFinal) {" in html
+    assert "const newlyFinal = [];" in html
+    assert "if (isFinalStatus(next)) newlyFinal.push(g);" in html
+    assert "if (newlyFinal.length) {" in html
+
+
+def test_hydrate_game_statuses_rebuckets_stale_finals():
+    html = render_homepage()
+    # The status poll carries no scores; a helper fetches /api/live-wp for each
+    # newly-final game so it can be spliced into Completed.
+    assert "async function rebucketFinalFromStatusPoll(game)" in html
+    assert "newlyFinal.forEach(rebucketFinalFromStatusPoll);" in html
