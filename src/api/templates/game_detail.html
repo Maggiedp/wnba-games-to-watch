@@ -30,6 +30,7 @@
         </header>
         <main>
             <p class="eyebrow">{{ meta_line | safe }}</p>
+            <span class="live-pill" data-live-id="{{ espn_id }}"><span class="live-dot" aria-hidden="true"></span>LIVE</span>
             <h1 class="matchup">{{ name_a }} <span class="slash">&#9585;</span> {{ name_b }}</h1>
 
             <div class="overall-block">
@@ -192,6 +193,8 @@
                     }
                     backoffIdx = 0;  // success resets the backoff sequence
                     render(data);
+                    const pill = document.querySelector('.live-pill[data-live-id]');
+                    if (pill) pill.classList.toggle('is-live', isLiveStatus(data.status));
                     if (isLiveStatus(data.status)) {
                         scheduleNext(LIVE_INTERVAL);
                     } else {

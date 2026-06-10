@@ -1266,3 +1266,24 @@ def test_featured_hero_card_is_clickable():
     assert (
         "['games-container', 'completed-games-container', 'featured-container']" in src
     )
+
+
+def test_detail_page_has_live_pill(session, team_ids):
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=today_et(),
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+    assert html is not None
+    assert 'class="live-pill"' in html
+    assert 'data-live-id="401736210"' in html
+    # the existing WP poll toggles the pill — no new fetch
+    assert "classList.toggle('is-live'" in html
