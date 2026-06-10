@@ -843,6 +843,10 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
         abbr_a=team_a.abbreviation or "",
         abbr_b=team_b.abbreviation or "",
         espn_id=game.espn_id or "",
+        # Gate pre-tipoff polling to today's games so the LIVE pill/chart appear
+        # at tipoff without a reload, while a tab left open on a far-future game
+        # doesn't poll ESPN forever.
+        is_today="true" if game.date == today_et() else "false",
         season_year=game.date[:4],
         site_url=_SITE_URL,
         meta_line=meta_line,

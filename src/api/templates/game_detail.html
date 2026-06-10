@@ -63,7 +63,7 @@
 
             <section>
                 <h2 class="section-title">Win-probability chart</h2>
-                <div id="wp-chart" data-espn-id="{{ espn_id }}" data-home-abbr="{{ abbr_a }}" data-away-abbr="{{ abbr_b }}"></div>
+                <div id="wp-chart" data-espn-id="{{ espn_id }}" data-home-abbr="{{ abbr_a }}" data-away-abbr="{{ abbr_b }}" data-is-today="{{ is_today }}"></div>
                 <p class="chart-placeholder">Appears once the game tips off.</p>
             </section>
         </main>
@@ -92,12 +92,18 @@
                 if (!espnId) return;
                 const HOME_ABBR = chartEl.dataset.homeAbbr;
                 const AWAY_ABBR = chartEl.dataset.awayAbbr;
+                // Only today's games keep polling pre-tipoff (see is_today gate
+                // in render). A far-future/past game stops after the first poll.
+                const IS_TODAY = chartEl.dataset.isToday === 'true';
 
                 let pollTimer = null;
                 let backoffIdx = 0;
                 let hasChart = false;  // true once a real chart has been drawn
 
                 const LIVE_INTERVAL = 30000;
+                // Slower cadence while a today game is still scheduled, so the
+                // pill/chart light up at tipoff without a manual reload.
+                const PREGAME_INTERVAL = 60000;
                 // Backoff for transient failures, mirroring the homepage
                 // live-status poll (30s → 60s → 120s → 300s, then holds).
                 const BACKOFF_MS = [30000, 60000, 120000, 300000];
@@ -197,8 +203,10 @@
                     if (pill) pill.classList.toggle('is-live', isLiveStatus(data.status));
                     if (isLiveStatus(data.status)) {
                         scheduleNext(LIVE_INTERVAL);
+                    } else if (IS_TODAY && data.status === 'STATUS_SCHEDULED') {
+                        scheduleNext(PREGAME_INTERVAL);  // keep watching for tipoff
                     } else {
-                        stopPoll();  // final / scheduled — nothing more to poll
+                        stopPoll();  // final, or a non-today scheduled game
                     }
                 }
 

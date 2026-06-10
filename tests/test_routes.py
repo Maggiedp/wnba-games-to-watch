@@ -1287,3 +1287,43 @@ def test_detail_page_has_live_pill(session, team_ids):
     assert 'data-live-id="401736210"' in html
     # the existing WP poll toggles the pill — no new fetch
     assert "classList.toggle('is-live'" in html
+
+
+def test_detail_page_marks_todays_game_for_pregame_polling(session, team_ids):
+    # A game scheduled for today must keep polling pre-tipoff so the LIVE pill
+    # (and chart) appear when it starts, without a manual reload.
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=today_et(),
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+    assert 'data-is-today="true"' in html
+    # the poll keeps watching for tipoff at a pregame cadence
+    assert "PREGAME_INTERVAL" in html
+    assert "dataset.isToday" in html
+
+
+def test_detail_page_does_not_pregame_poll_a_non_today_game(session, team_ids):
+    # A far-future (or past) game must NOT poll forever in an open tab.
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2020-01-01",
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736211",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736211")
+    assert 'data-is-today="false"' in html
