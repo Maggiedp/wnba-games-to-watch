@@ -2084,7 +2084,9 @@
             //   future = γ · 2p(1−p) · L_now            where p = current WP
             // The future term naturally vanishes when the game is decided (p → 0 or 1),
             // and dominates for currently-tight late-game situations.
-            function computeExcitement(plays) {
+            // Numeric excitement index for a play-by-play array (may be null when
+            // there aren't enough plays). Σ |ΔWPᵢ|·Lᵢ + γ·2p(1−p)·L_now.
+            function excitementScore(plays) {
                 if (!plays || plays.length < 2) return null;
                 const REGULATION_SECS = 2400;
                 let past = 0;
@@ -2095,7 +2097,11 @@
                 const last = plays[plays.length - 1];
                 const p = last.home_pct;
                 const future = 2 * p * (1 - p) * (elapsedSeconds(last) / REGULATION_SECS);
-                return excitementLabelFor(past + EXCITEMENT_FUTURE_WEIGHT * future);
+                return past + EXCITEMENT_FUTURE_WEIGHT * future;
+            }
+
+            function computeExcitement(plays) {
+                return excitementLabelFor(excitementScore(plays));
             }
 
             function setSortBy(mode) {
