@@ -14,3 +14,11 @@ def test_applyfilters_excludes_final_games_from_upcoming_and_featured():
     assert "if (isFinalStatus(g.game_status)) return false;" in html
     # Upcoming-list guard.
     assert "if (isFinalStatus(game.game_status)) return false;" in html
+
+
+def test_hydrate_live_wp_refilters_when_a_game_finalizes():
+    html = render_homepage()
+    # After hydrating live games, if any flipped to FINAL, re-run applyFilters
+    # so the finished game drops out of the upcoming list.
+    assert "const hadNewlyFinal = live.some(g => isFinalStatus(g.game_status));" in html
+    assert "if (hadNewlyFinal) applyFilters();" in html

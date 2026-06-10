@@ -2026,6 +2026,13 @@
                 // Repaint once after all statuses settle (each hydrateOneLiveWp
                 // may have flipped game_status), not once per live game.
                 paintLivePills();
+                // If any game we just hydrated has gone FINAL, re-filter so it
+                // drops out of the upcoming list (and any featured slot). Safe
+                // from infinite recursion: applyFilters() calls hydrateLiveWp()
+                // again, but the now-final game has left renderedEspnIds and is
+                // no longer live, so `live` is empty / has no final next pass.
+                const hadNewlyFinal = live.some(g => isFinalStatus(g.game_status));
+                if (hadNewlyFinal) applyFilters();
             }
 
             function armLiveWpPoll() {
