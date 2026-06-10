@@ -1286,17 +1286,32 @@
                     }
                     todaysEspnIds = new Set(Object.keys(statuses));
                     let changed = false;
+                    let anyFinal = false;
                     for (const g of allGames) {
                         const next = g.espn_id ? statuses[g.espn_id] : null;
                         if (next && g.game_status !== next) {
                             g.game_status = next;
                             changed = true;
+                            if (isFinalStatus(next)) anyFinal = true;
                         }
                     }
                     if (changed) {
-                        paintLivePills();
-                        hydrateLiveWp();
-                        armLiveWpPoll();
+                        // If any game flipped to FINAL here (e.g. a game already
+                        // final at page load, corrected from stale
+                        // /api/games/upcoming data — the feature's primary case,
+                        // and one the live-WP re-filter path never sees because
+                        // the game was never live in-session), re-run the filter
+                        // so it drops out of the upcoming list / featured slot.
+                        // applyFilters() re-renders (repainting pills), rehydrates
+                        // live WP, and rearms the poll, so it's a superset of the
+                        // non-final repaint path below.
+                        if (anyFinal) {
+                            applyFilters();
+                        } else {
+                            paintLivePills();
+                            hydrateLiveWp();
+                            armLiveWpPoll();
+                        }
                     }
                     armStatusRefreshPoll();
                 } catch (e) {

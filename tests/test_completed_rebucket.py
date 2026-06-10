@@ -22,3 +22,14 @@ def test_hydrate_live_wp_refilters_when_a_game_finalizes():
     # so the finished game drops out of the upcoming list.
     assert "const hadNewlyFinal = live.some(g => isFinalStatus(g.game_status));" in html
     assert "if (hadNewlyFinal) applyFilters();" in html
+
+
+def test_hydrate_game_statuses_refilters_on_final():
+    html = render_homepage()
+    # The live-status poll path must ALSO drop a game that flips to FINAL —
+    # e.g. a game already final at page load, corrected here from stale
+    # /api/games/upcoming data (the feature's primary scenario). Such a game
+    # was never live in-session, so the live-WP re-filter path never fires.
+    assert "let anyFinal = false;" in html
+    assert "if (isFinalStatus(next)) anyFinal = true;" in html
+    assert "if (anyFinal) {" in html
