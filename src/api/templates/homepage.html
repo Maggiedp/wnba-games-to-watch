@@ -1286,17 +1286,32 @@
                     }
                     todaysEspnIds = new Set(Object.keys(statuses));
                     let changed = false;
+                    let anyFinal = false;
                     for (const g of allGames) {
                         const next = g.espn_id ? statuses[g.espn_id] : null;
                         if (next && g.game_status !== next) {
                             g.game_status = next;
                             changed = true;
+                            if (isFinalStatus(next)) anyFinal = true;
                         }
                     }
                     if (changed) {
-                        paintLivePills();
-                        hydrateLiveWp();
-                        armLiveWpPoll();
+                        // If any game flipped to FINAL here (e.g. a game already
+                        // final at page load, corrected from stale
+                        // /api/games/upcoming data — the feature's primary case,
+                        // and one the live-WP re-filter path never sees because
+                        // the game was never live in-session), re-run the filter
+                        // so it drops out of the upcoming list / featured slot.
+                        // applyFilters() re-renders (repainting pills), rehydrates
+                        // live WP, and rearms the poll, so it's a superset of the
+                        // non-final repaint path below.
+                        if (anyFinal) {
+                            applyFilters();
+                        } else {
+                            paintLivePills();
+                            hydrateLiveWp();
+                            armLiveWpPoll();
+                        }
                     }
                     armStatusRefreshPoll();
                 } catch (e) {
@@ -1461,6 +1476,9 @@
                 const weekOut = addDaysISO(7);
                 const featuredCandidates = allGames.filter(g => {
                     if (!inScope(g)) return false;
+                    // A game that finished mid-session must not be promoted to the
+                    // "Top pick" hero (it has left the forward-looking list).
+                    if (isFinalStatus(g.game_status)) return false;
                     const d = localDateISO(g);
                     return d >= today && d <= weekOut;
                 });
@@ -1481,6 +1499,11 @@
 
                 const games = allGames.filter(game => {
                     if (!inScope(game)) return false;
+                    // A finished game has left the forward-looking list. Normally a
+                    // no-op (the /api/games/upcoming snapshot excludes finals); it
+                    // only bites the in-session live->final transition, where
+                    // hydrateLiveWp re-runs applyFilters after flipping the status.
+                    if (isFinalStatus(game.game_status)) return false;
                     const d = localDateISO(game);
                     // Live games bypass the implicit today-floor so a late-ET
                     // game still in progress for a west-coast viewer past local
@@ -2018,6 +2041,13 @@
                 // Repaint once after all statuses settle (each hydrateOneLiveWp
                 // may have flipped game_status), not once per live game.
                 paintLivePills();
+                // If any game we just hydrated has gone FINAL, re-filter so it
+                // drops out of the upcoming list (and any featured slot). Safe
+                // from infinite recursion: applyFilters() calls hydrateLiveWp()
+                // again, but the now-final game has left renderedEspnIds and is
+                // no longer live, so `live` is empty / has no final next pass.
+                const hadNewlyFinal = live.some(g => isFinalStatus(g.game_status));
+                if (hadNewlyFinal) applyFilters();
             }
 
             function armLiveWpPoll() {

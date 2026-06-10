@@ -329,6 +329,12 @@ _SHARED_JS = """
                     || status === 'STATUS_HALFTIME'
                     || status === 'STATUS_END_PERIOD';
             }
+
+            // A finished game. Scoped to STATUS_FINAL only — postponed/canceled/
+            // suspended are deliberately NOT treated as "final" here.
+            function isFinalStatus(status) {
+                return status === 'STATUS_FINAL';
+            }
 """
 
 _HOMEPAGE_HTML = (
