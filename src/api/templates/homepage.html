@@ -1294,6 +1294,7 @@
                         }
                     }
                     if (changed) {
+                        paintLivePills();
                         hydrateLiveWp();
                         armLiveWpPoll();
                     }
@@ -1965,6 +1966,19 @@
                 if (liveWpInterval) { clearInterval(liveWpInterval); liveWpInterval = null; }
             }
 
+            // Toggle .is-live on every rendered pill for the current game
+            // statuses. querySelectorAll because each game renders a desktop
+            // row AND a mobile card (PR #66 lesson). Idempotent.
+            function paintLivePills() {
+                for (const g of (allGames || [])) {
+                    if (!g.espn_id) continue;
+                    const live = isLiveStatus(g.game_status);
+                    document.querySelectorAll(`[data-live-id="${CSS.escape(g.espn_id)}"]`).forEach(el => {
+                        el.classList.toggle('is-live', live);
+                    });
+                }
+            }
+
             function liveGamesInList() {
                 return (allGames || []).filter(g =>
                     g.espn_id && isLiveStatus(g.game_status) && renderedEspnIds.has(g.espn_id)
@@ -1980,6 +1994,7 @@
                     // the last upcoming-list fetch; update local cache so the
                     // poll stops including it.
                     if (data.status) game.game_status = data.status;
+                    paintLivePills();
                     const plays = data.plays || [];
                     if (plays.length === 0) return;
                     const last = plays[plays.length - 1];

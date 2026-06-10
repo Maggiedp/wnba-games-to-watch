@@ -28,3 +28,16 @@ def test_all_three_homepage_renderers_emit_the_pill():
     html = render_homepage()
     # renderGameRow, renderGameCard, renderFeatured each call the helper
     assert html.count("livePillHtml(game)") >= 3
+
+
+def test_homepage_defines_paint_live_pills():
+    html = render_homepage()
+    assert "function paintLivePills()" in html
+    # must repaint ALL matching elements (desktop row + mobile card), per PR #66
+    assert "querySelectorAll(`[data-live-id=" in html
+
+
+def test_paint_live_pills_is_called_from_poll_handlers():
+    html = render_homepage()
+    # one definition + at least two call sites (status poll, WP poll)
+    assert html.count("paintLivePills()") >= 3
