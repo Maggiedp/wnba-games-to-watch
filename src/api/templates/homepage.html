@@ -2146,8 +2146,7 @@
             //   future = γ · 2p(1−p) · L_now            where p = current WP
             // The future term naturally vanishes when the game is decided (p → 0 or 1),
             // and dominates for currently-tight late-game situations.
-            // Numeric excitement index for a play-by-play array (may be null when
-            // there aren't enough plays). Σ |ΔWPᵢ|·Lᵢ + γ·2p(1−p)·L_now.
+            // Returns the numeric index, or null when there aren't enough plays.
             function excitementScore(plays) {
                 if (!plays || plays.length < 2) return null;
                 const REGULATION_SECS = 2400;
