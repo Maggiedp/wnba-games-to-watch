@@ -1271,6 +1271,21 @@
             let statusRetryStep = 0;
             let statusRetryTimer = null;
 
+            // For a game flipped to FINAL by the status poll (no scores in that
+            // payload), fetch /api/live-wp to get scores + plays, then splice it
+            // into Completed. Best-effort: silent on failure.
+            async function rebucketFinalFromStatusPoll(game) {
+                if (!game.espn_id) return;
+                if (allCompleted.some(g => g.espn_id === game.espn_id)) return;
+                try {
+                    const resp = await fetch(`/api/live-wp?espn_id=${encodeURIComponent(game.espn_id)}`);
+                    if (!resp.ok) return;
+                    rebucketIntoCompleted(game, await resp.json());
+                } catch (e) {
+                    console.warn('Completed rebucket (status poll) failed:', e);
+                }
+            }
+
             async function hydrateGameStatuses() {
                 try {
                     const resp = await fetch('/api/games/live-status');
@@ -1286,13 +1301,13 @@
                     }
                     todaysEspnIds = new Set(Object.keys(statuses));
                     let changed = false;
-                    let anyFinal = false;
+                    const newlyFinal = [];
                     for (const g of allGames) {
                         const next = g.espn_id ? statuses[g.espn_id] : null;
                         if (next && g.game_status !== next) {
                             g.game_status = next;
                             changed = true;
-                            if (isFinalStatus(next)) anyFinal = true;
+                            if (isFinalStatus(next)) newlyFinal.push(g);
                         }
                     }
                     if (changed) {
@@ -1305,8 +1320,14 @@
                         // applyFilters() re-renders (repainting pills), rehydrates
                         // live WP, and rearms the poll, so it's a superset of the
                         // non-final repaint path below.
-                        if (anyFinal) {
+                        if (newlyFinal.length) {
                             applyFilters();
+                            // These games were likely already FINAL at page load
+                            // (stale /api/games/upcoming). live-status carries no
+                            // scores, so fetch each one's /api/live-wp to splice it
+                            // into Completed. Best-effort: a failure leaves the game
+                            // dropped-from-upcoming (as before) until reload.
+                            newlyFinal.forEach(rebucketFinalFromStatusPoll);
                         } else {
                             paintLivePills();
                             hydrateLiveWp();
@@ -1543,7 +1564,19 @@
                 try {
                     const resp = await fetch('/api/games/completed');
                     if (!resp.ok) return;
-                    allCompleted = await resp.json();
+                    const server = await resp.json();
+                    // Merge, don't replace: a game can be rebucketed into
+                    // allCompleted (rebucketIntoCompleted) before this fetch
+                    // resolves. Same-day finals aren't in the server snapshot
+                    // until the 6 AM run, so a plain replace would silently drop
+                    // them and no later status poll re-adds them (game_status is
+                    // already FINAL). Preserve any client-rebucketed espn_ids not
+                    // present in the snapshot.
+                    const serverIds = new Set(server.map(g => g.espn_id));
+                    const clientOnly = allCompleted.filter(
+                        g => g.espn_id && !serverIds.has(g.espn_id)
+                    );
+                    allCompleted = server.concat(clientOnly);
                     // Re-populate so completed-only broadcasters/teams are
                     // selectable in the pills and dropdown.
                     populateFilters();
@@ -1633,6 +1666,34 @@
                         applyExcitementClass(eyebrow, excitementLabelFor(g.excitement_index));
                     });
                 });
+            }
+
+            // Splice a just-finalized game into the client-side Completed list so
+            // it visibly moves there instead of vanishing. Refetching
+            // /api/games/completed can't do this: a same-day final isn't written
+            // to the DB (winner_id / excitement_index) until the 6 AM run, so the
+            // endpoint wouldn't include it. We build the completed-shaped object
+            // from the in-memory game + the /api/live-wp payload.
+            //
+            // Clones (does not mutate the shared allGames entry): the upcoming
+            // objects must never gain score fields, or a future applyFilters change
+            // could leak a final into the upcoming table with a score showing.
+            // team_a == home (winProbText maps home_pct -> win_prob_a), so
+            // home_score -> final_score_a, away_score -> final_score_b.
+            function rebucketIntoCompleted(game, wpData) {
+                if (!game || !game.espn_id || !wpData) return;
+                if (allCompleted.some(g => g.espn_id === game.espn_id)) return;
+                const fa = parseInt(wpData.home_score, 10);
+                const fb = parseInt(wpData.away_score, 10);
+                if (Number.isNaN(fa) || Number.isNaN(fb)) return;  // incomplete payload; leave to reload
+                allCompleted.push({
+                    ...game,
+                    final_score_a: fa,
+                    final_score_b: fb,
+                    excitement_index: excitementScore(wpData.plays),
+                });
+                setupCompletedToggle();              // refresh count + reveal toggle if it was hidden
+                if (isCompletedExpanded()) renderCompleted();
             }
 
             function renderFeatured(game) {
@@ -2017,6 +2078,7 @@
                     // the last upcoming-list fetch; update local cache so the
                     // poll stops including it.
                     if (data.status) game.game_status = data.status;
+                    if (isFinalStatus(game.game_status)) rebucketIntoCompleted(game, data);
                     const plays = data.plays || [];
                     if (plays.length === 0) return;
                     const last = plays[plays.length - 1];
@@ -2084,7 +2146,8 @@
             //   future = γ · 2p(1−p) · L_now            where p = current WP
             // The future term naturally vanishes when the game is decided (p → 0 or 1),
             // and dominates for currently-tight late-game situations.
-            function computeExcitement(plays) {
+            // Returns the numeric index, or null when there aren't enough plays.
+            function excitementScore(plays) {
                 if (!plays || plays.length < 2) return null;
                 const REGULATION_SECS = 2400;
                 let past = 0;
@@ -2095,7 +2158,11 @@
                 const last = plays[plays.length - 1];
                 const p = last.home_pct;
                 const future = 2 * p * (1 - p) * (elapsedSeconds(last) / REGULATION_SECS);
-                return excitementLabelFor(past + EXCITEMENT_FUTURE_WEIGHT * future);
+                return past + EXCITEMENT_FUTURE_WEIGHT * future;
+            }
+
+            function computeExcitement(plays) {
+                return excitementLabelFor(excitementScore(plays));
             }
 
             function setSortBy(mode) {
