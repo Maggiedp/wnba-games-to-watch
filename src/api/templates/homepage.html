@@ -2045,6 +2045,7 @@
                     // the last upcoming-list fetch; update local cache so the
                     // poll stops including it.
                     if (data.status) game.game_status = data.status;
+                    if (isFinalStatus(game.game_status)) rebucketIntoCompleted(game, data);
                     const plays = data.plays || [];
                     if (plays.length === 0) return;
                     const last = plays[plays.length - 1];
