@@ -1629,7 +1629,7 @@
                     <div class="featured-eyebrow">Top pick &middot; Next 7 days</div>
                     <article class="featured"${game.espn_id ? ` data-espn-id="${escapeHtml(game.espn_id)}" role="link" tabindex="0"` : ''} aria-label="Top pick game">
                         <div>
-                            <div class="featured-meta">${formatLocalDate(game, { weekday: 'long', month: 'long', day: 'numeric' })} &middot; ${escapeHtml(formatLocalTime(game.time_utc, game.time))}</div>
+                            <div class="featured-meta">${livePillHtml(game)}${formatLocalDate(game, { weekday: 'long', month: 'long', day: 'numeric' })} &middot; ${escapeHtml(formatLocalTime(game.time_utc, game.time))}</div>
                             <div class="featured-teams">
                                 ${renderTeam(game.team_a, game.team_a_logo)}
                                 <span class="vs">vs</span>
@@ -1874,6 +1874,15 @@
                 `;
             }
 
+            // LIVE pill markup for a game. Hidden unless the game is currently
+            // in progress (is-live). data-live-id lets paintLivePills() repaint
+            // it in place when status flips mid-session (status/WP polls).
+            function livePillHtml(game) {
+                if (!game.espn_id) return '';
+                const live = isLiveStatus(game.game_status) ? ' is-live' : '';
+                return `<span class="live-pill${live}" data-live-id="${escapeHtml(game.espn_id)}"><span class="live-dot" aria-hidden="true"></span>LIVE</span>`;
+            }
+
             function renderGameRow(game, isTopPick, scoreHeader) {
                 const cls = primaryScoreClass(game, scoreHeader);
                 const impTitle = game.importance_score == null ? 'Not simulated' : '';
@@ -1895,6 +1904,7 @@
                                     ${renderTeam(game.team_b, game.team_b_logo)}
                                     ${game.team_b_playoff_prob != null ? `<div class="team-prob">${Math.round(game.team_b_playoff_prob * 100)}% playoff odds</div>` : ''}
                                 </div>
+                                ${livePillHtml(game)}
                                 ${renderScoreLine(game)}
                             </div>
                         </td>
@@ -1917,6 +1927,7 @@
                     <div class="games-card"${game.espn_id ? ` data-espn-id="${escapeHtml(game.espn_id)}" role="link" tabindex="0"` : ''}>
                         <div class="games-card-score ${cls}">${primaryScore(game, scoreHeader)}</div>
                         <div class="games-card-stack">
+                            ${livePillHtml(game)}
                             ${game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${escapeHtml(game.espn_id)}"></span>` : ''}
                             ${eyebrow}
                             <div class="games-card-matchup">
