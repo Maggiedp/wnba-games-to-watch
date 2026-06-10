@@ -1564,7 +1564,19 @@
                 try {
                     const resp = await fetch('/api/games/completed');
                     if (!resp.ok) return;
-                    allCompleted = await resp.json();
+                    const server = await resp.json();
+                    // Merge, don't replace: a game can be rebucketed into
+                    // allCompleted (rebucketIntoCompleted) before this fetch
+                    // resolves. Same-day finals aren't in the server snapshot
+                    // until the 6 AM run, so a plain replace would silently drop
+                    // them and no later status poll re-adds them (game_status is
+                    // already FINAL). Preserve any client-rebucketed espn_ids not
+                    // present in the snapshot.
+                    const serverIds = new Set(server.map(g => g.espn_id));
+                    const clientOnly = allCompleted.filter(
+                        g => g.espn_id && !serverIds.has(g.espn_id)
+                    );
+                    allCompleted = server.concat(clientOnly);
                     // Re-populate so completed-only broadcasters/teams are
                     // selectable in the pills and dropdown.
                     populateFilters();

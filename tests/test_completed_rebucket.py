@@ -41,3 +41,16 @@ def test_hydrate_game_statuses_rebuckets_stale_finals():
     # newly-final game so it can be spliced into Completed.
     assert "async function rebucketFinalFromStatusPoll(game)" in html
     assert "newlyFinal.forEach(rebucketFinalFromStatusPoll);" in html
+
+
+def test_load_completed_merges_rather_than_replaces():
+    html = render_homepage()
+    # loadCompleted must NOT clobber client-rebucketed same-day finals with the
+    # server snapshot (which lacks them until the 6 AM run). It races the rebucket
+    # paths at startup, so it merges: preserve client-only espn_ids not in the
+    # snapshot. A regression to `allCompleted = await resp.json()` (plain replace)
+    # would silently drop a stale-at-load final.
+    assert "const clientOnly = allCompleted.filter(" in html
+    assert "allCompleted = server.concat(clientOnly);" in html
+    # Guard against reverting to the bare replace.
+    assert "allCompleted = await resp.json();" not in html
