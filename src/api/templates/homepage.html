@@ -1635,6 +1635,34 @@
                 });
             }
 
+            // Splice a just-finalized game into the client-side Completed list so
+            // it visibly moves there instead of vanishing. Refetching
+            // /api/games/completed can't do this: a same-day final isn't written
+            // to the DB (winner_id / excitement_index) until the 6 AM run, so the
+            // endpoint wouldn't include it. We build the completed-shaped object
+            // from the in-memory game + the /api/live-wp payload.
+            //
+            // Clones (does not mutate the shared allGames entry): the upcoming
+            // objects must never gain score fields, or a future applyFilters change
+            // could leak a final into the upcoming table with a score showing.
+            // team_a == home (winProbText maps home_pct -> win_prob_a), so
+            // home_score -> final_score_a, away_score -> final_score_b.
+            function rebucketIntoCompleted(game, wpData) {
+                if (!game || !game.espn_id || !wpData) return;
+                if (allCompleted.some(g => g.espn_id === game.espn_id)) return;
+                const fa = parseInt(wpData.home_score, 10);
+                const fb = parseInt(wpData.away_score, 10);
+                if (Number.isNaN(fa) || Number.isNaN(fb)) return;  // incomplete payload; leave to reload
+                allCompleted.push({
+                    ...game,
+                    final_score_a: fa,
+                    final_score_b: fb,
+                    excitement_index: excitementScore(wpData.plays),
+                });
+                setupCompletedToggle();              // refresh count + reveal toggle if it was hidden
+                if (isCompletedExpanded()) renderCompleted();
+            }
+
             function renderFeatured(game) {
                 const container = document.getElementById('featured-container');
                 if (!game) { container.innerHTML = ''; return; }
