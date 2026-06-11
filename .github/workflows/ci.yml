@@ -27,3 +27,8 @@ jobs:
         run: ruff check .
       - name: Test
         run: pytest tests/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: JS helper tests
+        run: node --test tests/js/*.test.js
