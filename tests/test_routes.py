@@ -1220,6 +1220,44 @@ def test_buildwpsvg_escapes_team_abbreviations(session, team_ids):
     assert "${homeAbbr}</text>" not in html
 
 
+def test_detail_chart_header_renders_live_wp_readout(session, team_ids):
+    """A live game's chart header surfaces the current win probability as a
+    number (the leading team + its WP%), not just the score. There's no JS
+    runtime in this suite, so guard at the source level: headerHtml must build
+    the readout markup for live games and stay score-only for finished games.
+
+    Leader is derived from the latest play's home_pct (independent of the
+    pregame team_a/team_b ordering): home_pct >= 0.5 -> home leads, else away.
+    """
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=today_et(),
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736215",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736215")
+
+    # The readout is gated on a live status; the hero markup + CSS must ship.
+    assert "if (!isLiveStatus(data.status))" in html
+    assert 'class="wp-live-readout"' in html
+    assert 'class="wp-live-pct"' in html
+    assert ".wp-live-pct {" in html  # CSS for the Fraunces hero number
+    assert "win probability &middot;" in html  # the small label + trailing team
+
+    # The hero must never synthesize a probability: ESPN can emit null/garbage
+    # home_pct (the server passes it through), and a fake "50%" reads as a real,
+    # confident call. The readout uses the latest FINITE [0,1] value (and drops
+    # to the status line when none exists) — it does not fall back to 0.5.
+    assert "Number.isFinite(v) && v >= 0 && v <= 1" in html
+    assert ": 0.5;" not in html  # no synthesized midpoint fallback
+
+
 def test_homepage_template_is_packaged_and_renders():
     """The homepage HTML lives in src/api/templates/homepage.html and is read
     at import time. If that file is missing from the shipped revision (e.g.

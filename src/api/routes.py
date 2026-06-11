@@ -597,6 +597,47 @@ _DETAIL_STYLE = """
                 margin-bottom: 6px;
             }
             .wp-chart-header .wp-chart-status { color: var(--text-muted); }
+            /* Live win-probability readout (leading team + current WP%) */
+            .wp-live-status {
+                font-family: var(--body);
+                font-size: 0.72rem;
+                font-weight: 600;
+                letter-spacing: 0.12em;
+                text-transform: uppercase;
+                color: var(--live);
+                display: flex;
+                align-items: center;
+                gap: 7px;
+                margin-bottom: 8px;
+            }
+            .wp-live-status .wp-chart-status { color: var(--text-muted); letter-spacing: 0.05em; }
+            .wp-live-readout { display: flex; align-items: baseline; gap: 9px; }
+            .wp-live-team {
+                font-family: var(--body);
+                font-size: 0.8rem;
+                font-weight: 700;
+                letter-spacing: 0.1em;
+                text-transform: uppercase;
+                color: var(--text-muted);
+            }
+            .wp-live-pct {
+                font-family: var(--display);
+                font-variation-settings: 'opsz' 72;
+                font-weight: 900;
+                font-size: 2.1rem;
+                line-height: 0.95;
+                color: var(--orange);
+                font-feature-settings: 'tnum' on;
+            }
+            .wp-live-label {
+                font-family: var(--body);
+                font-size: 0.72rem;
+                font-weight: 600;
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+                color: var(--text-subtle);
+                margin: 5px 0 12px;
+            }
             .wp-chart-svg {
                 width: 100%;
                 height: 150px;
