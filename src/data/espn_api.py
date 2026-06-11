@@ -2,6 +2,7 @@
 
 import functools
 import logging
+import math
 from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -301,6 +302,21 @@ def _parse_broadcaster(comp: dict) -> str:
     return Broadcasters.LEAGUE_PASS
 
 
+def _valid_home_pct(value) -> float | None:
+    """Return `value` as a float win-probability in [0, 1], or None if it
+    isn't a trustworthy ESPN sample.
+
+    ESPN's contract is a JSON number in [0, 1]; anything else (explicit
+    null, a string, NaN/inf, or out-of-range) is schema drift we must not
+    trust. bool is rejected explicitly (it's an int subclass in Python).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or not (0.0 <= value <= 1.0):
+        return None
+    return float(value)
+
+
 def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
     """Fetch win probability data for a game from ESPN's summary endpoint.
 
@@ -333,16 +349,28 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
         for p in data.get("plays", [])
     }
 
+    # Sanitize homeWinPercentage at the boundary so every downstream consumer
+    # (excitement scorer, WP chart, homepage WP text) inherits clean data.
+    # ESPN can emit an explicit null/string/NaN/out-of-range value; trusting
+    # those produces NaN math and broken renders, and synthesizing a default
+    # (e.g. the old 0.5) fabricates a confident coin-flip the model never
+    # emitted. Drop untrustworthy samples entirely: kept play count then
+    # equals the real-sample count, so the stored-excitement path's
+    # len(plays) >= 2 guard correctly leaves insufficient feeds NULL for
+    # retry rather than archiving a fabricated score (Codex review).
     plays = []
-    for i, entry in enumerate(data.get("winprobability", [])):
+    for entry in data.get("winprobability", []):
+        pct = _valid_home_pct(entry.get("homeWinPercentage"))
+        if pct is None:
+            continue
         play_id = str(entry.get("playId", ""))
         info = play_lookup.get(play_id, {"period": 1, "clock": ""})
         plays.append(
             {
-                "seq": i,
+                "seq": len(plays),
                 "period": info["period"],
                 "clock": info["clock"],
-                "home_pct": entry.get("homeWinPercentage", 0.5),
+                "home_pct": pct,
             }
         )
 

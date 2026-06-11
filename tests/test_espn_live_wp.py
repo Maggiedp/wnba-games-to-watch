@@ -103,6 +103,86 @@ def test_fetch_live_win_probability_falls_back_when_play_id_missing():
     assert result["plays"][0]["home_pct"] == 0.4
 
 
+def _summary_with_wp(pcts):
+    """Build a summary whose winprobability entries carry the given
+    raw `homeWinPercentage` values (any type), one play per value."""
+    ids = [f"p{i}" for i in range(len(pcts))]
+    plays = [
+        {"id": pid, "period": {"number": 1}, "clock": {"displayValue": "10:00"}}
+        for pid in ids
+    ]
+    wp = [{"playId": pid, "homeWinPercentage": v} for pid, v in zip(ids, pcts)]
+    return _make_summary(plays=plays, wp=wp)
+
+
+def _home_pcts(result):
+    return [p["home_pct"] for p in result["plays"]]
+
+
+def test_null_home_pct_is_dropped():
+    summary = _summary_with_wp([0.3, None, 0.8])
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    assert _home_pcts(result) == [0.3, 0.8]
+
+
+def test_string_home_pct_is_dropped():
+    summary = _summary_with_wp([0.3, "garbage", 0.8])
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    assert _home_pcts(result) == [0.3, 0.8]
+
+
+def test_nan_home_pct_is_dropped():
+    summary = _summary_with_wp([0.3, float("nan"), 0.8])
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    assert _home_pcts(result) == [0.3, 0.8]
+
+
+def test_out_of_range_home_pct_is_dropped():
+    summary = _summary_with_wp([0.3, 1.5, 0.8])
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    assert _home_pcts(result) == [0.3, 0.8]
+
+
+def test_kept_plays_are_resequenced_after_drops():
+    summary = _summary_with_wp([0.3, None, 0.8])
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    assert [p["seq"] for p in result["plays"]] == [0, 1]
+
+
+def test_all_invalid_home_pct_yields_empty_plays():
+    summary = _summary_with_wp([None, "x", float("inf")])
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    assert result["plays"] == []
+
+
+def test_valid_boundary_values_zero_and_one_are_kept():
+    summary = _summary_with_wp([0.0, 1.0])
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    assert _home_pcts(result) == [0.0, 1.0]
+
+
+def test_single_valid_sample_leaves_excitement_none_for_retry():
+    """Regression (Codex): a FINAL feed with only one *real* WP sample must
+    not be turned into a stored excitement score. Dropping (not carrying
+    forward) keeps play count == real-sample count, so compute_excitement's
+    len>=2 guard returns None → daily_update leaves excitement_index NULL
+    and retries, instead of permanently archiving a fabricated 0.0."""
+    from src.scoring.excitement import compute_excitement
+
+    summary = _summary_with_wp([0.3, None])
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    assert len(result["plays"]) == 1
+    assert compute_excitement(result["plays"], final=True) is None
+
+
 def _make_scoreboard(*games):
     """games: list of (event_id, status_name) tuples."""
     return {
