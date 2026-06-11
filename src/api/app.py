@@ -6,6 +6,7 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
@@ -38,8 +39,20 @@ logger = logging.getLogger(__name__)
 
 init_db()
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting WNBA Games to Watch API")
+    try:
+        yield
+    finally:
+        logger.info("Shutting down WNBA Games to Watch API")
+
+
 app = FastAPI(
-    title="WNBA Games to Watch", description="Find the best WNBA games to watch"
+    title="WNBA Games to Watch",
+    description="Find the best WNBA games to watch",
+    lifespan=lifespan,
 )
 
 _TRIGGER_SECRET = os.environ.get("TRIGGER_SECRET", "")
@@ -482,13 +495,3 @@ async def trigger_daily_update(x_trigger_secret: str = Header(default="")):
     if result != 0:
         raise HTTPException(status_code=500, detail="Daily update job failed")
     return {"status": "ok"}
-
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting WNBA Games to Watch API")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Shutting down WNBA Games to Watch API")
