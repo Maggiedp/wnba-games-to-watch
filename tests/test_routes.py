@@ -1067,6 +1067,41 @@ def test_render_game_detail_not_simulated_when_no_ranking(session, team_ids):
 
     assert html is not None
     assert "Not simulated" in html  # graceful, no crash
+    # The pregame qualifier only labels a real projected number; the
+    # not-simulated branch has nothing to qualify.
+    assert "Pregame projection" not in html
+
+
+def test_render_game_detail_labels_win_prob_as_pregame(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736212",
+    )
+    upsert_daily_ranking(
+        session,
+        date=date,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=78.0,
+        importance_score=64.0,
+        overall_score=72.0,
+        broadcaster="ION",
+        win_prob_a=0.58,
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736212")
+
+    # The frozen pregame Elo number is labeled so it doesn't read as a live
+    # number during a game (the live readout is a separate surface).
+    assert "Pregame projection" in html
 
 
 def test_site_url_is_canonical_domain():

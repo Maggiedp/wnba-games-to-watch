@@ -635,28 +635,16 @@
             /* ---------- Empty state ---------- */
             .empty-state {
                 text-align: center;
-                padding: 64px 24px;
-                background: var(--surface);
-                border-radius: 8px;
-                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-            }
-            .empty-state-icon {
-                font-family: var(--display);
-                font-variation-settings: 'opsz' 144;
-                font-weight: 700;
-                font-size: 3.5rem;
-                line-height: 1;
-                color: var(--line);
-                letter-spacing: -0.04em;
-                margin-bottom: 8px;
+                padding: 72px 24px;
             }
             .empty-state-title {
                 font-family: var(--display);
-                font-variation-settings: 'opsz' 96;
-                font-weight: 600;
-                font-size: 1.25rem;
+                font-variation-settings: 'opsz' 144;
+                font-weight: 500;
+                font-style: italic;
+                font-size: 2rem;
                 color: var(--navy);
-                letter-spacing: -0.015em;
+                letter-spacing: -0.02em;
                 margin-bottom: 6px;
             }
             .empty-state-msg {
@@ -733,14 +721,33 @@
             .completed-header-row .completed-heading { margin: 24px 0 16px; }
             .footer {
                 text-align: center;
-                padding: 28px 16px;
-                color: var(--text-muted);
-                font-size: 0.84rem;
+                padding: 36px 16px 32px;
                 border-top: 1px solid var(--line);
                 margin-top: 32px;
             }
-            .footer a { color: var(--text-muted); text-decoration: underline; }
-            .footer a:hover { color: var(--orange); }
+            .footer-attr {
+                color: var(--text-subtle);
+                font-size: 0.8rem;
+            }
+            .footer-attr a { color: var(--text-subtle); text-decoration: underline; }
+            .footer-attr a:hover { color: var(--orange); }
+            .footer-links {
+                margin-top: 12px;
+                font-size: 0.72rem;
+                text-transform: uppercase;
+                letter-spacing: 0.09em;
+                color: var(--text-muted);
+            }
+            .footer-links a,
+            .footer-links .link-button {
+                color: var(--text-muted);
+                text-decoration: none;
+                text-transform: inherit;
+                letter-spacing: inherit;
+            }
+            .footer-links a:hover,
+            .footer-links .link-button:hover { color: var(--orange); }
+            .footer-links .sep { color: var(--text-subtle); margin: 0 8px; }
             .link-button {
                 background: none;
                 border: none;
@@ -1123,10 +1130,15 @@
         </main>
 
         <footer class="footer">
-            Team strength from <a href="https://www.espn.com/wnba/bpi" target="_blank" rel="noopener">ESPN BPI</a>.
-            Schedule and broadcasters from ESPN. Updated daily.
-            &middot; <button type="button" class="link-button" id="how-it-works-footer">How it works</button>
-            &middot; <a href="/transparency">Behind the numbers</a>
+            <p class="footer-attr">
+                Team strength from <a href="https://www.espn.com/wnba/bpi" target="_blank" rel="noopener">ESPN BPI</a>.
+                Schedule and broadcasters from ESPN. Updated daily.
+            </p>
+            <p class="footer-links">
+                <button type="button" class="link-button" id="how-it-works-footer">How it works</button>
+                <span class="sep">&middot;</span>
+                <a href="/transparency">Behind the numbers</a>
+            </p>
         </footer>
 
         <div class="modal-backdrop" id="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -1744,8 +1756,7 @@
             function renderEmpty() {
                 document.getElementById('games-container').innerHTML = `
                     <div class="empty-state" role="status">
-                        <div class="empty-state-icon" aria-hidden="true">0</div>
-                        <div class="empty-state-title">No games match</div>
+                        <div class="empty-state-title">No games in this range</div>
                         <div class="empty-state-msg">Try clearing a filter or expanding the date window.</div>
                     </div>
                 `;

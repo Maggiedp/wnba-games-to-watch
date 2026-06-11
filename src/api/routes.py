@@ -434,6 +434,15 @@ _DETAIL_STYLE = """
                 font-size: 0.98rem;
             }
             .wp-note.muted { color: var(--text-subtle); font-style: italic; }
+            .wp-note-qualifier {
+                display: block;
+                margin-top: 4px;
+                font-size: 0.68rem;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: var(--text-subtle);
+                font-weight: 500;
+            }
 
             /* ---------- Breakdown mini-bars ---------- */
             .breakdown-block { margin-bottom: 24px; }
@@ -628,7 +637,7 @@ def _detail_win_prob_section(ranking, team_a, team_b) -> str:
                     <span class="wp-seg a" style="width: {pct_a:.1f}%">{abbr_a} {pct_a:.0f}%</span>
                     <span class="wp-seg b" style="width: {pct_b:.1f}%">{pct_b:.0f}% {abbr_b}</span>
                 </div>
-                <p class="wp-note">{note}</p>"""
+                <p class="wp-note">{note}<span class="wp-note-qualifier">Pregame projection</span></p>"""
 
 
 def _coerce_fraction(value) -> float | None:
