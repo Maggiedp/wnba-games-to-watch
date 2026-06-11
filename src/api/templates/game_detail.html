@@ -68,8 +68,8 @@
             </section>
         </main>
         <script>
-{{ wp_chart_js | safe }}
 {{ shared_js | safe }}
+{{ wp_chart_js | safe }}
 {% raw %}
             // Localize the eyebrow date/time to the viewer's timezone (the ET
             // text rendered server-side is the fallback), matching the rest of
@@ -139,59 +139,6 @@
                     scheduleNext(delay);
                 }
 
-                // Header above the curve. A LIVE game gets a hero win-probability
-                // readout (leading team + its current WP%, set in the page's
-                // Fraunces number idiom); a finished game keeps a compact score
-                // line — there's no "probability" once the game is decided.
-                function headerHtml(data) {
-                    const away = `${escapeHtml(AWAY_ABBR)} ${escapeHtml(String(data.away_score))}`;
-                    const home = `${escapeHtml(HOME_ABBR)} ${escapeHtml(String(data.home_score))}`;
-                    const last = data.plays[data.plays.length - 1];
-                    const period = last && last.period ? last.period : 0;
-
-                    if (!isLiveStatus(data.status)) {
-                        return `<div class="wp-chart-header">${away} &nbsp; ${home} <span class="wp-chart-status">&middot; Final</span></div>`;
-                    }
-
-                    let status;
-                    if (data.status === 'STATUS_HALFTIME') {
-                        status = 'Halftime';
-                    } else if (data.status === 'STATUS_END_PERIOD') {
-                        status = period <= 4 ? `End Q${escapeHtml(String(period))}` : 'End OT';
-                    } else {
-                        const q = period <= 4 ? `Q${escapeHtml(String(period))}` : 'OT';
-                        const clock = last && last.clock ? ` ${escapeHtml(String(last.clock))}` : '';
-                        status = `${q}${clock}`;
-                    }
-                    const statusLine = `<div class="wp-live-status"><span class="live-dot" aria-hidden="true"></span>Live <span class="wp-chart-status">&middot; ${status} &middot; ${away} &ndash; ${home}</span></div>`;
-
-                    // Current WP = most recent play with a finite home win % in
-                    // [0,1]. ESPN can emit null/garbage here and the server passes
-                    // it through, so never synthesize a midpoint — a fake "50%"
-                    // reads as a real, confident call. Drop to the status line
-                    // alone when no usable value exists.
-                    let homePct = null;
-                    for (let i = data.plays.length - 1; i >= 0; i--) {
-                        const v = data.plays[i].home_pct;
-                        if (Number.isFinite(v) && v >= 0 && v <= 1) { homePct = v; break; }
-                    }
-                    if (homePct === null) {
-                        return `<div class="wp-chart-header">${statusLine}</div>`;
-                    }
-
-                    const homeLeads = homePct >= 0.5;
-                    const leadAbbr = escapeHtml(homeLeads ? HOME_ABBR : AWAY_ABBR);
-                    const trailAbbr = escapeHtml(homeLeads ? AWAY_ABBR : HOME_ABBR);
-                    const leadPct = Math.round((homeLeads ? homePct : 1 - homePct) * 100);
-                    const trailPct = 100 - leadPct;
-
-                    return `<div class="wp-chart-header">
-                        ${statusLine}
-                        <div class="wp-live-readout"><span class="wp-live-team">${leadAbbr}</span><span class="wp-live-pct">${leadPct}%</span></div>
-                        <div class="wp-live-label">win probability &middot; ${trailAbbr} ${trailPct}%</div>
-                    </div>`;
-                }
-
                 function render(data) {
                     const plays = (data && data.plays) || [];
                     if (!data || !data.status || data.status === 'STATUS_SCHEDULED' || plays.length === 0) {
@@ -199,7 +146,7 @@
                         return;
                     }
                     if (placeholderEl) placeholderEl.style.display = 'none';
-                    chartEl.innerHTML = headerHtml(data) + buildWpSvg(plays, HOME_ABBR, AWAY_ABBR);
+                    chartEl.innerHTML = headerHtml(data, HOME_ABBR, AWAY_ABBR) + buildWpSvg(plays, HOME_ABBR, AWAY_ABBR);
                     hasChart = true;
                 }
 
