@@ -807,25 +807,17 @@ def test_unique_index_blocks_duplicate_espn_id_inserts(tmp_path, monkeypatch):
         schema._session_factory = None
 
 
-def test_completed_archive_keeps_scores_after_rekey(tmp_path, monkeypatch):
+def test_completed_archive_keeps_scores_after_rekey(env, client):
     """A completed game corrected after final (moved by espn_id) must
     keep its pre-game quality / importance / overall scores in the
     archive. Without the DailyRanking re-key, the completed-archive
     endpoint would synthesize a None-scored ranking — permanent
     degradation with no automatic rebuild path."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
-    from src.db import schema
-
-    schema._engine = None
-    schema._session_factory = None
-    schema.init_db()
-    session = schema.get_session()
-    from src.db.queries import upsert_daily_ranking, upsert_game, upsert_team
-
+    session = env.get_session()
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(schema.Team).filter_by(name="Aces").one().id
-    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+    a = session.query(env.Team).filter_by(name="Aces").one().id
+    b = session.query(env.Team).filter_by(name="Liberty").one().id
 
     # Final game with a fully-stored ranking.
     session.add(
@@ -872,11 +864,6 @@ def test_completed_archive_keeps_scores_after_rekey(tmp_path, monkeypatch):
     session.commit()
     session.close()
 
-    from fastapi.testclient import TestClient
-
-    from src.api.app import app
-
-    client = TestClient(app)
     resp = client.get("/api/games/completed")
     rows = resp.json()
     assert len(rows) == 1
@@ -887,8 +874,6 @@ def test_completed_archive_keeps_scores_after_rekey(tmp_path, monkeypatch):
     assert row["importance_score"] == 45.0
     assert row["overall_score"] == 61.2
     assert row["excitement_index"] == 5.0
-    schema._engine = None
-    schema._session_factory = None
 
 
 def test_upsert_game_rekeys_daily_ranking_on_reschedule(tmp_path, monkeypatch):

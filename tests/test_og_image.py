@@ -3,7 +3,6 @@
 import io
 
 import pytest
-from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -159,21 +158,6 @@ def test_render_game_card_png_scoreless_game_renders(session, team_ids):
     assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
 
 
-@pytest.fixture
-def env(tmp_path, monkeypatch):
-    """File-backed sqlite shared across seed + request sessions (mirrors
-    tests/test_transparency_endpoints.py)."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
-    from src.db import schema
-
-    schema._engine = None
-    schema._session_factory = None
-    schema.init_db()
-    yield schema
-    schema._engine = None
-    schema._session_factory = None
-
-
 def _seed_game(schema, espn_id="401234", overall=87.0):
     s = schema.get_session()
     try:
@@ -204,39 +188,35 @@ def _seed_game(schema, espn_id="401234", overall=87.0):
         s.close()
 
 
-def test_og_endpoint_returns_png(env):
+def test_og_endpoint_returns_png(env, client):
     _seed_game(env)
-    from src.api.app import app
 
-    r = TestClient(app).get("/game/401234/og.png")
+    r = client.get("/game/401234/og.png")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
     assert r.content[:8] == _PNG_MAGIC
 
 
-def test_og_endpoint_unknown_id_404(env):
-    from src.api.app import app
-
-    r = TestClient(app).get("/game/nope/og.png")
+def test_og_endpoint_unknown_id_404(client):
+    r = client.get("/game/nope/og.png")
     assert r.status_code == 404
 
 
-def test_og_public_max_age_does_not_exceed_server_cache_ttl(env):
+def test_og_public_max_age_does_not_exceed_server_cache_ttl(env, client):
     """The unversioned og.png URL must not advertise a longer public cache than
     the server actually enforces — otherwise a browser/proxy could serve a stale
     card after the daily run recomputes overall_score."""
     _seed_game(env)
-    from src.api.app import _OG_CACHE_TTL_S, app
+    from src.api.app import _OG_CACHE_TTL_S
 
-    r = TestClient(app).get("/game/401234/og.png")
+    r = client.get("/game/401234/og.png")
     assert r.headers["cache-control"] == f"public, max-age={_OG_CACHE_TTL_S}"
 
 
-def test_og_endpoint_serves_second_request_from_cache(env, monkeypatch):
+def test_og_endpoint_serves_second_request_from_cache(env, client, monkeypatch):
     _seed_game(env)
-    from src.api.app import app, _og_cache
+    from src.api.app import _og_cache
 
-    client = TestClient(app)
     first = client.get("/game/401234/og.png")
     assert first.status_code == 200
     assert "401234" in _og_cache
@@ -292,20 +272,20 @@ def test_render_transparency_card_is_memoized():
     assert render_transparency_card() is render_transparency_card()
 
 
-def test_og_home_endpoint_returns_png(env):
-    from src.api.app import _OG_STATIC_CACHE_S, app
+def test_og_home_endpoint_returns_png(client):
+    from src.api.app import _OG_STATIC_CACHE_S
 
-    r = TestClient(app).get("/og-home.png")
+    r = client.get("/og-home.png")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
     assert r.headers["cache-control"] == f"public, max-age={_OG_STATIC_CACHE_S}"
     assert r.content[:8] == _PNG_MAGIC
 
 
-def test_og_transparency_endpoint_returns_png(env):
-    from src.api.app import _OG_STATIC_CACHE_S, app
+def test_og_transparency_endpoint_returns_png(client):
+    from src.api.app import _OG_STATIC_CACHE_S
 
-    r = TestClient(app).get("/og-transparency.png")
+    r = client.get("/og-transparency.png")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
     assert r.headers["cache-control"] == f"public, max-age={_OG_STATIC_CACHE_S}"
@@ -315,10 +295,9 @@ def test_og_transparency_endpoint_returns_png(env):
 # Crawlers/link unfurlers that HEAD-probe an advertised og:image before GETting
 # it must get the same 200 + headers, not a 405. All three og.png routes answer
 # HEAD as well as GET.
-def test_og_static_endpoints_answer_head(env):
-    from src.api.app import _OG_STATIC_CACHE_S, app
+def test_og_static_endpoints_answer_head(client):
+    from src.api.app import _OG_STATIC_CACHE_S
 
-    client = TestClient(app)
     for path in ("/og-home.png", "/og-transparency.png"):
         r = client.head(path)
         assert r.status_code == 200, path
@@ -328,20 +307,18 @@ def test_og_static_endpoints_answer_head(env):
         )
 
 
-def test_og_game_endpoint_answers_head(env):
+def test_og_game_endpoint_answers_head(env, client):
     _seed_game(env)
-    from src.api.app import _OG_CACHE_TTL_S, app
+    from src.api.app import _OG_CACHE_TTL_S
 
-    r = TestClient(app).head("/game/401234/og.png")
+    r = client.head("/game/401234/og.png")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
     assert r.headers["cache-control"] == f"public, max-age={_OG_CACHE_TTL_S}"
 
 
-def test_og_game_endpoint_head_unknown_id_404(env):
-    from src.api.app import app
-
-    r = TestClient(app).head("/game/nope/og.png")
+def test_og_game_endpoint_head_unknown_id_404(client):
+    r = client.head("/game/nope/og.png")
     assert r.status_code == 404
 
 
