@@ -251,64 +251,12 @@ _SHARED_HEAD = """\
             }\
 """
 
-# SVG win-probability line-chart builder for the game detail page. Plain string
-# (not f-string) — braces are SINGLE. Defined exactly once here; interpolated via
-# {_WP_CHART_JS} into the detail page's <script> (the homepage no longer renders
-# the chart). Self-contained: only uses local vars + the .wp-chart-svg CSS class.
-_WP_CHART_JS = """
-            function buildWpSvg(plays, homeAbbr, awayAbbr) {
-                if (!plays || plays.length < 2) return '';
-                // The labels are dropped into innerHTML below, and team
-                // abbreviations are external ESPN/DB data — escape them (via the
-                // shared escapeHtml) so a poisoned value can't inject markup.
-                const homeLbl = escapeHtml(homeAbbr);
-                const awayLbl = escapeHtml(awayAbbr);
-                const W = 500, H = 150;
-                const padL = 36, padR = 8, padT = 8, padB = 8;
-                const cW = W - padL - padR;
-                const cH = H - padT - padB;
-                const midY = padT + cH / 2;
-                const N = plays.length;
-
-                const pts = plays.map((p, i) => [
-                    padL + (i / (N - 1)) * cW,
-                    padT + (1 - p.home_pct) * cH
-                ]);
-
-                const periodBounds = [];
-                for (let i = 1; i < plays.length; i++) {
-                    if (plays[i].period !== plays[i - 1].period) {
-                        periodBounds.push(pts[i][0].toFixed(1));
-                    }
-                }
-
-                const firstX = pts[0][0].toFixed(1);
-                const lastX = pts[N - 1][0].toFixed(1);
-                const botY = (H - padB).toFixed(1);
-
-                // Home fill: always below the line (orange)
-                const homePoly = [[firstX, botY],
-                    ...pts.map(p => [p[0].toFixed(1), p[1].toFixed(1)]),
-                    [lastX, botY]].map(p => `${p[0]},${p[1]}`).join(' ');
-
-                const linePath = 'M ' + pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' L ');
-                const [dotX, dotY] = pts[N - 1];
-                const pBounds = periodBounds.map(x =>
-                    `<line x1="${x}" y1="${padT}" x2="${x}" y2="${H - padB}" stroke="#e7e2d8" stroke-width="1" stroke-dasharray="2,2"/>`
-                ).join('');
-
-                return `<svg class="wp-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Win probability chart">
-                    <text x="${padL - 4}" y="${padT + 5}" text-anchor="end" font-size="9" fill="#8a929d">${awayLbl}</text>
-                    <text x="${padL - 4}" y="${midY + 3}" text-anchor="end" font-size="9" fill="#8a929d">50%</text>
-                    <text x="${padL - 4}" y="${H - padB}" text-anchor="end" font-size="9" fill="#8a929d">${homeLbl}</text>
-                    <polygon points="${homePoly}" fill="rgba(255,107,0,0.15)"/>
-                    <line x1="${padL}" y1="${midY.toFixed(1)}" x2="${W - padR}" y2="${midY.toFixed(1)}" stroke="#c8c2b8" stroke-width="1" stroke-dasharray="3,3"/>
-                    ${pBounds}
-                    <path d="${linePath}" fill="none" stroke="var(--orange)" stroke-width="1.5" stroke-linejoin="round"/>
-                    <circle cx="${dotX.toFixed(1)}" cy="${dotY.toFixed(1)}" r="3" fill="var(--orange)"/>
-                </svg>`;
-            }
-"""
+# SVG win-probability line-chart builder + live header for the game detail
+# page. Source of truth is templates/js/detail_chart.js (single-sourced +
+# Node-tested); interpolated via {{ wp_chart_js | safe }} into the detail
+# page's <script>. Self-contained: uses only local vars, the .wp-chart-svg
+# CSS class, and the shared escapeHtml/isLiveStatus from shared.js.
+_WP_CHART_JS = "\n" + _load_template("js/detail_chart.js")
 
 # Shared client-side JS helpers used by all rendered pages (homepage,
 # transparency, detail). Source of truth is templates/js/shared.js (single-
