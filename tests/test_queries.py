@@ -99,6 +99,89 @@ def test_upsert_game_preserves_time_when_incoming_empty(session, team_ids):
     assert game.time == "7:00 PM ET"
 
 
+def test_get_upcoming_rankings_excludes_completed_games(session, team_ids):
+    """A ranking whose Game already has a winner must not appear in
+    /api/games/upcoming's source query. Same-day finals previously
+    leaked through and relied entirely on the frontend date-floor in
+    applyFilters to stay hidden — the endpoint's contract should be
+    correct on its own."""
+    from src.db.queries import get_upcoming_rankings, insert_daily_ranking
+
+    a_id, b_id = team_ids
+
+    # Completed game (winner recorded) with a ranking row.
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-10",
+        time="7:00 PM ET",
+        broadcaster="ION",
+        winner_id=a_id,
+        final_score_a=80,
+        final_score_b=70,
+        espn_id="done",
+    )
+    insert_daily_ranking(
+        session,
+        date="2026-06-10",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=50.0,
+        importance_score=0.4,
+        overall_score=46.0,
+        broadcaster="ION",
+    )
+    # Unplayed game with a ranking row.
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-12",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="todo",
+    )
+    insert_daily_ranking(
+        session,
+        date="2026-06-12",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=60.0,
+        importance_score=0.5,
+        overall_score=56.0,
+        broadcaster="ESPN",
+    )
+
+    rankings = get_upcoming_rankings(session, start_date="2026-06-10")
+    dates = [r.date for r in rankings]
+    assert "2026-06-12" in dates
+    assert "2026-06-10" not in dates  # completed game excluded
+
+
+def test_get_upcoming_rankings_keeps_ranking_without_game_row(session, team_ids):
+    """A ranking with no matching Game row stays included (outer-join
+    semantics): only a positively-known winner excludes. Rankings are
+    always written from games, so a missing Game row is an anomaly —
+    surfacing it beats silently dropping it."""
+    from src.db.queries import get_upcoming_rankings, insert_daily_ranking
+
+    a_id, b_id = team_ids
+    insert_daily_ranking(
+        session,
+        date="2026-06-12",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=60.0,
+        importance_score=0.5,
+        overall_score=56.0,
+        broadcaster="ESPN",
+    )
+
+    rankings = get_upcoming_rankings(session, start_date="2026-06-10")
+    assert [r.date for r in rankings] == ["2026-06-12"]
+
+
 def test_upsert_playoff_probability_inserts_with_all_columns(session, team_ids):
     a_id, _ = team_ids
     upsert_playoff_probability(

@@ -581,9 +581,24 @@ def get_daily_rankings(session: Session, date: str) -> list[DailyRanking]:
 
 
 def get_upcoming_rankings(session: Session, start_date: str) -> list[DailyRanking]:
+    """Rankings for games not yet completed, from `start_date` onward.
+
+    Outer-joins `Game` on the matchup key and excludes rows with a
+    recorded winner, so a same-day final can't leak into the upcoming
+    list (it previously relied on the frontend date-floor to stay
+    hidden). Outer join: a ranking with no matching Game row is an
+    anomaly but stays visible — only a positively-known winner excludes.
+    """
     return (
         session.query(DailyRanking)
+        .outerjoin(
+            Game,
+            (Game.date == DailyRanking.date)
+            & (Game.team_a_id == DailyRanking.team_a_id)
+            & (Game.team_b_id == DailyRanking.team_b_id),
+        )
         .filter(DailyRanking.date >= start_date)
+        .filter(Game.winner_id.is_(None))
         .order_by(DailyRanking.date, DailyRanking.overall_score.desc())
         .all()
     )
