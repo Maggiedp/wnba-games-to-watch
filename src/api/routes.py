@@ -311,31 +311,10 @@ _WP_CHART_JS = """
 """
 
 # Shared client-side JS helpers used by all rendered pages (homepage,
-# transparency, detail). Plain string (not f-string) — braces are SINGLE.
-# Injected via %%SHARED_JS%% (.replace pages) or {{ shared_js | safe }} (jinja
-# detail page) so the XSS-escaping table and the live-status check are
-# single-sourced and can't drift between pages.
-_SHARED_JS = """
-            function escapeHtml(s) {
-                return String(s).replace(/[&<>"']/g, c => ({
-                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-                })[c]);
-            }
-
-            // ESPN reports STATUS_HALFTIME between halves and STATUS_END_PERIOD
-            // between quarters. Both are "live" for rendering and polling.
-            function isLiveStatus(status) {
-                return status === 'STATUS_IN_PROGRESS'
-                    || status === 'STATUS_HALFTIME'
-                    || status === 'STATUS_END_PERIOD';
-            }
-
-            // A finished game. Scoped to STATUS_FINAL only — postponed/canceled/
-            // suspended are deliberately NOT treated as "final" here.
-            function isFinalStatus(status) {
-                return status === 'STATUS_FINAL';
-            }
-"""
+# transparency, detail). Source of truth is templates/js/shared.js (single-
+# sourced + Node-tested); injected via %%SHARED_JS%% (.replace pages) or
+# {{ shared_js | safe }} (jinja detail page) so it can't drift between pages.
+_SHARED_JS = "\n" + _load_template("js/shared.js")
 
 _HOMEPAGE_HTML = (
     _load_template("homepage.html")
