@@ -26,7 +26,11 @@ _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
 
 def _load_template(name: str) -> str:
-    """Read an HTML template shipped alongside this module.
+    """Read a template or JS partial shipped alongside this module.
+
+    Also loads the shared/detail JS partials under ``templates/js/`` that are
+    injected into those pages' ``<script>`` blocks (see ``_SHARED_JS`` /
+    ``_WP_CHART_JS``).
 
     For STATIC pages only (homepage, transparency): the caller substitutes
     trusted build-time constants with plain ``str.replace`` of ``%%TOKEN%%``
@@ -256,13 +260,13 @@ _SHARED_HEAD = """\
 # Node-tested); interpolated via {{ wp_chart_js | safe }} into the detail
 # page's <script>. Self-contained: uses only local vars, the .wp-chart-svg
 # CSS class, and the shared escapeHtml/isLiveStatus from shared.js.
-_WP_CHART_JS = "\n" + _load_template("js/detail_chart.js")
+_WP_CHART_JS = _load_template("js/detail_chart.js")
 
 # Shared client-side JS helpers used by all rendered pages (homepage,
 # transparency, detail). Source of truth is templates/js/shared.js (single-
 # sourced + Node-tested); injected via %%SHARED_JS%% (.replace pages) or
 # {{ shared_js | safe }} (jinja detail page) so it can't drift between pages.
-_SHARED_JS = "\n" + _load_template("js/shared.js")
+_SHARED_JS = _load_template("js/shared.js")
 
 _HOMEPAGE_HTML = (
     _load_template("homepage.html")
