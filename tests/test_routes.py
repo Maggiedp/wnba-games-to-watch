@@ -13,7 +13,7 @@ from src.db.queries import (
     upsert_playoff_probability,
     upsert_team,
 )
-from src.db.schema import Base
+from src.db.schema import Base, Game
 
 
 @pytest.fixture
@@ -325,22 +325,13 @@ def test_format_games_response_game_status_none_when_no_dict(session, team_ids):
     assert result[0].game_status is None
 
 
-def test_completed_endpoint_returns_excitement_sorted_games(tmp_path, monkeypatch):
+def test_completed_endpoint_returns_excitement_sorted_games(env, client):
     """GET /api/games/completed returns 2026 completed games sorted by excitement desc."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
-    from src.db import schema
-
-    schema._engine = None
-    schema._session_factory = None
-    schema.init_db()
-    session = schema.get_session()
-    from src.db.queries import upsert_daily_ranking, upsert_team
-    from src.db.schema import Game
-
+    session = env.get_session()
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    team_a_id = session.query(schema.Team).filter_by(name="Aces").one().id
-    team_b_id = session.query(schema.Team).filter_by(name="Liberty").one().id
+    team_a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    team_b_id = session.query(env.Team).filter_by(name="Liberty").one().id
 
     for date, excitement in [
         ("2026-05-20", 3.0),
@@ -374,11 +365,6 @@ def test_completed_endpoint_returns_excitement_sorted_games(tmp_path, monkeypatc
     session.commit()
     session.close()
 
-    from fastapi.testclient import TestClient
-
-    from src.api.app import app
-
-    client = TestClient(app)
     resp = client.get("/api/games/completed")
     assert resp.status_code == 200
     rows = resp.json()
@@ -387,29 +373,18 @@ def test_completed_endpoint_returns_excitement_sorted_games(tmp_path, monkeypatc
     assert rows[0]["excitement_index"] == 7.0
     assert rows[0]["final_score_a"] == 80
     assert rows[0]["final_score_b"] == 70
-    schema._engine = None
-    schema._session_factory = None
 
 
-def test_completed_endpoint_includes_null_excitement_sorted_last(tmp_path, monkeypatch):
+def test_completed_endpoint_includes_null_excitement_sorted_last(env, client):
     """A completed game with NULL excitement_index (ESPN PBP missing or
     transiently unavailable) must still appear in the archive, sorted
     after games that have a score. Otherwise an ESPN outage silently
     deletes real completed games from the user-visible list."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
-    from src.db import schema
-
-    schema._engine = None
-    schema._session_factory = None
-    schema.init_db()
-    session = schema.get_session()
-    from src.db.queries import upsert_daily_ranking, upsert_team
-    from src.db.schema import Game
-
+    session = env.get_session()
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(schema.Team).filter_by(name="Aces").one().id
-    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+    a = session.query(env.Team).filter_by(name="Aces").one().id
+    b = session.query(env.Team).filter_by(name="Liberty").one().id
 
     # Two scored games + one NULL-excitement.
     for date, exc in [("2026-05-20", 4.0), ("2026-05-21", 6.0), ("2026-05-22", None)]:
@@ -440,42 +415,24 @@ def test_completed_endpoint_includes_null_excitement_sorted_last(tmp_path, monke
     session.commit()
     session.close()
 
-    from fastapi.testclient import TestClient
-
-    from src.api.app import app
-
-    client = TestClient(app)
     rows = client.get("/api/games/completed").json()
     dates_in_order = [r["date"] for r in rows]
     assert dates_in_order == ["2026-05-21", "2026-05-20", "2026-05-22"]
     null_row = next(r for r in rows if r["date"] == "2026-05-22")
     assert null_row["excitement_index"] is None
     assert null_row["final_score_a"] == 80
-    schema._engine = None
-    schema._session_factory = None
 
 
-def test_completed_endpoint_uses_game_broadcaster_over_stale_ranking(
-    tmp_path, monkeypatch
-):
+def test_completed_endpoint_uses_game_broadcaster_over_stale_ranking(env, client):
     """Late broadcaster corrections must reach the archive. `Game.broadcaster`
     is refreshed by every daily run; `DailyRanking.broadcaster` froze at
     pre-game scoring time. The archive must serve the Game value so the
     list and the filter agree with reality after a network change."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
-    from src.db import schema
-
-    schema._engine = None
-    schema._session_factory = None
-    schema.init_db()
-    session = schema.get_session()
-    from src.db.queries import upsert_daily_ranking, upsert_team
-    from src.db.schema import Game
-
+    session = env.get_session()
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(schema.Team).filter_by(name="Aces").one().id
-    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+    a = session.query(env.Team).filter_by(name="Aces").one().id
+    b = session.query(env.Team).filter_by(name="Liberty").one().id
 
     # Game (source of truth) shows the corrected broadcaster; DailyRanking
     # has the stale pre-game value.
@@ -506,11 +463,6 @@ def test_completed_endpoint_uses_game_broadcaster_over_stale_ranking(
     session.commit()
     session.close()
 
-    from fastapi.testclient import TestClient
-
-    from src.api.app import app
-
-    client = TestClient(app)
     resp = client.get("/api/games/completed")
     rows = resp.json()
     assert len(rows) == 1 and rows[0]["broadcaster"] == "NBA TV"
@@ -521,7 +473,7 @@ def test_completed_endpoint_uses_game_broadcaster_over_stale_ranking(
     resp_stale = client.get("/api/games/filter?mode=completed&broadcaster=ION")
     assert resp_stale.json() == []
     # Stored DailyRanking row is unchanged (we expunged, not persisted).
-    fresh_session = schema.get_session()
+    fresh_session = env.get_session()
     try:
         from src.db.schema import DailyRanking
 
@@ -529,30 +481,17 @@ def test_completed_endpoint_uses_game_broadcaster_over_stale_ranking(
         assert stored.broadcaster == "ION"
     finally:
         fresh_session.close()
-    schema._engine = None
-    schema._session_factory = None
 
 
-def test_completed_endpoint_includes_orphan_games_without_ranking(
-    tmp_path, monkeypatch
-):
+def test_completed_endpoint_includes_orphan_games_without_ranking(env, client):
     """A completed game with excitement_index but no DailyRanking row must
     still appear in /api/games/completed (with None scored fields), so the
     archive doesn't silently hide games on a missed daily-update day."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
-    from src.db import schema
-
-    schema._engine = None
-    schema._session_factory = None
-    schema.init_db()
-    session = schema.get_session()
-    from src.db.queries import upsert_team
-    from src.db.schema import Game
-
+    session = env.get_session()
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(schema.Team).filter_by(name="Aces").one().id
-    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+    a = session.query(env.Team).filter_by(name="Aces").one().id
+    b = session.query(env.Team).filter_by(name="Liberty").one().id
 
     # Orphan: completed + has excitement, no DailyRanking row.
     session.add(
@@ -572,11 +511,6 @@ def test_completed_endpoint_includes_orphan_games_without_ranking(
     session.commit()
     session.close()
 
-    from fastapi.testclient import TestClient
-
-    from src.api.app import app
-
-    client = TestClient(app)
     resp = client.get("/api/games/completed")
     assert resp.status_code == 200
     rows = resp.json()
@@ -588,26 +522,15 @@ def test_completed_endpoint_includes_orphan_games_without_ranking(
     # Pre-game ranking fields are None because no DailyRanking exists.
     assert row["quality_score"] is None
     assert row["overall_score"] is None
-    schema._engine = None
-    schema._session_factory = None
 
 
-def test_filter_endpoint_mode_completed(tmp_path, monkeypatch):
+def test_filter_endpoint_mode_completed(env, client):
     """/api/games/filter?mode=completed&broadcaster=ION restricts to completed ION games."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
-    from src.db import schema
-
-    schema._engine = None
-    schema._session_factory = None
-    schema.init_db()
-    session = schema.get_session()
-    from src.db.queries import upsert_daily_ranking, upsert_team
-    from src.db.schema import Game
-
+    session = env.get_session()
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(schema.Team).filter_by(name="Aces").one().id
-    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+    a = session.query(env.Team).filter_by(name="Aces").one().id
+    b = session.query(env.Team).filter_by(name="Liberty").one().id
 
     # Completed ION game — past date, would be excluded by date >= today filter.
     session.add(
@@ -662,16 +585,10 @@ def test_filter_endpoint_mode_completed(tmp_path, monkeypatch):
     session.commit()
     session.close()
 
-    from fastapi.testclient import TestClient
-    from src.api.app import app
-
-    client = TestClient(app)
     resp = client.get("/api/games/filter?mode=completed&broadcaster=ION")
     assert resp.status_code == 200
     rows = resp.json()
     assert [r["date"] for r in rows] == ["2026-05-10"]
-    schema._engine = None
-    schema._session_factory = None
 
 
 def test_format_games_response_includes_time_utc(session, team_ids):
@@ -752,22 +669,13 @@ def test_format_games_response_clears_both_time_fields_on_tbd(session, team_ids)
     assert resp.time_utc is None
 
 
-def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
+def test_playoff_odds_endpoint_shape_and_sort(env, client):
     """GET /api/playoff-odds returns 4 round probs sorted by make_playoffs_prob desc."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
-    from src.db import schema
-
-    schema._engine = None
-    schema._session_factory = None
-    schema.init_db()
-    session = schema.get_session()
-
-    from src.db.queries import upsert_playoff_probability, upsert_team
-
+    session = env.get_session()
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a_id = session.query(schema.Team).filter_by(name="Aces").one().id
-    b_id = session.query(schema.Team).filter_by(name="Liberty").one().id
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    b_id = session.query(env.Team).filter_by(name="Liberty").one().id
 
     today = today_et()
     upsert_playoff_probability(
@@ -790,10 +698,6 @@ def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
     )
     session.close()
 
-    from fastapi.testclient import TestClient
-    from src.api.app import app
-
-    client = TestClient(app)
     resp = client.get("/api/playoff-odds")
     assert resp.status_code == 200
     rows = resp.json()
@@ -810,12 +714,10 @@ def test_playoff_odds_endpoint_shape_and_sort(tmp_path, monkeypatch):
     }
     assert rows[0]["make_playoffs_prob"] == pytest.approx(0.90)
     assert rows[0]["win_championship_prob"] == pytest.approx(0.10)
-    schema._engine = None
-    schema._session_factory = None
 
 
 def test_upcoming_endpoint_includes_yesterday_et_for_west_coast_viewers(
-    tmp_path, monkeypatch
+    env, client, monkeypatch
 ):
     """The endpoint must return rows keyed to yesterday-ET as well.
 
@@ -825,23 +727,13 @@ def test_upcoming_endpoint_includes_yesterday_et_for_west_coast_viewers(
     needs to provide the candidate set or the boundary case shows
     blank for non-ET users.
     """
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
     monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
-    from src.db import schema
-
-    schema._engine = None
-    schema._session_factory = None
-    schema.init_db()
-    session = schema.get_session()
-
-    from src.db.queries import upsert_daily_ranking, upsert_team
-    from src.db.schema import Game
-
+    session = env.get_session()
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(schema.Team).filter_by(name="Aces").one().id
-    b = session.query(schema.Team).filter_by(name="Liberty").one().id
+    a = session.query(env.Team).filter_by(name="Aces").one().id
+    b = session.query(env.Team).filter_by(name="Liberty").one().id
 
     # Three games: yesterday-ET (boundary), today-ET, tomorrow-ET.
     for date in ("2026-05-21", "2026-05-22", "2026-05-23"):
@@ -868,20 +760,13 @@ def test_upcoming_endpoint_includes_yesterday_et_for_west_coast_viewers(
     session.commit()
     session.close()
 
-    from fastapi.testclient import TestClient
-
-    from src.api.app import app
-
-    client = TestClient(app)
     resp = client.get("/api/games/upcoming")
     assert resp.status_code == 200
     dates = sorted(r["date"] for r in resp.json())
     assert dates == ["2026-05-21", "2026-05-22", "2026-05-23"]
-    schema._engine = None
-    schema._session_factory = None
 
 
-def test_live_status_endpoint_merges_yesterday_and_today_et(tmp_path, monkeypatch):
+def test_live_status_endpoint_merges_yesterday_and_today_et(client, monkeypatch):
     """Live-status must include yesterday-ET in-progress games.
 
     Mirrors the upcoming-window widening. Without this, a late-ET game
@@ -889,7 +774,6 @@ def test_live_status_endpoint_merges_yesterday_and_today_et(tmp_path, monkeypatc
     upcoming response but with no status — the frontend's isLiveStatus
     gate would skip live-WP polling and render stale pregame odds.
     """
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
     monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
 
@@ -905,11 +789,6 @@ def test_live_status_endpoint_merges_yesterday_and_today_et(tmp_path, monkeypatc
 
     monkeypatch.setattr("src.api.app.fetch_today_game_statuses", fake_fetch)
 
-    from fastapi.testclient import TestClient
-
-    from src.api.app import app
-
-    client = TestClient(app)
     resp = client.get("/api/games/live-status")
     assert resp.status_code == 200
     body = resp.json()
@@ -921,12 +800,11 @@ def test_live_status_endpoint_merges_yesterday_and_today_et(tmp_path, monkeypatc
 
 
 def test_live_status_endpoint_degrades_gracefully_when_yesterday_fetch_fails(
-    tmp_path, monkeypatch
+    client, monkeypatch
 ):
     """A transient ESPN failure on yesterday's call must NOT strand today's
     live games. Today is the primary call; yesterday is best-effort.
     """
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
     monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
 
@@ -939,21 +817,15 @@ def test_live_status_endpoint_degrades_gracefully_when_yesterday_fetch_fails(
 
     monkeypatch.setattr("src.api.app.fetch_today_game_statuses", fake_fetch)
 
-    from fastapi.testclient import TestClient
-
-    from src.api.app import app
-
-    client = TestClient(app)
     resp = client.get("/api/games/live-status")
     assert resp.status_code == 200
     assert resp.json() == {"401_today_live": "STATUS_IN_PROGRESS"}
 
 
-def test_live_status_endpoint_502s_when_today_fetch_fails(tmp_path, monkeypatch):
+def test_live_status_endpoint_502s_when_today_fetch_fails(client, monkeypatch):
     """Today's call is the canary — failure surfaces as 502 so the
     frontend backoff loop kicks in. Preserves the prior contract.
     """
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
     monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
 
@@ -966,11 +838,6 @@ def test_live_status_endpoint_502s_when_today_fetch_fails(tmp_path, monkeypatch)
 
     monkeypatch.setattr("src.api.app.fetch_today_game_statuses", fake_fetch)
 
-    from fastapi.testclient import TestClient
-
-    from src.api.app import app
-
-    client = TestClient(app)
     resp = client.get("/api/games/live-status")
     assert resp.status_code == 502
 
@@ -1293,17 +1160,13 @@ def test_detail_chart_header_renders_live_wp_readout(session, team_ids):
     assert ": 0.5;" not in html  # no synthesized midpoint fallback
 
 
-def test_homepage_template_is_packaged_and_renders():
+def test_homepage_template_is_packaged_and_renders(client):
     """The homepage HTML lives in src/api/templates/homepage.html and is read
     at import time. If that file is missing from the shipped revision (e.g.
     untracked and left out of a deploy), importing src.api.routes fails and the
     whole API 500s on startup. This guards that the template ships and that all
     token placeholders were substituted (no %% markers leak to the page)."""
-    from fastapi.testclient import TestClient
-
-    from src.api.app import app
-
-    resp = TestClient(app).get("/")
+    resp = client.get("/")
     assert resp.status_code == 200
     body = resp.text
     assert body.lstrip().startswith("<!DOCTYPE")
