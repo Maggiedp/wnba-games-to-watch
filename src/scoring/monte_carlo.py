@@ -6,6 +6,7 @@ in the standings dict as a sibling field used only by quality scoring.
 """
 
 import logging
+import math
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -238,6 +239,18 @@ def _partition_bracket(
     return higher_indices, lower_indices
 
 
+def _noise_floor_term(pooled_rate: float, n_a: int, n_b: int) -> float:
+    """E[|rate_a - rate_b|] under H0 (game outcome independent of the team's fate).
+
+    Under H0 the rate difference is ~ Normal(0, p(1-p)(1/n_a + 1/n_b)), so its
+    absolute value is half-normal with mean sqrt(2/pi) * sigma. Summing |delta|
+    over teams without subtracting this is positively biased (measured at ~8/100
+    normalized, near-constant — see METHODOLOGY.md "noise floor").
+    """
+    variance = pooled_rate * (1.0 - pooled_rate) * (1.0 / n_a + 1.0 / n_b)
+    return math.sqrt(2.0 / math.pi) * math.sqrt(variance)
+
+
 def compute_importance_from_matrix(
     outcome_matrix: list[list[bool | None]],
     playoff_sets: list[set[str]],
@@ -247,7 +260,9 @@ def compute_importance_from_matrix(
     """Compute importance swing for every remaining game from one simulation run.
 
     Splits the simulation set by who won each game, then computes the all-team
-    sum of |playoff_rate(a_won_sims) - playoff_rate(b_won_sims)|.
+    sum of |playoff_rate(a_won_sims) - playoff_rate(b_won_sims)|, minus the
+    analytic noise floor (sum of per-team half-normal means under H0), clamped
+    at 0 — so finite-sample noise doesn't inflate dead-rubbers (~8/100 measured).
 
     Works because Elo ratings are fixed during simulation — game outcomes don't
     affect downstream win probabilities, so observed splits and forced splits
@@ -261,7 +276,7 @@ def compute_importance_from_matrix(
         team_names: all team names to sum swing across.
 
     Returns:
-        list of raw swing values (one per remaining game, same order).
+        list of corrected swing values (one per remaining game, same order).
         Normalize with normalize_importance_score before displaying.
     """
     swings: list[float] = []
@@ -273,16 +288,15 @@ def compute_importance_from_matrix(
             swings.append(0.0)
             continue
 
+        n_a, n_b = len(a_indices), len(b_indices)
         swing = 0.0
+        floor = 0.0
         for team in team_names:
-            rate_a = sum(1 for s in a_indices if team in playoff_sets[s]) / len(
-                a_indices
-            )
-            rate_b = sum(1 for s in b_indices if team in playoff_sets[s]) / len(
-                b_indices
-            )
-            swing += abs(rate_a - rate_b)
-        swings.append(swing)
+            count_a = sum(1 for s in a_indices if team in playoff_sets[s])
+            count_b = sum(1 for s in b_indices if team in playoff_sets[s])
+            swing += abs(count_a / n_a - count_b / n_b)
+            floor += _noise_floor_term((count_a + count_b) / (n_a + n_b), n_a, n_b)
+        swings.append(max(0.0, swing - floor))
 
     return swings
 

@@ -5,6 +5,7 @@ tests cover the simulation wrapper — that it produces bools, that stronger
 teams land in the playoffs more often, etc.
 """
 
+import math
 import random
 
 import pytest
@@ -445,6 +446,33 @@ def test_compute_importance_from_matrix_empty_subset_returns_zero():
         ["Las Vegas Aces", "New York Liberty", "Indiana Fever"],
     )
     assert swings[0] == 0.0  # b_won is empty — no split possible
+
+
+def test_compute_importance_floor_subtracted_exactly():
+    """Clean-flip game: corrected swing = raw 1.0 minus the analytic noise floor."""
+    # 50 sims team_a wins, 50 team_b wins; T1 makes playoffs iff team_a wins,
+    # T2 always makes playoffs.
+    outcome_matrix = [[True]] * 50 + [[False]] * 50
+    playoff_sets = [{"T1", "T2"}] * 50 + [{"T2"}] * 50
+    swings = compute_importance_from_matrix(
+        outcome_matrix, playoff_sets, [("T1", "T2")], ["T1", "T2"]
+    )
+    # T1: |1 - 0| = 1, pooled p = 0.5 -> floor term sqrt(2/pi)*sqrt(0.25*(1/50+1/50))
+    # T2: |1 - 1| = 0, pooled p = 1.0 -> p(1-p) = 0, no floor term
+    expected_floor = math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 50 + 1 / 50))
+    assert swings[0] == pytest.approx(1.0 - expected_floor, abs=1e-12)
+
+
+def test_compute_importance_clamps_at_zero():
+    """No-signal game (identical rates in both buckets) corrects to exactly 0."""
+    # Outcome alternates by sim; T1's playoff rate is exactly 0.5 in each bucket,
+    # so raw swing = 0 and subtracting the positive floor must clamp at 0.
+    outcome_matrix = [[s % 2 == 0] for s in range(100)]
+    playoff_sets = [({"T1"} if s % 4 in (0, 1) else set()) for s in range(100)]
+    swings = compute_importance_from_matrix(
+        outcome_matrix, playoff_sets, [("T1", "T2")], ["T1", "T2"]
+    )
+    assert swings[0] == 0.0
 
 
 # ---------------------------------------------------------------------------
