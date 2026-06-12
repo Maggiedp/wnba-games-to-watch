@@ -3654,3 +3654,41 @@ def test_get_head_to_head_excludes_preseason_keeps_legacy_null(session, team_ids
         "2026-05-20",
         "2026-05-25",
     ]  # reg-season + legacy NULL, chronological
+
+
+def test_delete_importance_ceilings_before_drops_only_stale_rows(session):
+    """Ceilings cached before the noise-floor correction must be dropped so
+    compute_daily_scores recalibrates; rows cached after the cutoff stay."""
+    from datetime import datetime
+
+    from src.db.queries import (
+        delete_importance_ceilings_before,
+        get_importance_max_swing,
+    )
+    from src.db.schema import SeasonConfig
+
+    cutoff = datetime(2026, 6, 12)
+    session.add(
+        SeasonConfig(
+            season_year=2026,
+            importance_max_swing=1.10,
+            created_at=datetime(2026, 5, 16),  # pre-correction cache
+        )
+    )
+    session.add(
+        SeasonConfig(
+            season_year=2027,
+            importance_max_swing=0.95,
+            created_at=datetime(2027, 5, 14),  # post-correction cache
+        )
+    )
+    session.commit()
+
+    deleted = delete_importance_ceilings_before(session, cutoff)
+
+    assert deleted == [(2026, 1.10)]
+    assert get_importance_max_swing(session, 2026) is None  # forces recalibration
+    assert get_importance_max_swing(session, 2027) == 0.95  # untouched
+
+    # Idempotent: second run matches nothing.
+    assert delete_importance_ceilings_before(session, cutoff) == []
