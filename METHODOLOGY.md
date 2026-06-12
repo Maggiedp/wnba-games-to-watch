@@ -84,24 +84,30 @@ How much does tonight's result move the playoff picture?
 - Playoff odds shown on the site and the importance score come from the *same* run, so they're
   mutually consistent by construction.
 
-### Known bias: Σ|Δ| has a noise floor (~8/100)
+### Corrected bias: Σ|Δ| noise floor (analytic subtraction)
 
 Summing the **absolute value** of finitely-estimated per-team rate differences is positively biased:
 even a game that changes nothing has `E[Σ|Δ|] > 0`, because each team's `|rate_a − rate_b|` is the
 absolute value of a noisy estimate. We measured it with a placebo bootstrap (re-split the same sims
-into same-size buckets *independent* of the game outcome):
+into same-size buckets *independent* of the game outcome): **≈ 8 normalized importance points
+(median 8.2, range 8.0–9.0)**, near-constant across realistic games — 10k sims keep both outcome
+buckets in the thousands even for a ~78% favorite, so the floor barely varied and mostly inflated
+absolute numbers, not the *ranking*. The games it genuinely distorted were true dead-rubbers (both
+teams locked in or eliminated), which scored ~8 instead of ~0.
 
-- **Noise floor ≈ 8 normalized importance points (median 8.2, range 8.0–9.0 across games).**
-- It's **near-constant** across realistic games — because 10k sims keep both outcome buckets in the
-  thousands even for a ~78% favorite (WNBA single-game win prob rarely exceeds that). A roughly
-  constant offset shifts every game's importance about equally, so **it barely affects the
-  *ranking*** — it mostly inflates absolute numbers by a fixed amount.
-- The only games it genuinely distorts are true dead-rubbers (both teams locked in or both
-  eliminated), which score ~8 instead of ~0.
+**Correction (since 2026-06):** under H₀ (outcome independent of a team's fate) each per-team
+difference is ≈ Normal(0, p(1−p)(1/n_a + 1/n_b)), so its absolute value is half-normal with mean
+`√(2/π)·σ`. We subtract the summed per-team floor
 
-**Decision: not corrected.** A daily per-game placebo is expensive and, because the floor is
-near-constant, buys no ranking improvement. If we ever want to clean up dead-rubbers, the cheap fix
-is an analytic floor — `Σ_t √(2/π)·√(p_t(1−p_t)(1/n_a + 1/n_b))` subtracted then clamped at 0.
+```
+Σ_t √(2/π)·√(p_t(1−p_t)·(1/n_a + 1/n_b))      (p_t = pooled rate across both buckets)
+```
+
+from each game's raw swing and clamp at 0 (both regular-season playoff-odds swing and postseason
+championship swing). Dead-rubbers now score ~0; games with real stakes move by ~the constant the
+placebo measured. The same correction runs inside the season-ceiling calibration, so normalized
+scores stay on a consistent scale. The per-game placebo bootstrap remains the validation tool, not
+the production correction — it's expensive daily and the analytic floor matches it within noise.
 
 ### "No importance score" means *not simulated*, not *zero stakes*
 
@@ -150,7 +156,9 @@ excitement.
   season, so sims can't produce injury or hot/cold runs. Real seasons have more spread than the
   simulation, so playoff odds are pulled slightly toward the mean (a touch over-confident on good
   teams, under-confident on Cinderellas).
-- **The Σ|Δ| importance noise floor** (~8/100, above) — known, measured, deliberately uncorrected.
+- **The Σ|Δ| importance noise floor** — measured at ~8/100, now corrected with an analytic
+  half-normal floor (above); the correction assumes H₀ per team, so strong-signal teams are very
+  slightly overcorrected (negligible at 10k sims).
 - **`season_regression` is fit on 7 boundaries** and the backtest figure is a hand-regenerated
   constant (both above).
 - **No local-blackout awareness.** League Pass blackout eligibility depends on a viewer's DMA/RSN
