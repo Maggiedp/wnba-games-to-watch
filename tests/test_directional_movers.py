@@ -1,4 +1,5 @@
 from src.scoring.monte_carlo import (
+    _noise_floor_term,
     compute_directional_movers_from_matrix,
     compute_importance_from_matrix,
     compute_postseason_movers_from_matrix,
@@ -42,8 +43,8 @@ def test_directional_movers_respects_top_n_and_min_delta():
 
 
 def test_directional_sum_matches_existing_swing():
-    # Sum of |if_a - if_b| over ALL teams (no top_n/min_delta) == raw swing
-    # (before floor correction). The swing function applies floor correction.
+    # Movers report raw per-team deltas. The swing is floor-corrected.
+    # Verify: directional_sum == corrected_swing + floor (within numerical precision).
     outcome_matrix = [[True], [True], [False], [False]]
     playoff_sets = [{"Sun"}, {"Sun", "Sky"}, {"Sky"}, set()]
     team_names = ["Sun", "Sky"]
@@ -54,11 +55,17 @@ def test_directional_sum_matches_existing_swing():
     corrected_swing = compute_importance_from_matrix(
         outcome_matrix, playoff_sets, [("Sun", "Sky")], team_names
     )[0]
-    # The sum of directional deltas is the raw swing; the corrected_swing has
-    # floor subtracted. So directional_sum should be >= corrected_swing.
-    # For this test, verify that the sum exceeds swing by the floor amount.
-    # (In degenerate cases floor can exceed raw swing, clamping at 0.)
-    assert directional_sum >= corrected_swing
+    # Compute the analytic noise floor using the same logic as compute_importance_from_matrix
+    a_indices = [0, 1]  # sims where team_a won
+    b_indices = [2, 3]  # sims where team_b won
+    n_a, n_b = len(a_indices), len(b_indices)
+    floor = 0.0
+    for team in team_names:
+        count_a = sum(1 for s in a_indices if team in playoff_sets[s])
+        count_b = sum(1 for s in b_indices if team in playoff_sets[s])
+        pooled_rate = (count_a + count_b) / (n_a + n_b)
+        floor += _noise_floor_term(pooled_rate, n_a, n_b)
+    assert abs(directional_sum - (corrected_swing + floor)) < 1e-9
 
 
 def test_postseason_movers_basic_split():
@@ -92,8 +99,8 @@ def test_postseason_movers_empty_bucket():
 
 
 def test_postseason_sum_matches_existing_swing():
-    # Sum of |if_higher - if_lower| over ALL teams (no top_n/min_delta) == raw swing
-    # (before floor correction). The swing function applies floor correction.
+    # Movers report raw per-team deltas. The swing is floor-corrected.
+    # Verify: directional_sum == corrected_swing + floor (within numerical precision).
     bracket_outcomes = [
         {("sf1", 2): True},
         {("sf1", 2): False},
@@ -109,6 +116,14 @@ def test_postseason_sum_matches_existing_swing():
     corrected_swing = compute_postseason_swing_from_matrix(
         "sf1", 2, bracket_outcomes, champions, team_names
     )
-    # The sum of directional deltas is the raw swing; corrected_swing has floor
-    # subtracted. So directional_sum should be >= corrected_swing.
-    assert directional_sum >= corrected_swing
+    # Compute the analytic noise floor using the same logic as compute_postseason_swing_from_matrix
+    higher_indices = [0, 2]  # sims where higher seed won
+    lower_indices = [1, 3]  # sims where lower seed won
+    n_h, n_l = len(higher_indices), len(lower_indices)
+    floor = 0.0
+    for team in team_names:
+        count_h = sum(1 for i in higher_indices if champions[i] == team)
+        count_l = sum(1 for i in lower_indices if champions[i] == team)
+        pooled_rate = (count_h + count_l) / (n_h + n_l)
+        floor += _noise_floor_term(pooled_rate, n_h, n_l)
+    assert abs(directional_sum - (corrected_swing + floor)) < 1e-9
