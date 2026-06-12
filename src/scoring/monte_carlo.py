@@ -6,6 +6,7 @@ in the standings dict as a sibling field used only by quality scoring.
 """
 
 import logging
+import math
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -238,6 +239,18 @@ def _partition_bracket(
     return higher_indices, lower_indices
 
 
+def _noise_floor_term(pooled_rate: float, n_a: int, n_b: int) -> float:
+    """E[|rate_a - rate_b|] under H0 (game outcome independent of the team's fate).
+
+    Under H0 the rate difference is ~ Normal(0, p(1-p)(1/n_a + 1/n_b)), so its
+    absolute value is half-normal with mean sqrt(2/pi) * sigma. Summing |delta|
+    over teams without subtracting this is positively biased (measured at ~8/100
+    normalized, near-constant — see METHODOLOGY.md "noise floor").
+    """
+    variance = pooled_rate * (1.0 - pooled_rate) * (1.0 / n_a + 1.0 / n_b)
+    return math.sqrt(2.0 / math.pi * variance)
+
+
 def compute_importance_from_matrix(
     outcome_matrix: list[list[bool | None]],
     playoff_sets: list[set[str]],
@@ -247,7 +260,9 @@ def compute_importance_from_matrix(
     """Compute importance swing for every remaining game from one simulation run.
 
     Splits the simulation set by who won each game, then computes the all-team
-    sum of |playoff_rate(a_won_sims) - playoff_rate(b_won_sims)|.
+    sum of |playoff_rate(a_won_sims) - playoff_rate(b_won_sims)|, minus the
+    analytic noise floor (sum of per-team half-normal means under H0), clamped
+    at 0 — so finite-sample noise doesn't inflate dead-rubbers (~8/100 measured).
 
     Works because Elo ratings are fixed during simulation — game outcomes don't
     affect downstream win probabilities, so observed splits and forced splits
@@ -261,7 +276,7 @@ def compute_importance_from_matrix(
         team_names: all team names to sum swing across.
 
     Returns:
-        list of raw swing values (one per remaining game, same order).
+        list of corrected swing values (one per remaining game, same order).
         Normalize with normalize_importance_score before displaying.
     """
     swings: list[float] = []
@@ -273,16 +288,15 @@ def compute_importance_from_matrix(
             swings.append(0.0)
             continue
 
+        n_a, n_b = len(a_indices), len(b_indices)
         swing = 0.0
+        floor = 0.0
         for team in team_names:
-            rate_a = sum(1 for s in a_indices if team in playoff_sets[s]) / len(
-                a_indices
-            )
-            rate_b = sum(1 for s in b_indices if team in playoff_sets[s]) / len(
-                b_indices
-            )
-            swing += abs(rate_a - rate_b)
-        swings.append(swing)
+            count_a = sum(1 for s in a_indices if team in playoff_sets[s])
+            count_b = sum(1 for s in b_indices if team in playoff_sets[s])
+            swing += abs(count_a / n_a - count_b / n_b)
+            floor += _noise_floor_term((count_a + count_b) / (n_a + n_b), n_a, n_b)
+        swings.append(max(0.0, swing - floor))
 
     return swings
 
@@ -331,7 +345,8 @@ def compute_postseason_swing_from_matrix(
 
     Partitions the simulation set by who won the focal bracket game, then
     computes Σ |P(team = champion | higher won) − P(team = champion | lower won)|
-    across all team names.
+    across all team names, minus the analytic noise floor (same correction as
+    compute_importance_from_matrix), clamped at 0.
 
     Args:
         focal_slot: bracket slot id, e.g. "qf1", "sf2", "f".
@@ -341,7 +356,8 @@ def compute_postseason_swing_from_matrix(
         team_names: all team names to sum |Δ| across.
 
     Returns:
-        Raw swing value (0.0–2.0). Normalize with `normalize_postseason_importance`.
+        Corrected swing value (>= 0.0, < 2.0). Normalize with
+        `normalize_postseason_importance`.
         Returns 0.0 if either partition bucket is empty (focal game didn't
         happen in any sim, or all sims agree on the outcome).
     """
@@ -351,13 +367,15 @@ def compute_postseason_swing_from_matrix(
     if not higher_indices or not lower_indices:
         return 0.0
 
-    def champ_rate(indices: list[int], team: str) -> float:
-        return sum(1 for i in indices if champions[i] == team) / len(indices)
-
+    n_h, n_l = len(higher_indices), len(lower_indices)
     swing = 0.0
+    floor = 0.0
     for team in team_names:
-        swing += abs(champ_rate(higher_indices, team) - champ_rate(lower_indices, team))
-    return swing
+        count_h = sum(1 for i in higher_indices if champions[i] == team)
+        count_l = sum(1 for i in lower_indices if champions[i] == team)
+        swing += abs(count_h / n_h - count_l / n_l)
+        floor += _noise_floor_term((count_h + count_l) / (n_h + n_l), n_h, n_l)
+    return max(0.0, swing - floor)
 
 
 def compute_postseason_movers_from_matrix(

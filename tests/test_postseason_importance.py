@@ -1,5 +1,7 @@
 """Tests for per-game postseason importance derivation."""
 
+import math
+
 import pytest
 
 from scripts.daily_update import _find_bracket_slot, _importance_for_game
@@ -76,12 +78,14 @@ def test_postseason_swing_skips_sims_missing_focal_game():
         "qf1", 1, bracket_outcomes, champions, team_names
     )
     # Higher bucket: T1 champ 100%, T2/T3 0%. Lower bucket: T2 champ 100%, T1/T3 0%.
-    # Σ|Δ| = |1-0| + |0-1| + |0-0| = 2.0
-    assert swing == pytest.approx(2.0, abs=1e-9)
+    # Raw Σ|Δ| = |1-0| + |0-1| + |0-0| = 2.0; T1 and T2 each carry a noise-floor
+    # term at pooled p=0.5 with n=50 per bucket, T3's pooled rate is 0 (no term).
+    expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 50 + 1 / 50))
+    assert swing == pytest.approx(2.0 - expected_floor, abs=1e-9)
 
 
 def test_postseason_swing_two_when_game_cleanly_flips_champion():
-    """A focal game that determines the champion outright produces swing ≈ 2.0."""
+    """A focal game that determines the champion outright produces swing ≈ 2.0 minus the small noise floor."""
     bracket_outcomes = [
         *({("f", 7): True} for _ in range(500)),
         *({("f", 7): False} for _ in range(500)),
@@ -91,7 +95,10 @@ def test_postseason_swing_two_when_game_cleanly_flips_champion():
     swing = compute_postseason_swing_from_matrix(
         "f", 7, bracket_outcomes, champions, team_names
     )
-    assert swing == pytest.approx(2.0, abs=1e-9)
+    # A and B each carry a floor term at pooled p=0.5; C is never champion in
+    # either bucket (pooled rate 0 -> no term), hence 2 terms, not 3.
+    expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 500 + 1 / 500))
+    assert swing == pytest.approx(2.0 - expected_floor, abs=1e-9)
 
 
 def test_postseason_swing_low_when_focal_game_barely_moves_champion():
@@ -121,8 +128,10 @@ def test_postseason_swing_ignores_none_champion_sims():
         "qf1", 1, bracket_outcomes, champions, team_names
     )
     # Higher bucket: 1 sim, T1 champ 100%. Lower bucket: 1 sim, T2 champ 100%.
-    # Σ|Δ| = |1-0| + |0-1| = 2.0. Third sim excluded by missing key.
-    assert swing == pytest.approx(2.0, abs=1e-9)
+    # Raw Σ|Δ| = |1-0| + |0-1| = 2.0. Third sim excluded by missing key.
+    # T1 and T2 each carry a noise-floor term at pooled p=0.5 with n=1 per bucket.
+    expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 1 + 1 / 1))
+    assert swing == pytest.approx(2.0 - expected_floor, abs=1e-9)
 
 
 def test_find_bracket_slot_matches_pair():
@@ -239,7 +248,7 @@ def test_importance_for_game_postseason_fallback_when_teams_not_in_bracket():
 
 
 def test_importance_for_game_postseason_derives_from_swing():
-    """When all data is present, returns normalized swing."""
+    """When all data is present, returns normalized swing (with noise-floor correction)."""
     from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO7
 
     state = {
@@ -265,8 +274,11 @@ def test_importance_for_game_postseason_derives_from_swing():
         champions=champions,
         team_names=["A", "B", "C"],
     )
-    # Swing = 2.0 → normalized = 100.
-    assert result == pytest.approx(100.0, abs=1e-6)
+    # Swing = 2.0 - floor → normalized ≈ 97.5.
+    expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 500 + 1 / 500))
+    expected_swing = 2.0 - expected_floor
+    expected_importance = expected_swing / 2.0 * 100.0
+    assert result == pytest.approx(expected_importance, abs=1e-6)
 
 
 def test_importance_for_game_postseason_partial_swing():
@@ -286,7 +298,7 @@ def test_importance_for_game_postseason_partial_swing():
     # 500 sims lower won  qf1 game 1 → A champ in 0,   B in 250, C in 250
     # Higher bucket rates: A=0.5, B=0.0, C=0.5
     # Lower bucket rates:  A=0.0, B=0.5, C=0.5
-    # Σ|Δ| = 0.5 + 0.5 + 0.0 = 1.0  → normalized = 50.0
+    # Raw Σ|Δ| = 0.5 + 0.5 + 0.0 = 1.0, minus floor → expected ≈ 46.55
     bracket_outcomes = []
     champions = []
     for _ in range(250):
@@ -313,7 +325,18 @@ def test_importance_for_game_postseason_partial_swing():
         champions=champions,
         team_names=["A", "B", "C"],
     )
-    assert result == pytest.approx(50.0, abs=1e-6)
+    # A: count_h=250, count_l=0, pooled=0.25 (B mirrors A: count_h=0, count_l=250)
+    # C: count_h=250, count_l=250, pooled=0.5
+    # Floors computed from pooled rates and n=500 for each bucket.
+    expected_floor_ab = math.sqrt(2 / math.pi) * math.sqrt(
+        0.25 * (1 - 0.25) * (1 / 500 + 1 / 500)
+    )
+    expected_floor_c = math.sqrt(2 / math.pi) * math.sqrt(
+        0.5 * (1 - 0.5) * (1 / 500 + 1 / 500)
+    )
+    expected_swing = 1.0 - (2 * expected_floor_ab + expected_floor_c)
+    expected_importance = expected_swing / 2.0 * 100.0
+    assert result == pytest.approx(expected_importance, abs=1e-6)
 
 
 def test_importance_for_game_regular_season_unchanged():
@@ -659,7 +682,8 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
             games_needed=_GAMES_NEEDED_BO3,
         ),
     }
-    # Sim universe: Game 1 cleanly flips champion (swing=2.0 → 100).
+    # Sim universe: Game 1 cleanly flips champion (swing ≈ 1.95 → ~97.5
+    # after noise-floor correction).
     # Game 2 has no effect on champion (swing=0 → 0).
     bracket_outcomes = []
     champions = []
@@ -672,7 +696,8 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
 
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "g1"}
 
-    # Lookup says this is Game 1 of qf1 → swing 2.0 → importance 100.
+    # Lookup says this is Game 1 of qf1 → swing ≈ 1.95 → importance ≈ 97.5
+    # (noise-floor correction applied).
     result_game1 = _importance_for_game(
         game,
         raw_swings=[],
@@ -684,7 +709,10 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
         team_names=["A", "B"],
         postseason_slot_lookup={"g1": ("qf1", 1)},
     )
-    assert result_game1 == pytest.approx(100.0, abs=1e-6)
+    expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 500 + 1 / 500))
+    expected_swing = 2.0 - expected_floor
+    expected_importance = expected_swing / 2.0 * 100.0
+    assert result_game1 == pytest.approx(expected_importance, abs=1e-6)
 
     # Same game dict, lookup overrides to Game 2 → all sims have Game 2 = True,
     # so the lower-bucket is empty → swing 0 → importance 0.
@@ -731,3 +759,15 @@ def test_importance_for_game_lookup_miss_falls_back_to_max():
         postseason_slot_lookup={"g1": ("qf1", 1)},
     )
     assert result == 100.0
+
+
+def test_postseason_swing_clamps_at_zero_for_no_signal_game():
+    """Champion distribution identical in both buckets -> corrected swing exactly 0."""
+    bracket_outcomes = [{("qf1", 1): i % 2 == 0} for i in range(100)]
+    # A is champion in 50% of each bucket, B in the other 50% -> raw swing 0;
+    # subtracting the positive floor must clamp at 0, not go negative.
+    champions = ["A" if i % 4 in (0, 1) else "B" for i in range(100)]
+    swing = compute_postseason_swing_from_matrix(
+        "qf1", 1, bracket_outcomes, champions, ["A", "B"]
+    )
+    assert swing == 0.0

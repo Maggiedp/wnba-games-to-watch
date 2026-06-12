@@ -918,3 +918,23 @@ def save_importance_max_swing(
             SeasonConfig(season_year=season_year, importance_max_swing=max_swing)
         )
     session.commit()
+
+
+def delete_importance_ceilings_before(
+    session: Session, cutoff: datetime
+) -> list[tuple[int, float]]:
+    """Delete cached importance ceilings created before ``cutoff`` and commit.
+
+    Used by the daily-update one-shot probe to drop ceilings computed with the
+    pre-noise-floor-correction swing formula; compute_daily_scores recalibrates
+    on the next lookup. Idempotent: a recalibrated row carries a fresh
+    created_at past the cutoff, so re-runs match nothing. Returns
+    (season_year, old_max_swing) per deleted row for logging.
+    """
+    stale = session.query(SeasonConfig).filter(SeasonConfig.created_at < cutoff).all()
+    deleted = [(cfg.season_year, cfg.importance_max_swing) for cfg in stale]
+    for cfg in stale:
+        session.delete(cfg)
+    if stale:
+        session.commit()
+    return deleted

@@ -110,6 +110,44 @@ def test_postseason_orientation_flips_when_team_a_is_lower_seed():
     assert aces["if_a"] == 0.0 and aces["if_b"] == 1.0
 
 
+def test_zero_importance_suppresses_movers():
+    """A corrected swing clamped to 0 means "all noise" — no stakes panel,
+    even when a raw per-team delta clears the mover threshold."""
+    # Sun's playoff rate: 26/50 if team_a wins vs 24/50 if team_b wins — a 0.04
+    # raw delta (>= min_delta 0.03) that is pure finite-sample noise.
+    outcome_matrix = [[s < 50] for s in range(100)]
+    playoff_sets = [
+        ({"Sun"} if (s < 26 or 50 <= s < 74) else set()) for s in range(100)
+    ]
+    idx = {"evt1": 0}
+    names = ["Sun", "Storm", "Sky"]
+    game = {"event_id": "evt1", "team_a": "Storm", "team_b": "Sky", "season_type": 2}
+    # Sanity: without the gate the mover would render.
+    assert (
+        _importance_detail_for_game(
+            game, outcome_matrix, playoff_sets, idx, team_names=names
+        )
+        is not None
+    )
+    assert (
+        _importance_detail_for_game(
+            game, outcome_matrix, playoff_sets, idx, team_names=names, importance=0.0
+        )
+        is None
+    )
+
+
+def test_none_importance_does_not_suppress_movers():
+    """importance=None means "not scored", not "zero stakes" — the gate must
+    not fire (detail still governed by the existing lookups)."""
+    om, ps, idx, names = _reg_inputs()
+    game = {"event_id": "evt1", "team_a": "Storm", "team_b": "Sky", "season_type": 2}
+    raw = _importance_detail_for_game(
+        game, om, ps, idx, team_names=names, importance=None
+    )
+    assert raw is not None
+
+
 def test_postseason_missing_bracket_inputs_returns_none():
     bs, bo, champs, names, lookup = _post_inputs()
     game = {"event_id": "evtP", "team_a": "Aces", "team_b": "Liberty", "season_type": 3}

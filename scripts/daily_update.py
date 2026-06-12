@@ -25,6 +25,7 @@ from src.data.wnba_schedule import (
     fetch_wnba_schedule_broadcasters,
 )
 from src.db.queries import (
+    delete_importance_ceilings_before,
     get_all_teams,
     get_completed_games,
     get_completed_games_missing_excitement,
@@ -490,6 +491,11 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
     return max(swings) if swings else 0.75
 
 
+# Ceilings cached before this date used the pre-noise-floor-correction swing
+# formula; the probe in main() drops them so the next lookup recalibrates.
+_CEILING_CORRECTION_CUTOFF = datetime(2026, 6, 12)
+
+
 def _build_current_bracket_state(session, standings: dict):
     """Build the observed BracketState from current seeding and completed
     postseason games.
@@ -720,6 +726,7 @@ def _importance_detail_for_game(
     champions: list[str | None] | None = None,
     team_names: list[str] | None = None,
     postseason_slot_lookup: dict[str, tuple[str, int]] | None = None,
+    importance: float | None = None,
 ) -> str | None:
     """Build the directional-movers JSON payload for one upcoming game.
 
@@ -727,11 +734,17 @@ def _importance_detail_for_game(
     Postseason: top championship-odds movers from bracket outcomes, with the
     slot's higher/lower seed mapped onto the matchup's team_a/team_b.
     Returns None for preseason, non-simulated games, games that can't be
-    located in the sim universe, or when no team's odds clear the threshold.
+    located in the sim universe, when no team's odds clear the threshold, or
+    when the game's corrected importance is exactly 0 (swing clamped to the
+    noise floor — movers report raw per-team deltas, so rendering them would
+    show spurious stakes on a game scored as no-signal). importance=None
+    means "not scored", not "zero stakes", and does not suppress.
     """
     season_type = game.get("season_type", 2)
     team_a, team_b = game["team_a"], game["team_b"]
     if season_type == 1:
+        return None
+    if importance == 0.0:
         return None
 
     if season_type == 3:
@@ -936,6 +949,7 @@ def compute_daily_scores(
             champions=champions,
             team_names=team_names,
             postseason_slot_lookup=postseason_slot_lookup,
+            importance=importance,
         )
         partial.append(
             {
@@ -1124,6 +1138,26 @@ def main() -> int:
                 # transaction or autoflush partially-staged mutations.
                 session.rollback()
                 logger.warning(f"Legacy preseason backfill failed (non-fatal): {e}")
+            # Drop importance ceilings cached with the pre-noise-floor-
+            # correction swing formula so compute_daily_scores recalibrates
+            # on the corrected scale this run. One-shot: recalibrated rows
+            # carry a fresh created_at past the cutoff, so this is a
+            # permanent no-op afterward. The helper self-commits.
+            try:
+                dropped = delete_importance_ceilings_before(
+                    session, _CEILING_CORRECTION_CUTOFF
+                )
+                for year, old_swing in dropped:
+                    logger.info(
+                        f"Dropped pre-correction importance ceiling for {year} "
+                        f"(was {old_swing:.3f}) — recalibrating this run"
+                    )
+            except Exception as e:
+                # Rollback so downstream queries don't inherit a failed
+                # transaction. Non-fatal: worst case is one more run on the
+                # old (slightly inflated) ceiling.
+                session.rollback()
+                logger.warning(f"Ceiling invalidation failed (non-fatal): {e}")
             replay = compute_elo_ratings()
             elo_ratings = replay.final_ratings
             standings = compute_standings(session, elo_ratings)
