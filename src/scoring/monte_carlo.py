@@ -356,7 +356,8 @@ def compute_postseason_swing_from_matrix(
         team_names: all team names to sum |Δ| across.
 
     Returns:
-        Corrected swing value (0.0–2.0). Normalize with `normalize_postseason_importance`.
+        Corrected swing value (>= 0.0, < 2.0). Normalize with
+        `normalize_postseason_importance`.
         Returns 0.0 if either partition bucket is empty (focal game didn't
         happen in any sim, or all sims agree on the outcome).
     """

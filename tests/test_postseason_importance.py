@@ -95,6 +95,8 @@ def test_postseason_swing_two_when_game_cleanly_flips_champion():
     swing = compute_postseason_swing_from_matrix(
         "f", 7, bracket_outcomes, champions, team_names
     )
+    # A and B each carry a floor term at pooled p=0.5; C is never champion in
+    # either bucket (pooled rate 0 -> no term), hence 2 terms, not 3.
     expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 500 + 1 / 500))
     assert swing == pytest.approx(2.0 - expected_floor, abs=1e-9)
 
