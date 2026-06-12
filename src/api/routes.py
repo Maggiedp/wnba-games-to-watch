@@ -268,6 +268,12 @@ _WP_CHART_JS = _load_template("js/detail_chart.js")
 # {{ shared_js | safe }} (jinja detail page) so it can't drift between pages.
 _SHARED_JS = _load_template("js/shared.js")
 
+# Homepage-only pure JS helpers (excitement scoring, win-prob text, the
+# completed-rebucket core). Source of truth is templates/js/homepage_helpers.js
+# (single-sourced + Node-tested); injected via %%HOMEPAGE_HELPERS_JS%% after
+# %%SHARED_JS%% (deps-first: winProbText uses shared.js escapeHtml).
+_HOMEPAGE_HELPERS_JS = _load_template("js/homepage_helpers.js")
+
 _HOMEPAGE_HTML = (
     _load_template("homepage.html")
     .replace("%%SITE_TITLE%%", _SITE_TITLE)
@@ -275,6 +281,7 @@ _HOMEPAGE_HTML = (
     .replace("%%SITE_URL%%", _SITE_URL)
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
+    .replace("%%HOMEPAGE_HELPERS_JS%%", _HOMEPAGE_HELPERS_JS)
 )
 
 _TRANSPARENCY_HTML = (
