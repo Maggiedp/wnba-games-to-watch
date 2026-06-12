@@ -248,7 +248,7 @@ def _noise_floor_term(pooled_rate: float, n_a: int, n_b: int) -> float:
     normalized, near-constant — see METHODOLOGY.md "noise floor").
     """
     variance = pooled_rate * (1.0 - pooled_rate) * (1.0 / n_a + 1.0 / n_b)
-    return math.sqrt(2.0 / math.pi) * math.sqrt(variance)
+    return math.sqrt(2.0 / math.pi * variance)
 
 
 def compute_importance_from_matrix(

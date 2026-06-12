@@ -325,20 +325,16 @@ def test_importance_for_game_postseason_partial_swing():
         champions=champions,
         team_names=["A", "B", "C"],
     )
-    # A: count_h=250, count_l=0, pooled=0.25
-    # B: count_h=0, count_l=250, pooled=0.25
+    # A: count_h=250, count_l=0, pooled=0.25 (B mirrors A: count_h=0, count_l=250)
     # C: count_h=250, count_l=250, pooled=0.5
     # Floors computed from pooled rates and n=500 for each bucket.
-    expected_floor_a = math.sqrt(2 / math.pi) * math.sqrt(
-        0.25 * (1 - 0.25) * (1 / 500 + 1 / 500)
-    )
-    expected_floor_b = math.sqrt(2 / math.pi) * math.sqrt(
+    expected_floor_ab = math.sqrt(2 / math.pi) * math.sqrt(
         0.25 * (1 - 0.25) * (1 / 500 + 1 / 500)
     )
     expected_floor_c = math.sqrt(2 / math.pi) * math.sqrt(
         0.5 * (1 - 0.5) * (1 / 500 + 1 / 500)
     )
-    expected_swing = 1.0 - (expected_floor_a + expected_floor_b + expected_floor_c)
+    expected_swing = 1.0 - (2 * expected_floor_ab + expected_floor_c)
     expected_importance = expected_swing / 2.0 * 100.0
     assert result == pytest.approx(expected_importance, abs=1e-6)
 

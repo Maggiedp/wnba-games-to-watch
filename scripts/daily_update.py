@@ -491,9 +491,8 @@ def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float
     return max(swings) if swings else 0.75
 
 
-# Ceilings cached before this date were computed with the pre-correction
-# (noise-floor-inflated) swing formula; the one-shot probe in main() drops
-# them so the next lookup recalibrates on the corrected scale.
+# Ceilings cached before this date used the pre-noise-floor-correction swing
+# formula; the probe in main() drops them so the next lookup recalibrates.
 _CEILING_CORRECTION_CUTOFF = datetime(2026, 6, 12)
 
 
