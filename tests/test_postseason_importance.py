@@ -686,7 +686,8 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
             games_needed=_GAMES_NEEDED_BO3,
         ),
     }
-    # Sim universe: Game 1 cleanly flips champion (swing=2.0 → 100).
+    # Sim universe: Game 1 cleanly flips champion (swing ≈ 1.95 → ~97.5
+    # after noise-floor correction).
     # Game 2 has no effect on champion (swing=0 → 0).
     bracket_outcomes = []
     champions = []
