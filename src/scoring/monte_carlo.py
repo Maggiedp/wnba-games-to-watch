@@ -345,7 +345,8 @@ def compute_postseason_swing_from_matrix(
 
     Partitions the simulation set by who won the focal bracket game, then
     computes Σ |P(team = champion | higher won) − P(team = champion | lower won)|
-    across all team names.
+    across all team names, minus the analytic noise floor (same correction as
+    compute_importance_from_matrix), clamped at 0.
 
     Args:
         focal_slot: bracket slot id, e.g. "qf1", "sf2", "f".
@@ -355,7 +356,7 @@ def compute_postseason_swing_from_matrix(
         team_names: all team names to sum |Δ| across.
 
     Returns:
-        Raw swing value (0.0–2.0). Normalize with `normalize_postseason_importance`.
+        Corrected swing value (0.0–2.0). Normalize with `normalize_postseason_importance`.
         Returns 0.0 if either partition bucket is empty (focal game didn't
         happen in any sim, or all sims agree on the outcome).
     """
@@ -365,13 +366,15 @@ def compute_postseason_swing_from_matrix(
     if not higher_indices or not lower_indices:
         return 0.0
 
-    def champ_rate(indices: list[int], team: str) -> float:
-        return sum(1 for i in indices if champions[i] == team) / len(indices)
-
+    n_h, n_l = len(higher_indices), len(lower_indices)
     swing = 0.0
+    floor = 0.0
     for team in team_names:
-        swing += abs(champ_rate(higher_indices, team) - champ_rate(lower_indices, team))
-    return swing
+        count_h = sum(1 for i in higher_indices if champions[i] == team)
+        count_l = sum(1 for i in lower_indices if champions[i] == team)
+        swing += abs(count_h / n_h - count_l / n_l)
+        floor += _noise_floor_term((count_h + count_l) / (n_h + n_l), n_h, n_l)
+    return max(0.0, swing - floor)
 
 
 def compute_postseason_movers_from_matrix(
