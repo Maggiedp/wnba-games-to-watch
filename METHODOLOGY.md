@@ -109,6 +109,11 @@ placebo measured. The same correction runs inside the season-ceiling calibration
 scores stay on a consistent scale. The per-game placebo bootstrap remains the validation tool, not
 the production correction — it's expensive daily and the analytic floor matches it within noise.
 
+The per-team "What's at stake" movers still display **raw** conditional probabilities (correcting
+a displayed probability pair would misrepresent the simulation output), so a game whose corrected
+swing clamps to 0 suppresses its movers panel entirely — a zero-stakes headline never ships a
+stakes panel built from the same noise.
+
 ### "No importance score" means *not simulated*, not *zero stakes*
 
 Games outside the simulation universe (e.g. a row not yet classified as regular/postseason) show an
