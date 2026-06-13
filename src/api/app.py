@@ -6,6 +6,7 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from secrets import compare_digest
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Query
@@ -485,7 +486,9 @@ async def get_calibration_endpoint(season: int = Query(default=None)):
 @app.post("/internal/daily-update")
 async def trigger_daily_update(x_trigger_secret: str = Header(default="")):
     """Run the daily update job synchronously. Called by Cloud Scheduler."""
-    if _TRIGGER_SECRET and x_trigger_secret != _TRIGGER_SECRET:
+    # Fail closed: a missing/unloaded secret must reject, not run the job
+    # unauthenticated. compare_digest avoids leaking the secret via timing.
+    if not _TRIGGER_SECRET or not compare_digest(x_trigger_secret, _TRIGGER_SECRET):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     from scripts.daily_update import main
