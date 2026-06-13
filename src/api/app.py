@@ -59,6 +59,20 @@ app = FastAPI(
 _TRIGGER_SECRET = os.environ.get("TRIGGER_SECRET", "")
 
 
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """Set security response headers on every response. HSTS is app-set (not
+    Cloudflare-fronted) because the apex is grey-cloud — Cloud Run terminates
+    TLS directly. CSP/X-Frame-Options are intentionally omitted: read-only
+    content with nothing to hijack."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Strict-Transport-Security"] = (
+        "max-age=31536000; includeSubDomains"
+    )
+    return response
+
+
 @app.get("/", response_class=HTMLResponse)
 async def homepage():
     from src.api.routes import render_homepage
