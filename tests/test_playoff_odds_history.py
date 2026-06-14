@@ -37,3 +37,23 @@ def test_history_empty_season_returns_empty_list(env):
     rows = get_playoff_probability_history(session, 1999)
     session.close()
     assert rows == []
+
+
+def test_history_endpoint_shape(env, client):
+    _seed(env)
+    r = client.get("/api/playoff-odds-history?season=2026")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["season"] == 2026
+    assert body["teams"]["Aces"] == [
+        {"date": "2026-05-10", "value": 0.80},
+        {"date": "2026-05-15", "value": 0.85},
+    ]
+    assert body["teams"]["Storm"] == [{"date": "2026-05-10", "value": 0.40}]
+    assert body["abbrevs"]["Aces"] == "LV"
+
+
+def test_history_endpoint_empty_season(client):
+    r = client.get("/api/playoff-odds-history?season=1999")
+    assert r.status_code == 200
+    assert r.json() == {"season": 1999, "teams": {}}
