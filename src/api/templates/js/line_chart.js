@@ -98,7 +98,11 @@ function renderTeamTrendChart(mountEl, legendEl, data, opts = {}) {
     const label = svg && svg.querySelector(`.trend-label[data-team="${i}"]`);
     const row = legendEl.querySelector(`.legend-row[data-team="${i}"]`);
     if (path) { path.classList.toggle('hi', on); if (on) path.parentNode.appendChild(path); }
-    if (label) { label.classList.toggle('hi', on); if (on) label.parentNode.appendChild(label); }
+    // Don't re-parent the label — it carries its own hover listener, and moving the
+    // hovered node mid-`mouseenter` clears the browser's hover state so `mouseleave`
+    // never fires (stuck highlight). No raise is needed: labels never overlap (gap
+    // logic above) and the line never reaches the label's x-band (x >= W-PR+5).
+    if (label) label.classList.toggle('hi', on);
     if (row) row.classList.toggle('active', on);
   };
   legendEl.querySelectorAll('.legend-row').forEach(row => {
