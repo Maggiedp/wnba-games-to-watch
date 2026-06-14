@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Behind the numbers · %%SITE_TITLE%%</title>
-<meta name="description" content="How %%SITE_TITLE%% scores games: team Elo over time and win-probability calibration.">
+<meta name="description" content="How %%SITE_TITLE%% scores games: win-probability calibration and model accuracy.">
 
 <meta property="og:title" content="Behind the numbers · %%SITE_TITLE%%">
-<meta property="og:description" content="How %%SITE_TITLE%% scores games: team Elo over time and win-probability calibration.">
+<meta property="og:description" content="How %%SITE_TITLE%% scores games: win-probability calibration and model accuracy.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="%%SITE_URL%%/transparency">
 <meta property="og:image" content="%%SITE_URL%%/og-transparency.png">
@@ -17,7 +17,7 @@
 <meta property="og:image:alt" content="How wumbers scores every WNBA game">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Behind the numbers · %%SITE_TITLE%%">
-<meta name="twitter:description" content="How %%SITE_TITLE%% scores games: team Elo over time and win-probability calibration.">
+<meta name="twitter:description" content="How %%SITE_TITLE%% scores games: win-probability calibration and model accuracy.">
 <meta name="twitter:image" content="%%SITE_URL%%/og-transparency.png">
 
 <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23ff6b00'/><path d='M2 16 h28 M16 2 v28' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 7 C 11 12 21 12 27 7' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 25 C 11 20 21 20 27 25' stroke='%230d1b2a' stroke-width='2' fill='none'/></svg>">
@@ -27,6 +27,7 @@
             h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }
             h2 { font-family: var(--display); font-size: 1.2rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }
             .sub { color: var(--text-muted); margin: 0 0 28px; }
+            .sub a { color: var(--orange-deep); }
             section { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 24px; }
             .desc { color: var(--text-muted); font-size: .9rem; margin: 0 0 16px; }
             a.back { color: var(--orange-deep); text-decoration: none; font-size: .9rem; }
@@ -42,7 +43,7 @@
   <a class="back" href="/">&larr; Back to games</a>
   <h1>Behind the numbers</h1>
   <p class="sub">How accurate the model has been.
-     See the <a href="/rankings" style="color: var(--orange-deep);">power rankings</a>.</p>
+     See the <a href="/rankings">power rankings</a>.</p>
 
   <section>
     <h2>Win-probability calibration</h2>

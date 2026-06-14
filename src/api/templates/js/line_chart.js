@@ -157,12 +157,13 @@ function computeRankDeltas(data, windowDays = 7) {
     for (const p of pts) { if (p.date <= cutoff) wa = p.value; }
     weekAgo[n] = wa;
   }
-  const eligible = names.filter(n => weekAgo[n] != null && current[n] != null);
+  const eligible = names.filter(n => weekAgo[n] != null);
+  const eligibleSet = new Set(eligible);
   const curRank = {}, waRank = {};
   [...eligible].sort((a, b) => current[b] - current[a]).forEach((n, i) => curRank[n] = i + 1);
   [...eligible].sort((a, b) => weekAgo[b] - weekAgo[a]).forEach((n, i) => waRank[n] = i + 1);
   for (const n of names) {
-    result[n] = eligible.includes(n) ? (waRank[n] - curRank[n]) : null;
+    result[n] = eligibleSet.has(n) ? (waRank[n] - curRank[n]) : null;
   }
   return result;
 }

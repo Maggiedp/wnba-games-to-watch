@@ -295,7 +295,7 @@ _HOMEPAGE_HELPERS_JS = _load_template("js/homepage_helpers.js")
 # Multi-team trend line chart (buildLineChartSvg + renderTeamTrendChart),
 # single-sourced + Node-tested; injected via %%LINE_CHART_JS%% after
 # %%SHARED_JS%% (deps-first: it uses shared.js escapeHtml). Used by the
-# transparency Elo chart and the homepage playoff-odds chart.
+# rankings Elo chart and the homepage playoff-odds chart.
 _LINE_CHART_JS = _load_template("js/line_chart.js")
 
 _HOMEPAGE_HTML = (
