@@ -158,6 +158,13 @@ def og_transparency_image():
     return _png_response(render_transparency_card(), _OG_STATIC_CACHE_S)
 
 
+@app.api_route("/og-rankings.png", methods=["GET", "HEAD"])
+def og_rankings_image():
+    from src.api.og_image import render_rankings_card
+
+    return _png_response(render_rankings_card(), _OG_STATIC_CACHE_S)
+
+
 @app.get("/api/games/today", response_model=list[GameResponse])
 def get_today_games():
     today = today_et()
