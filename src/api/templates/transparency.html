@@ -41,15 +41,9 @@
 <div class="wrap">
   <a class="back" href="/">&larr; Back to games</a>
   <h1>Behind the numbers</h1>
-  <p class="sub">How the model moves, and how accurate it has been.</p>
+  <p class="sub">How accurate the model has been.
+     See the <a href="/rankings" style="color: var(--orange-deep);">power rankings</a>.</p>
 
-  <section>
-    <h2>Elo ratings over time</h2>
-    <p class="desc">Each team's Elo rating entering every game this season.
-       Replayed from results — higher is stronger.</p>
-    <div id="elo-chart" class="chart"><p class="empty">Loading…</p></div>
-    <div id="elo-legend" class="legend"></div>
-  </section>
   <section>
     <h2>Win-probability calibration</h2>
     <p class="desc">How our predicted win probabilities line up with how often teams
@@ -69,7 +63,6 @@
 
 <script>
 %%SHARED_JS%%
-%%LINE_CHART_JS%%
 const MIN_CAL_GAMES = 25;
 
 // Static 2017-2025 backtest of the deployed Elo model (K=16, H=50, reg=0.5,
@@ -98,24 +91,6 @@ function renderBacktest() {
     `<strong>${Math.round(BACKTEST.pickAcc * 100)}%</strong> of the time, and predicted ` +
     `win rates match actual within about 1% across the middle of the range.</p>` +
     `<p class="cal-foot">Across ${BACKTEST.n.toLocaleString()} games (2017&ndash;2025).</p>`;
-}
-
-async function loadElo() {
-  const mount = document.getElementById('elo-chart');
-  const legend = document.getElementById('elo-legend');
-  try {
-    const res = await fetch('/api/elo-history');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    // Shared renderer keys on `value`; elo-history returns `rating`.
-    const teams = {};
-    for (const [name, pts] of Object.entries(data.teams || {})) {
-      teams[name] = pts.map(p => ({ date: p.date, value: p.rating }));
-    }
-    renderTeamTrendChart(mount, legend, { teams, abbrevs: data.abbrevs }, {});
-  } catch (e) {
-    mount.innerHTML = '<p class="empty">Could not load Elo history.</p>';
-  }
 }
 
 function buildReliabilitySvg(buckets) {
@@ -174,7 +149,6 @@ async function loadCalibration() {
   }
 }
 
-loadElo();
 loadCalibration();
 renderBacktest();
 </script>

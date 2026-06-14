@@ -315,7 +315,6 @@ _TRANSPARENCY_HTML = (
     .replace("%%SITE_URL%%", _SITE_URL)
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
-    .replace("%%LINE_CHART_JS%%", _LINE_CHART_JS)
 )
 
 _RANKINGS_HTML = (
