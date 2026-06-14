@@ -60,8 +60,7 @@ function buildLineChartSvg(series, opts) {
 // elements. `data` = {teams:{name:[{date,value}]}, abbrevs:{name:abbr}}.
 // opts: {width, height, yMin?, yMax?, yFormat?}. The legend doubles as a
 // standings list (sorted by current value desc).
-function renderTeamTrendChart(mountEl, legendEl, data, opts) {
-  opts = opts || {};
+function renderTeamTrendChart(mountEl, legendEl, data, opts = {}) {
   const fmt = opts.yFormat || Math.round;
   const names = Object.keys(data.teams || {});
   if (!names.length) { mountEl.innerHTML = '<p class="empty">Not enough history yet.</p>'; return; }
@@ -92,7 +91,7 @@ function renderTeamTrendChart(mountEl, legendEl, data, opts) {
   legendEl.innerHTML = series.map((s, i) =>
     `<button class="legend-row" type="button" data-team="${i}">` +
     `<span class="rank">${i + 1}</span>${escapeHtml(s.label)}` +
-    `<span class="rating">${fmt(s.last)}</span></button>`).join('');
+    `<span class="value">${fmt(s.last)}</span></button>`).join('');
   const setHi = (i, on) => {
     const path = svg && svg.querySelector(`.trend-line[data-team="${i}"]`);
     const label = svg && svg.querySelector(`.trend-label[data-team="${i}"]`);
