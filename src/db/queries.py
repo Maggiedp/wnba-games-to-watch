@@ -900,6 +900,23 @@ def get_playoff_probabilities(
     }
 
 
+def get_playoff_probability_history(
+    session: Session, season_year: int
+) -> list[PlayoffProbability]:
+    """All playoff_probabilities rows for a season, ordered by (date, team_id).
+
+    Parallels get_elo_history: feeds the make-playoffs over-time chart. The
+    team_id secondary sort makes per-team chronological order explicit when two
+    rows share a date.
+    """
+    return (
+        session.query(PlayoffProbability)
+        .filter(PlayoffProbability.date.like(f"{season_year}-%"))
+        .order_by(PlayoffProbability.date, PlayoffProbability.team_id)
+        .all()
+    )
+
+
 def get_importance_max_swing(session: Session, season_year: int) -> float | None:
     """Return the season-start importance ceiling, or None if not yet computed."""
     cfg = session.get(SeasonConfig, season_year)
