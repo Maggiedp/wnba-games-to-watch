@@ -113,3 +113,47 @@ function renderTeamTrendChart(mountEl, legendEl, data, opts = {}) {
     el.addEventListener('mouseleave', () => setHi(i, false));
   });
 }
+
+// Subtract `days` calendar days from an ISO YYYY-MM-DD string (UTC, TZ-safe).
+function isoMinusDays(iso, days) {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+// Week-over-week rank movement per team. data = {teams:{name:[{date,value}]}}.
+// Returns {name: delta|null} where delta = (rank `windowDays` ago) - (rank now);
+// positive = climbed. null = no data point on-or-before the cutoff (expansion
+// team, or season younger than the window). Ranks are computed over the set of
+// teams that have a week-ago value, so a stable mid-season slate is true
+// week-over-week movement. Points are assumed ascending by date (same contract
+// the renderer relies on for `last`).
+function computeRankDeltas(data, windowDays = 7) {
+  const teams = data.teams || {};
+  const names = Object.keys(teams);
+  const result = {};
+  let maxDate = '';
+  for (const n of names) {
+    const pts = teams[n];
+    if (pts.length && pts[pts.length - 1].date > maxDate) maxDate = pts[pts.length - 1].date;
+  }
+  if (!maxDate) return result;
+  const cutoff = isoMinusDays(maxDate, windowDays);
+  const current = {}, weekAgo = {};
+  for (const n of names) {
+    const pts = teams[n];
+    if (!pts.length) continue;
+    current[n] = pts[pts.length - 1].value;
+    let wa = null;
+    for (const p of pts) { if (p.date <= cutoff) wa = p.value; }
+    weekAgo[n] = wa;
+  }
+  const eligible = names.filter(n => weekAgo[n] != null && current[n] != null);
+  const curRank = {}, waRank = {};
+  [...eligible].sort((a, b) => current[b] - current[a]).forEach((n, i) => curRank[n] = i + 1);
+  [...eligible].sort((a, b) => weekAgo[b] - weekAgo[a]).forEach((n, i) => waRank[n] = i + 1);
+  for (const n of names) {
+    result[n] = eligible.includes(n) ? (waRank[n] - curRank[n]) : null;
+  }
+  return result;
+}
