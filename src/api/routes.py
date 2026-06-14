@@ -260,8 +260,12 @@ _SHARED_HEAD = """\
             .legend-row { display: inline-flex; align-items: baseline; gap: 7px; padding: 3px 11px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: .82rem; transition: background .12s ease, color .12s ease, border-color .12s ease; }
             .legend-row .rank { color: var(--text-subtle); font-variant-numeric: tabular-nums; font-size: .72rem; }
             .legend-row .value { color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+            .legend-row .delta { font-variant-numeric: tabular-nums; font-size: .72rem; font-weight: 600; }
+            .legend-row .delta.up { color: #1a7f4b; }
+            .legend-row .delta.down { color: #c0392b; }
+            .legend-row .delta.flat { color: var(--text-subtle); }
             .legend-row:hover, .legend-row.active, .legend-row:focus-visible { background: var(--orange); border-color: var(--orange); color: #fff; outline: none; }
-            .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .value, .legend-row.active .value { color: rgba(255, 255, 255, .82); }
+            .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .value, .legend-row.active .value, .legend-row:hover .delta, .legend-row.active .delta { color: rgba(255, 255, 255, .82); }
             .trend-line { fill: none; stroke: var(--navy); stroke-opacity: .15; stroke-width: 1.4; pointer-events: none; transition: stroke-opacity .12s ease, stroke-width .12s ease; }
             .trend-line.hi { stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }
             .trend-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
