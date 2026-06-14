@@ -75,6 +75,7 @@ function renderTeamTrendChart(mountEl, legendEl, data, opts = {}) {
              points: pts.map(p => ({ x: dayIndex[p.date], y: p.value })) };
   });
   series.sort((a, b) => b.last - a.last);  // legend doubles as a standings list
+  const deltas = opts.showRankDelta ? computeRankDeltas(data) : {};
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const seen = new Set();
   const xTicks = [];
@@ -90,7 +91,7 @@ function renderTeamTrendChart(mountEl, legendEl, data, opts = {}) {
   const svg = mountEl.querySelector('svg');
   legendEl.innerHTML = series.map((s, i) =>
     `<button class="legend-row" type="button" data-team="${i}">` +
-    `<span class="rank">${i + 1}</span>${escapeHtml(s.label)}` +
+    `<span class="rank">${i + 1}</span>${deltaHtml(deltas[s.label])}${escapeHtml(s.label)}` +
     `<span class="value">${fmt(s.last)}</span></button>`).join('');
   const setHi = (i, on) => {
     const path = svg && svg.querySelector(`.trend-line[data-team="${i}"]`);
@@ -112,6 +113,14 @@ function renderTeamTrendChart(mountEl, legendEl, data, opts = {}) {
     el.addEventListener('mouseenter', () => setHi(i, true));
     el.addEventListener('mouseleave', () => setHi(i, false));
   });
+}
+
+// Legend rank-movement glyph. d = signed int (positive = climbed), 0, or null.
+function deltaHtml(d) {
+  if (d == null) return '';
+  if (d > 0) return `<span class="delta up">▲${d}</span>`;
+  if (d < 0) return `<span class="delta down">▾${-d}</span>`;
+  return '<span class="delta flat">–</span>';
 }
 
 // Subtract `days` calendar days from an ISO YYYY-MM-DD string (UTC, TZ-safe).

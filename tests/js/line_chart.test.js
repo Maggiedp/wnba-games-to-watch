@@ -87,3 +87,13 @@ test('computeRankDeltas: all points within the window are null', () => {
   assert.equal(d.A, null);
   assert.equal(d.B, null);
 });
+
+test('deltaHtml renders arrows / flat / empty', () => {
+  assert.equal(deltaHtml(null), '');
+  assert.equal(deltaHtml(undefined), '');
+  assert.match(deltaHtml(2), /class="delta up"/);
+  assert.match(deltaHtml(2), /▲2/);
+  assert.match(deltaHtml(-3), /class="delta down"/);
+  assert.match(deltaHtml(-3), /▾3/);   // magnitude, no minus sign
+  assert.match(deltaHtml(0), /class="delta flat"/);
+});
