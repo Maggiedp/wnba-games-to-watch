@@ -318,6 +318,15 @@ _TRANSPARENCY_HTML = (
     .replace("%%LINE_CHART_JS%%", _LINE_CHART_JS)
 )
 
+_RANKINGS_HTML = (
+    _load_template("rankings.html")
+    .replace("%%SITE_TITLE%%", _SITE_TITLE)
+    .replace("%%SITE_URL%%", _SITE_URL)
+    .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
+    .replace("%%SHARED_JS%%", _SHARED_JS)
+    .replace("%%LINE_CHART_JS%%", _LINE_CHART_JS)
+)
+
 
 def render_game_detail(session: Session, espn_id: str) -> str | None:
     """Render the detail page for one game, or None if the espn_id is unknown."""
@@ -891,3 +900,9 @@ def render_transparency() -> str:
     per-request data and uses the same trusted-constant %%TOKEN%% substitution
     as the homepage (see _load_template)."""
     return _TRANSPARENCY_HTML
+
+
+def render_rankings() -> str:
+    """Server-rendered /rankings page. Static shell — Elo data is fetched
+    client-side from /api/elo-history, so it carries no per-request data."""
+    return _RANKINGS_HTML

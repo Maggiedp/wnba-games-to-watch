@@ -88,6 +88,13 @@ async def transparency_page():
     return HTMLResponse(render_transparency())
 
 
+@app.get("/rankings", response_class=HTMLResponse)
+async def rankings_page():
+    from src.api.routes import render_rankings
+
+    return HTMLResponse(render_rankings())
+
+
 @app.get("/game/{espn_id}", response_class=HTMLResponse)
 def game_detail(espn_id: str):
     from src.api.routes import render_game_detail

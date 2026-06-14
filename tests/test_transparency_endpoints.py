@@ -201,3 +201,16 @@ def test_transparency_legend_escapes_team_names():
     assert "escapeHtml(s.label)" in html
     # The raw, unescaped label interpolation must be gone from the legend.
     assert "${s.label}" not in html
+
+
+def test_rankings_page_renders(client):
+    r = client.get("/rankings")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert 'id="elo-chart"' in r.text
+    assert 'id="elo-legend"' in r.text
+    assert "WNBA Power Rankings" in r.text
+    assert "showRankDelta" in r.text  # arrows opted in here
+    assert "/og-rankings.png" in r.text  # og card wired up
+    assert r.text.lstrip().startswith("<!DOCTYPE")
+    assert "%%" not in r.text  # all tokens substituted
