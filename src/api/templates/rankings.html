@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WNBA Power Rankings · %%SITE_TITLE%%</title>
+<meta name="description" content="%%SITE_TITLE%% power rankings: every WNBA team by Elo rating, with week-over-week movement.">
+
+<meta property="og:title" content="WNBA Power Rankings · %%SITE_TITLE%%">
+<meta property="og:description" content="Every WNBA team ranked by Elo rating, with week-over-week movement.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="%%SITE_URL%%/rankings">
+<meta property="og:image" content="%%SITE_URL%%/og-rankings.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="WNBA power rankings by Elo rating">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="WNBA Power Rankings · %%SITE_TITLE%%">
+<meta name="twitter:description" content="Every WNBA team ranked by Elo rating, with week-over-week movement.">
+<meta name="twitter:image" content="%%SITE_URL%%/og-rankings.png">
+
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23ff6b00'/><path d='M2 16 h28 M16 2 v28' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 7 C 11 12 21 12 27 7' stroke='%230d1b2a' stroke-width='2' fill='none'/><path d='M5 25 C 11 20 21 20 27 25' stroke='%230d1b2a' stroke-width='2' fill='none'/></svg>">
+
+%%SHARED_HEAD%%
+            .wrap { max-width: 920px; width: 100%; margin: 0 auto; padding: 24px 16px 64px; }
+            h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }
+            h2 { font-family: var(--display); font-size: 1.2rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }
+            .sub { color: var(--text-muted); margin: 0 0 28px; }
+            section { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+            .desc { color: var(--text-muted); font-size: .9rem; margin: 0 0 16px; }
+            a.back { color: var(--orange-deep); text-decoration: none; font-size: .9rem; }
+            .cross { color: var(--text-muted); font-size: .9rem; margin: 0; }
+            .cross a { color: var(--orange-deep); }
+        </style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">&larr; Back to games</a>
+  <h1>WNBA Power Rankings</h1>
+  <p class="sub">Where every team stands — and how they're moving — by Elo rating.</p>
+
+  <section>
+    <h2>Elo ratings over time</h2>
+    <p class="desc">Each team's Elo rating entering every game this season.
+       Replayed from results — higher is stronger. Arrows show week-over-week
+       movement in the standings.</p>
+    <div id="elo-chart" class="chart"><p class="empty">Loading…</p></div>
+    <div id="elo-legend" class="legend"></div>
+  </section>
+
+  <p class="cross">See <a href="/transparency">how the model is calibrated</a>.</p>
+</div>
+
+<script>
+%%SHARED_JS%%
+%%LINE_CHART_JS%%
+async function loadElo() {
+  const mount = document.getElementById('elo-chart');
+  const legend = document.getElementById('elo-legend');
+  try {
+    const res = await fetch('/api/elo-history');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    // Shared renderer keys on `value`; elo-history returns `rating`.
+    const teams = {};
+    for (const [name, pts] of Object.entries(data.teams || {})) {
+      teams[name] = pts.map(p => ({ date: p.date, value: p.rating }));
+    }
+    renderTeamTrendChart(mount, legend, { teams, abbrevs: data.abbrevs }, { showRankDelta: true });
+  } catch (e) {
+    mount.innerHTML = '<p class="empty">Could not load Elo history.</p>';
+  }
+}
+
+loadElo();
+</script>
+</body>
+</html>

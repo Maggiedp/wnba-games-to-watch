@@ -352,6 +352,32 @@ def test_transparency_has_og_image_meta():
     assert '<meta name="twitter:card" content="summary">' not in html
 
 
+def test_render_rankings_card_is_memoized():
+    from src.api.og_image import render_rankings_card
+
+    assert render_rankings_card() is render_rankings_card()
+
+
+def test_render_rankings_card_returns_png():
+    from src.api.og_image import render_rankings_card
+
+    png = render_rankings_card()
+    assert png[:8] == _PNG_MAGIC
+
+
+def test_og_rankings_endpoint_returns_png(client):
+    r = client.get("/og-rankings.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content[:8] == _PNG_MAGIC
+
+
+def test_og_rankings_endpoint_answers_head(client):
+    r = client.head("/og-rankings.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+
+
 def test_detail_head_has_og_image_tags(session, team_ids):
     a_id, b_id = team_ids
     upsert_game(

@@ -43,7 +43,6 @@ def test_transparency_page_renders(client):
     r = client.get("/transparency")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
-    assert 'id="elo-chart"' in r.text
     assert 'id="calibration-chart"' in r.text
     assert "loadCalibration" in r.text
     assert "Behind the numbers" in r.text
@@ -189,15 +188,39 @@ def test_homepage_links_to_transparency():
     assert 'href="/transparency"' in render_homepage()
 
 
-def test_transparency_legend_escapes_team_names():
-    # The Elo legend injects team names (from the DB) via innerHTML. They must
-    # be HTML-escaped so a poisoned/malformed team name can't execute markup —
-    # consistent with the homepage/detail pages, which escape DB/ESPN labels.
-    from src.api.routes import render_transparency
+def test_rankings_legend_escapes_team_names():
+    # The Elo legend on /rankings injects team names (from the DB) via innerHTML.
+    # They must be HTML-escaped so a poisoned/malformed team name can't execute
+    # markup — consistent with the homepage/detail pages, which escape DB/ESPN labels.
+    from src.api.routes import render_rankings
 
-    html = render_transparency()
+    html = render_rankings()
     # Reuses the single-sourced escapeHtml from _SHARED_JS (not a page-local copy).
     assert "function escapeHtml" in html
     assert "escapeHtml(s.label)" in html
     # The raw, unescaped label interpolation must be gone from the legend.
     assert "${s.label}" not in html
+
+
+def test_transparency_no_longer_has_elo_section(client):
+    r = client.get("/transparency")
+    assert r.status_code == 200
+    assert "Elo ratings over time" not in r.text  # moved to /rankings
+    assert 'id="elo-chart"' not in r.text
+    assert "loadElo" not in r.text
+    assert 'href="/rankings"' in r.text  # cross-link present
+    assert 'id="calibration-chart"' in r.text  # calibration stays
+    assert "%%" not in r.text
+
+
+def test_rankings_page_renders(client):
+    r = client.get("/rankings")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert 'id="elo-chart"' in r.text
+    assert 'id="elo-legend"' in r.text
+    assert "WNBA Power Rankings" in r.text
+    assert "showRankDelta" in r.text  # arrows opted in here
+    assert "/og-rankings.png" in r.text  # og card wired up
+    assert r.text.lstrip().startswith("<!DOCTYPE")
+    assert "%%" not in r.text  # all tokens substituted

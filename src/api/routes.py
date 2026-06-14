@@ -260,8 +260,12 @@ _SHARED_HEAD = """\
             .legend-row { display: inline-flex; align-items: baseline; gap: 7px; padding: 3px 11px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: .82rem; transition: background .12s ease, color .12s ease, border-color .12s ease; }
             .legend-row .rank { color: var(--text-subtle); font-variant-numeric: tabular-nums; font-size: .72rem; }
             .legend-row .value { color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+            .legend-row .delta { font-variant-numeric: tabular-nums; font-size: .72rem; font-weight: 600; }
+            .legend-row .delta.up { color: #1a7f4b; }
+            .legend-row .delta.down { color: #c0392b; }
+            .legend-row .delta.flat { color: var(--text-subtle); }
             .legend-row:hover, .legend-row.active, .legend-row:focus-visible { background: var(--orange); border-color: var(--orange); color: #fff; outline: none; }
-            .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .value, .legend-row.active .value { color: rgba(255, 255, 255, .82); }
+            .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .value, .legend-row.active .value, .legend-row:hover .delta, .legend-row.active .delta { color: rgba(255, 255, 255, .82); }
             .trend-line { fill: none; stroke: var(--navy); stroke-opacity: .15; stroke-width: 1.4; pointer-events: none; transition: stroke-opacity .12s ease, stroke-width .12s ease; }
             .trend-line.hi { stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }
             .trend-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
@@ -291,7 +295,7 @@ _HOMEPAGE_HELPERS_JS = _load_template("js/homepage_helpers.js")
 # Multi-team trend line chart (buildLineChartSvg + renderTeamTrendChart),
 # single-sourced + Node-tested; injected via %%LINE_CHART_JS%% after
 # %%SHARED_JS%% (deps-first: it uses shared.js escapeHtml). Used by the
-# transparency Elo chart and the homepage playoff-odds chart.
+# rankings Elo chart and the homepage playoff-odds chart.
 _LINE_CHART_JS = _load_template("js/line_chart.js")
 
 _HOMEPAGE_HTML = (
@@ -307,6 +311,14 @@ _HOMEPAGE_HTML = (
 
 _TRANSPARENCY_HTML = (
     _load_template("transparency.html")
+    .replace("%%SITE_TITLE%%", _SITE_TITLE)
+    .replace("%%SITE_URL%%", _SITE_URL)
+    .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
+    .replace("%%SHARED_JS%%", _SHARED_JS)
+)
+
+_RANKINGS_HTML = (
+    _load_template("rankings.html")
     .replace("%%SITE_TITLE%%", _SITE_TITLE)
     .replace("%%SITE_URL%%", _SITE_URL)
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
@@ -887,3 +899,9 @@ def render_transparency() -> str:
     per-request data and uses the same trusted-constant %%TOKEN%% substitution
     as the homepage (see _load_template)."""
     return _TRANSPARENCY_HTML
+
+
+def render_rankings() -> str:
+    """Server-rendered /rankings page. Static shell — Elo data is fetched
+    client-side from /api/elo-history, so it carries no per-request data."""
+    return _RANKINGS_HTML
