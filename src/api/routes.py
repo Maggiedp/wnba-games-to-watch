@@ -252,7 +252,21 @@ _SHARED_HEAD = """\
             @keyframes live-breathe {
                 0%, 100% { opacity: 1; transform: scale(1); }
                 50% { opacity: 0.35; transform: scale(0.78); }
-            }\
+            }
+            .chart { width: 100%; overflow-x: auto; }
+            .chart svg { max-width: 100%; height: auto; display: block; }
+            .empty { color: var(--text-subtle); font-style: italic; }
+            .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; font-size: .8rem; }
+            .legend-row { display: inline-flex; align-items: baseline; gap: 7px; padding: 3px 11px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: .82rem; transition: background .12s ease, color .12s ease, border-color .12s ease; }
+            .legend-row .rank { color: var(--text-subtle); font-variant-numeric: tabular-nums; font-size: .72rem; }
+            .legend-row .rating { color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+            .legend-row:hover, .legend-row.active, .legend-row:focus-visible { background: var(--orange); border-color: var(--orange); color: #fff; outline: none; }
+            .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .rating, .legend-row.active .rating { color: rgba(255, 255, 255, .82); }
+            .trend-line { fill: none; stroke: var(--navy); stroke-opacity: .15; stroke-width: 1.4; pointer-events: none; transition: stroke-opacity .12s ease, stroke-width .12s ease; }
+            .trend-line.hi { stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }
+            .trend-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
+            .trend-label { fill: var(--text-subtle); font-size: 9.5px; font-variant-numeric: tabular-nums; cursor: pointer; }
+            .trend-label.hi { fill: var(--orange); font-weight: 600; }\
 """
 
 # SVG win-probability line-chart builder + live header for the game detail
@@ -274,6 +288,12 @@ _SHARED_JS = _load_template("js/shared.js")
 # %%SHARED_JS%% (deps-first: winProbText uses shared.js escapeHtml).
 _HOMEPAGE_HELPERS_JS = _load_template("js/homepage_helpers.js")
 
+# Multi-team trend line chart (buildLineChartSvg + renderTeamTrendChart),
+# single-sourced + Node-tested; injected via %%LINE_CHART_JS%% after
+# %%SHARED_JS%% (deps-first: it uses shared.js escapeHtml). Used by the
+# transparency Elo chart and the homepage playoff-odds chart.
+_LINE_CHART_JS = _load_template("js/line_chart.js")
+
 _HOMEPAGE_HTML = (
     _load_template("homepage.html")
     .replace("%%SITE_TITLE%%", _SITE_TITLE)
@@ -281,6 +301,7 @@ _HOMEPAGE_HTML = (
     .replace("%%SITE_URL%%", _SITE_URL)
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
+    .replace("%%LINE_CHART_JS%%", _LINE_CHART_JS)
     .replace("%%HOMEPAGE_HELPERS_JS%%", _HOMEPAGE_HELPERS_JS)
 )
 
@@ -290,6 +311,7 @@ _TRANSPARENCY_HTML = (
     .replace("%%SITE_URL%%", _SITE_URL)
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
+    .replace("%%LINE_CHART_JS%%", _LINE_CHART_JS)
 )
 
 

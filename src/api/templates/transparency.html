@@ -29,21 +29,7 @@
             .sub { color: var(--text-muted); margin: 0 0 28px; }
             section { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 24px; }
             .desc { color: var(--text-muted); font-size: .9rem; margin: 0 0 16px; }
-            .chart { width: 100%; overflow-x: auto; }
-            .chart svg { max-width: 100%; height: auto; display: block; }
-            .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; font-size: .8rem; }
-            .empty { color: var(--text-subtle); font-style: italic; }
             a.back { color: var(--orange-deep); text-decoration: none; font-size: .9rem; }
-            .legend-row { display: inline-flex; align-items: baseline; gap: 7px; padding: 3px 11px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: .82rem; transition: background .12s ease, color .12s ease, border-color .12s ease; }
-            .legend-row .rank { color: var(--text-subtle); font-variant-numeric: tabular-nums; font-size: .72rem; }
-            .legend-row .rating { color: var(--text-subtle); font-variant-numeric: tabular-nums; }
-            .legend-row:hover, .legend-row.active, .legend-row:focus-visible { background: var(--orange); border-color: var(--orange); color: #fff; outline: none; }
-            .legend-row:hover .rank, .legend-row.active .rank, .legend-row:hover .rating, .legend-row.active .rating { color: rgba(255, 255, 255, .82); }
-            .elo-line { fill: none; stroke: var(--navy); stroke-opacity: .15; stroke-width: 1.4; pointer-events: none; transition: stroke-opacity .12s ease, stroke-width .12s ease; }
-            .elo-line.hi { stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }
-            .elo-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
-            .elo-label { fill: var(--text-subtle); font-size: 9.5px; font-variant-numeric: tabular-nums; cursor: pointer; }
-            .elo-label.hi { fill: var(--orange); font-weight: 600; }
             .cal-layout { display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: center; }
             .cal-read p { margin: 0 0 12px; color: var(--text-muted); font-size: .92rem; line-height: 1.5; }
             .cal-foot { color: var(--text-subtle) !important; font-size: .82rem !important; }
@@ -83,6 +69,7 @@
 
 <script>
 %%SHARED_JS%%
+%%LINE_CHART_JS%%
 const MIN_CAL_GAMES = 25;
 
 // Static 2017-2025 backtest of the deployed Elo model (K=16, H=50, reg=0.5,
@@ -113,61 +100,6 @@ function renderBacktest() {
     `<p class="cal-foot">Across ${BACKTEST.n.toLocaleString()} games (2017&ndash;2025).</p>`;
 }
 
-function buildLineChartSvg(series, opts) {
-  // series: [{label, abbr, points:[{x,y}]}] — lines styled/highlighted via CSS
-  // (.elo-line[.hi]); each path and its end-label carry data-team = the index.
-  const W = opts.width, H = opts.height;
-  const PL = 40, PR = 48, PT = 16, PB = 28;  // extra right pad for end-labels
-  const xs = series.flatMap(s => s.points.map(p => p.x));
-  const ys = series.flatMap(s => s.points.map(p => p.y));
-  if (!xs.length) return '<p class="empty">No data yet.</p>';
-  const xmin = Math.min(...xs), xmax = Math.max(...xs);
-  const ymin = Math.min(...ys), ymax = Math.max(...ys);
-  const sx = x => PL + (xmax === xmin ? 0 : (x - xmin) / (xmax - xmin)) * (W - PL - PR);
-  const sy = y => H - PB - (ymax === ymin ? 0 : (y - ymin) / (ymax - ymin)) * (H - PT - PB);
-  let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Team Elo ratings over time">`;
-  for (let i = 0; i <= 4; i++) {
-    const val = ymin + (ymax - ymin) * i / 4;
-    const y = sy(val);
-    svg += `<line x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}" stroke="#ece6da"/>`;
-    svg += `<text x="${PL-8}" y="${y+3}" text-anchor="end" font-size="10" fill="#8a929d">${Math.round(val)}</text>`;
-  }
-  for (const t of (opts.xTicks || [])) {
-    const x = sx(t.x);
-    svg += `<line x1="${x}" y1="${PT}" x2="${x}" y2="${H-PB}" stroke="#f2ede3"/>`;
-    svg += `<text x="${x}" y="${H-PB+15}" text-anchor="middle" font-size="10" fill="#8a929d">${t.label}</text>`;
-  }
-  const paths = series.map(s => s.points.length
-    ? s.points.map((p, k) => `${k ? 'L' : 'M'}${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ')
-    : '');
-  for (let i = 0; i < series.length; i++) {
-    if (paths[i]) svg += `<path class="elo-line" data-team="${i}" d="${paths[i]}"/>`;
-  }
-  // Direct end-of-line labels (abbreviation), nudged apart so they don't stack.
-  const ends = [];
-  for (let i = 0; i < series.length; i++) {
-    const pts = series[i].points;
-    if (!pts.length) continue;  // guard, mirroring the line/path loop
-    ends.push({ i, abbr: series[i].abbr, y: sy(pts[pts.length - 1].y) });
-  }
-  ends.sort((a, b) => a.y - b.y);
-  const gap = 11;
-  for (let k = 1; k < ends.length; k++) {
-    if (ends[k].y - ends[k - 1].y < gap) ends[k].y = ends[k - 1].y + gap;
-  }
-  const overflow = ends.length ? ends[ends.length - 1].y - (H - PB) : 0;
-  if (overflow > 0) for (const e of ends) e.y -= overflow;  // shift stack up to fit
-  for (const e of ends) {
-    svg += `<text class="elo-label" data-team="${e.i}" x="${W-PR+5}" y="${e.y.toFixed(1)}" dominant-baseline="middle">${escapeHtml(e.abbr)}</text>`;
-  }
-  // Invisible wide hit paths on top so the thin lines are easy to hover.
-  for (let i = 0; i < series.length; i++) {
-    if (paths[i]) svg += `<path class="elo-hit" data-team="${i}" d="${paths[i]}"/>`;
-  }
-  svg += '</svg>';
-  return svg;
-}
-
 async function loadElo() {
   const mount = document.getElementById('elo-chart');
   const legend = document.getElementById('elo-legend');
@@ -175,56 +107,12 @@ async function loadElo() {
     const res = await fetch('/api/elo-history');
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
-    const names = Object.keys(data.teams || {});
-    if (!names.length) { mount.innerHTML = '<p class="empty">No Elo history yet.</p>'; return; }
-    const allDates = [...new Set(names.flatMap(n => data.teams[n].map(p => p.date)))].sort();
-    const dayIndex = Object.fromEntries(allDates.map((d, i) => [d, i]));
-    const abbrevs = data.abbrevs || {};
-    const series = names.map(n => {
-      const pts = data.teams[n];
-      return { label: n, abbr: abbrevs[n] || n.slice(0, 3).toUpperCase(),
-               last: pts[pts.length - 1].rating,
-               points: pts.map(p => ({ x: dayIndex[p.date], y: p.rating })) };
-    });
-    series.sort((a, b) => b.last - a.last);  // legend doubles as a standings list
-    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const seen = new Set();
-    const xTicks = [];
-    for (const d of allDates) {
-      const ym = d.slice(0, 7);
-      if (seen.has(ym)) continue;
-      seen.add(ym);
-      xTicks.push({ x: dayIndex[d], label: MONTHS[parseInt(d.slice(5, 7), 10) - 1] });
+    // Shared renderer keys on `value`; elo-history returns `rating`.
+    const teams = {};
+    for (const [name, pts] of Object.entries(data.teams || {})) {
+      teams[name] = pts.map(p => ({ date: p.date, value: p.rating }));
     }
-    mount.innerHTML = buildLineChartSvg(series, { width: 860, height: 360, xTicks });
-    const svg = mount.querySelector('svg');
-    legend.innerHTML = series.map((s, i) =>
-      `<button class="legend-row" type="button" data-team="${i}">` +
-      `<span class="rank">${i + 1}</span>${escapeHtml(s.label)}` +
-      `<span class="rating">${Math.round(s.last)}</span></button>`).join('');
-    // Hover/focus a team to lift its line out of the muted cloud.
-    const setHi = (i, on) => {
-      const path = svg && svg.querySelector(`.elo-line[data-team="${i}"]`);
-      const label = svg && svg.querySelector(`.elo-label[data-team="${i}"]`);
-      const row = legend.querySelector(`.legend-row[data-team="${i}"]`);
-      if (path) { path.classList.toggle('hi', on); if (on) path.parentNode.appendChild(path); }
-      if (label) { label.classList.toggle('hi', on); if (on) label.parentNode.appendChild(label); }
-      if (row) row.classList.toggle('active', on);
-    };
-    legend.querySelectorAll('.legend-row').forEach(row => {
-      const i = row.dataset.team;
-      row.addEventListener('mouseenter', () => setHi(i, true));
-      row.addEventListener('mouseleave', () => setHi(i, false));
-      row.addEventListener('focus', () => setHi(i, true));
-      row.addEventListener('blur', () => setHi(i, false));
-    });
-    // Hovering the line itself (via a wide transparent hit path) or its end
-    // label highlights the same team.
-    (svg ? svg.querySelectorAll('.elo-hit, .elo-label') : []).forEach(el => {
-      const i = el.dataset.team;
-      el.addEventListener('mouseenter', () => setHi(i, true));
-      el.addEventListener('mouseleave', () => setHi(i, false));
-    });
+    renderTeamTrendChart(mount, legend, { teams, abbrevs: data.abbrevs }, {});
   } catch (e) {
     mount.innerHTML = '<p class="empty">Could not load Elo history.</p>';
   }
