@@ -438,7 +438,11 @@ async def get_playoff_odds(date: str = Query(default=None)):
         if not recs:
             return []
         teams = get_teams_by_ids(session, set(recs.keys()))
-        records = get_team_records(session, int(date[:4]), as_of_date=date)
+        # Whole-season-to-date W-L (no as-of bound). Consistent with the odds on
+        # the live (today) view in every cadence; a historical ?date= request
+        # pairs old odds with the current record (known limitation, no caller —
+        # the homepage always requests today). See get_team_records.
+        records = get_team_records(session, int(date[:4]))
         rows = [
             PlayoffOddsResponse(
                 team=teams[tid].name,

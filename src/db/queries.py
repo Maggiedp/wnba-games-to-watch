@@ -406,20 +406,25 @@ def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]
 
 
 def get_team_records(
-    session: Session, season_year: int = 2026, as_of_date: str | None = None
+    session: Session, season_year: int = 2026
 ) -> dict[int, tuple[int, int]]:
     """Regular-season W-L record per team for a season, from completed games.
 
     Returns {team_id: (wins, losses)}; teams with no completed regular-season
     games are absent (callers default to 0-0).
 
-    `as_of_date` (a YYYY-MM-DD string) bounds the record to games played
-    *strictly before* that date, so a record paired with a given day's
-    playoff-odds snapshot reflects only the games those odds were computed from
-    (the daily odds are computed each morning, before that day's games). `<`
-    not `<=` because the snapshot for date D predates D's games. For the live
-    path (D = today) the bound changes nothing — today's games are uncompleted
-    (no `winner_id`) and already excluded. When None, counts the whole season.
+    Counts the whole season-to-date with NO as-of-date bound. This stays
+    consistent with the playoff-odds snapshot it's shown beside on the live
+    (today) view in every run cadence: a future game can't be FINAL, and a
+    same-day final only gains a `winner_id` when `daily_update` ingests it —
+    the same moment that day's odds are recomputed, so record and odds move
+    together. A date-based cutoff can't improve on this (the correct cutoff
+    depends on what was FINAL at snapshot time, which a date can't recover
+    after the fact) and would make a same-day off-cadence rerun show a record
+    that lags the odds. KNOWN LIMITATION: a historical
+    `/api/playoff-odds?date=<past>` request pairs that day's odds with the
+    *current* record — accepted because no caller passes a historical date
+    (the homepage always requests today).
 
     Deliberately strict on `season_type == 2`: a W-L record is a precise
     standings claim, so any non-regular-season row is excluded. The 2026 DB
@@ -431,15 +436,13 @@ def get_team_records(
     NULL rows for the completed *archive*, but for a W-L record a stray
     preseason game would be a miscount.
     """
-    query = (
+    games = (
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
         .filter(Game.season_type == 2)
+        .all()
     )
-    if as_of_date is not None:
-        query = query.filter(Game.date < as_of_date)
-    games = query.all()
     records: dict[int, list[int]] = {}
     for g in games:
         # winner_id is always team_a_id or team_b_id (enforced on write).

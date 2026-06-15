@@ -3756,24 +3756,3 @@ def test_get_team_records_absent_for_team_with_no_regular_season_games(
     assert a_id not in records
     assert b_id not in records
     assert records.get(a_id, (0, 0)) == (0, 0)
-
-
-def test_get_team_records_as_of_date_excludes_games_on_or_after(session, team_ids):
-    """as_of_date bounds the record to games strictly before that date."""
-    a_id, b_id = team_ids
-    _add_completed_game(
-        session, a_id, b_id, winner_id=a_id, season_type=2, date="2026-05-10"
-    )
-    _add_completed_game(
-        session, a_id, b_id, winner_id=b_id, season_type=2, date="2026-06-01"
-    )
-
-    # As of 2026-05-15, only the May 10 game (A beat B) counts.
-    records = get_team_records(session, 2026, as_of_date="2026-05-15")
-    assert records[a_id] == (1, 0)
-    assert records[b_id] == (0, 1)
-
-    # Unbounded counts both games -> 1-1 each.
-    full = get_team_records(session, 2026)
-    assert full[a_id] == (1, 1)
-    assert full[b_id] == (1, 1)
