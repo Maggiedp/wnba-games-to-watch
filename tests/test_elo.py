@@ -402,3 +402,46 @@ def test_rest_travel_adjust_changes_ratings():
     # post-game ratings diverge from baseline; game 2's effective advantage is 250.
     assert adj.final_ratings != base.final_ratings
     assert adj.history[1]["home_adv"] == 250.0  # 50 HCA + 200 adjustment
+
+
+def test_rest_travel_hook_ignores_winnerless_rows():
+    # A scheduled/winner-less row between two completed games must NOT advance a
+    # team's rest/travel state — the hook should see the last COMPLETED game only.
+    from src.scoring.rest_travel import ARENA_COORDS, haversine_miles
+
+    seen = []
+
+    def adjust(feat):
+        seen.append(feat)
+        return 0.0
+
+    games = [
+        _game("Las Vegas Aces", "Chicago Sky", "Las Vegas Aces", "2026-05-20", eid="1"),
+        {  # scheduled / not yet played — no winner
+            "team_a": "Seattle Storm",
+            "team_b": "Las Vegas Aces",
+            "winner_team": None,
+            "date": "2026-05-22",
+            "event_id": "2",
+        },
+        _game(
+            "New York Liberty",
+            "Las Vegas Aces",
+            "New York Liberty",
+            "2026-05-23",
+            eid="3",
+        ),
+    ]
+    replay_games(games, home_advantage=50.0, rest_travel_adjust=adjust)
+
+    # Only the two decisive games are replayed -> two feature dicts.
+    assert len(seen) == 2
+    g3 = seen[1]
+    # The Aces (team_b) come off their last COMPLETED game in Las Vegas on 05-20,
+    # not the skipped Seattle row on 05-22:
+    assert g3["rest_b"] == 2  # 05-20 -> 05-23 = 3 days between -> 2 rest (not 0/b2b)
+    assert g3["b2b_b"] == 0
+    expected_travel = haversine_miles(
+        ARENA_COORDS["Las Vegas Aces"], ARENA_COORDS["New York Liberty"]
+    )
+    assert abs(g3["travel_b"] - expected_travel) < 1.0  # Vegas->NY, not Seattle->NY

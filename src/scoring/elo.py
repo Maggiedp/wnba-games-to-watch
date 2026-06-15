@@ -185,21 +185,28 @@ def replay_games(
         else sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
     )
 
+    # Only games with a decisive, valid winner update ratings. Filter to those
+    # first so rest/travel features (which carry each team's last-venue/rest
+    # state forward) are computed over EXACTLY the replayed games — a skipped
+    # winner-less or malformed row must never become the "previous game" for a
+    # later one when the hook is enabled.
+    replayed = [
+        g
+        for g in ordered
+        if g.get("winner_team") and g["winner_team"] in (g["team_a"], g["team_b"])
+    ]
+
     features: list[dict] | None = None
     if rest_travel_adjust is not None:
         from src.scoring.rest_travel import compute_rest_travel_features
 
-        # compute_rest_travel_features sorts identically by (date, event_id),
-        # so its output aligns with `ordered`.
-        features = compute_rest_travel_features(ordered)
+        # Built over `replayed` (the exact games processed below), so feature
+        # state advances only on replayed games and aligns by index.
+        features = compute_rest_travel_features(replayed)
 
-    for idx, g in enumerate(ordered):
-        winner = g.get("winner_team")
-        if not winner:
-            continue
+    for idx, g in enumerate(replayed):
+        winner = g["winner_team"]
         ta, tb = g["team_a"], g["team_b"]
-        if winner not in (ta, tb):
-            continue
 
         season = _season_for_date(g.get("date", ""))
         if season is not None:
