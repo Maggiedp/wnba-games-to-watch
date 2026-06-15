@@ -142,7 +142,7 @@ class EloReplay:
 
     final_ratings: dict[str, float]
     # One entry per game, in the order games were processed:
-    # {"team_a", "team_b", "pre_a", "pre_b", "winner", "date", "home_adv"}
+    # {"team_a", "team_b", "pre_a", "pre_b", "winner", "date"}
     history: list[dict] = field(default_factory=list)
 
 
@@ -177,9 +177,8 @@ def replay_games(
     to skip the redundant sort — useful in grid-search loops over thousands of
     replays of the same game list.
 
-    Each history entry records `home_adv` (the home-court advantage applied) and
-    `event_id`, so callers can reproduce a game's prediction and align per-game
-    side data to the exact replayed games.
+    Only games where `is_replayable` holds (decisive winner that is one of the two
+    teams) update ratings and appear in `history`, in chronological order.
     """
     ratings: dict[str, float] = dict(initial_ratings or {})
     history: list[dict] = []
@@ -191,12 +190,11 @@ def replay_games(
         else sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
     )
 
-    # Only games with a decisive, valid winner update ratings (ESPN can emit
-    # winner-less scheduled rows or, rarely, a malformed winner). is_replayable is
-    # the shared eligibility predicate.
-    replayed = [g for g in ordered if is_replayable(g)]
-
-    for g in replayed:
+    for g in ordered:
+        # Only games with a decisive, valid winner update ratings (ESPN can emit
+        # winner-less scheduled rows or, rarely, a malformed winner).
+        if not is_replayable(g):
+            continue
         winner = g["winner_team"]
         ta, tb = g["team_a"], g["team_b"]
 
@@ -230,8 +228,6 @@ def replay_games(
                 "pre_b": rb,
                 "winner": winner,
                 "date": g.get("date", ""),
-                "home_adv": home_advantage,
-                "event_id": g.get("event_id", ""),
             }
         )
 

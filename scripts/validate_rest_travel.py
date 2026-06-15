@@ -70,22 +70,6 @@ def coef_to_elo_points(b_feature: float, b_elo: float) -> float:
     return b_feature / b_elo
 
 
-def rest_travel_delta(
-    feat: dict,
-    elo_rest: float,
-    elo_b2b: float,
-    elo_travel_per_1000: float,
-    elo_tz: float,
-) -> float:
-    """Net Elo delta added to team A from one game's rest/travel features."""
-    return (
-        elo_rest * _rest_diff(feat)
-        + elo_b2b * (feat["b2b_a"] - feat["b2b_b"])
-        + elo_travel_per_1000 * (feat["travel_a"] - feat["travel_b"]) / 1000.0
-        + elo_tz * (feat["tz_a"] - feat["tz_b"])
-    )
-
-
 def magnitudes_from_fit(res: LogisticResult) -> tuple[float, float, float, float]:
     """(elo_rest, elo_b2b, elo_travel_per_1000, elo_tz) from a fit. b_elo = coef[1]."""
     b_elo = res.coef[1]
@@ -107,19 +91,18 @@ def main() -> None:
     assert_all_teams_have_coords(games)
     print(f"Total: {len(games)} games\n")
 
-    # Baseline replay (HCA on, no rest/travel).
+    # Sort once and reuse: replay_games (presorted) and the feature stream both
+    # process the SAME (date, event_id)-ordered, is_replayable-filtered games, so
+    # base.history aligns positionally with `replayed`.
+    ordered = sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
+    replayed = [g for g in ordered if is_replayable(g)]
     base = replay_games(
-        games, k=DEFAULT_K, home_advantage=DEFAULT_HOME_ADVANTAGE, use_mov=True
+        ordered,
+        k=DEFAULT_K,
+        home_advantage=DEFAULT_HOME_ADVANTAGE,
+        use_mov=True,
+        presorted=True,
     )
-    # Build the feature stream over the EXACT same games replay_games processed,
-    # using its own eligibility predicate (is_replayable) and identical ordering —
-    # NOT an ad-hoc winner filter, which could select a different set under schema
-    # drift and silently shift features onto the wrong games via positional zip.
-    replayed = [
-        g
-        for g in sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
-        if is_replayable(g)
-    ]
     feats_hist = compute_rest_travel_features(replayed)
     if len(replayed) != len(base.history):
         raise RuntimeError(
@@ -127,27 +110,28 @@ def main() -> None:
         )
 
     # Per-game evaluation records (>= _EVAL_START). Fail loud on any per-row
-    # misalignment rather than trusting positional zip.
+    # misalignment rather than trusting positional zip. (Both streams share the
+    # is_replayable predicate + sort, so this guards only against future drift.)
     records: list[dict] = []
     for h, g, feat in zip(base.history, replayed, feats_hist):
-        if h.get("event_id", "") != g.get("event_id", ""):
+        if h["date"] != g.get("date", "") or h["team_a"] != g["team_a"]:
             raise RuntimeError(
-                f"feature/history event_id misalignment at {h['date']}: "
-                f"{h.get('event_id')!r} vs {g.get('event_id')!r}"
+                f"feature/history misalignment at {h['date']}: "
+                f"{h['team_a']} vs {g.get('team_a')!r}"
             )
         if h["date"] < _EVAL_START:
             continue
-        x_elo = h["pre_a"] - h["pre_b"] + h["home_adv"]
+        x_elo = h["pre_a"] - h["pre_b"] + DEFAULT_HOME_ADVANTAGE
         records.append(
             {
                 "season": int(h["date"][:4]),
-                "feat": feat,
                 "row": build_design_row(x_elo, feat),
                 "y": 1.0 if h["winner"] == h["team_a"] else 0.0,
                 "pre_a": h["pre_a"],
                 "pre_b": h["pre_b"],
-                "home_adv": h["home_adv"],
-                "base_prob": expected_win_prob(h["pre_a"], h["pre_b"], h["home_adv"]),
+                "base_prob": expected_win_prob(
+                    h["pre_a"], h["pre_b"], DEFAULT_HOME_ADVANTAGE
+                ),
             }
         )
 
@@ -183,13 +167,17 @@ def main() -> None:
         fit = logistic_fit(
             np.array([r["row"] for r in train]), np.array([r["y"] for r in train])
         )
-        mags = magnitudes_from_fit(fit)
+        mags = np.array(magnitudes_from_fit(fit))
         used.append(s)
         for r in test:
-            delta = rest_travel_delta(r["feat"], *mags)
+            # delta = magnitudes · the same feature diffs the coefs were fit on
+            # (row[1:] drops the x_elo column), applied at prediction time.
+            delta = float(mags @ r["row"][1:])
             oos_base.append(r["base_prob"])
             oos_adj.append(
-                expected_win_prob(r["pre_a"], r["pre_b"], r["home_adv"] + delta)
+                expected_win_prob(
+                    r["pre_a"], r["pre_b"], DEFAULT_HOME_ADVANTAGE + delta
+                )
             )
             oos_y.append(r["y"])
 

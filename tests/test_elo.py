@@ -374,17 +374,6 @@ def test_is_replayable_predicate():
     assert not is_replayable({"team_a": "A", "team_b": "B", "winner_team": "Zzz"})
 
 
-def test_replay_records_home_adv_and_event_id_in_history():
-    games = [
-        _game(
-            "Las Vegas Aces", "Seattle Storm", "Las Vegas Aces", "2026-05-20", eid="42"
-        )
-    ]
-    replay = replay_games(games, home_advantage=50.0)
-    assert replay.history[0]["home_adv"] == 50.0
-    assert replay.history[0]["event_id"] == "42"
-
-
 def test_replay_skips_truthy_invalid_winner():
     # A row with a truthy winner that is neither team must not be replayed.
     games = [
@@ -400,4 +389,5 @@ def test_replay_skips_truthy_invalid_winner():
         },
     ]
     replay = replay_games(games, home_advantage=50.0)
-    assert [h["event_id"] for h in replay.history] == ["1"]
+    assert len(replay.history) == 1
+    assert replay.history[0]["team_a"] == "Las Vegas Aces"
