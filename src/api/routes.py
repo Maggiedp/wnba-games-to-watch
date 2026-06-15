@@ -101,6 +101,8 @@ class PlayoffOddsResponse(BaseModel):
     reach_semis_prob: float  # 0.0–1.0; 0 if not yet computed
     reach_finals_prob: float  # 0.0–1.0
     win_championship_prob: float  # 0.0–1.0
+    wins: int  # completed regular-season wins
+    losses: int  # completed regular-season losses
 
 
 def format_games_response(

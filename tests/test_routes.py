@@ -711,6 +711,8 @@ def test_playoff_odds_endpoint_shape_and_sort(env, client):
         "reach_semis_prob",
         "reach_finals_prob",
         "win_championship_prob",
+        "wins",
+        "losses",
     }
     assert rows[0]["make_playoffs_prob"] == pytest.approx(0.90)
     assert rows[0]["win_championship_prob"] == pytest.approx(0.10)
@@ -1263,3 +1265,75 @@ def test_detail_page_does_not_pregame_poll_a_non_today_game(session, team_ids):
 
     html = render_game_detail(session, "401736211")
     assert 'data-is-today="false"' in html
+
+
+def test_playoff_odds_endpoint_includes_wl_record(env, client):
+    """GET /api/playoff-odds carries regular-season wins/losses per team."""
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    b_id = session.query(env.Team).filter_by(name="Liberty").one().id
+
+    today = today_et()
+    upsert_playoff_probability(
+        session,
+        date=today,
+        team_id=a_id,
+        probability=0.85,
+        reach_semis_prob=0.6,
+        reach_finals_prob=0.4,
+        win_championship_prob=0.25,
+    )
+    upsert_playoff_probability(
+        session,
+        date=today,
+        team_id=b_id,
+        probability=0.90,
+        reach_semis_prob=0.65,
+        reach_finals_prob=0.3,
+        win_championship_prob=0.10,
+    )
+    # Aces 2-1, Liberty 1-2 (regular season only).
+    year = today[:4]
+    for date, winner in (
+        (f"{year}-05-10", a_id),
+        (f"{year}-05-12", a_id),
+        (f"{year}-05-14", b_id),
+    ):
+        session.add(
+            Game(
+                team_a_id=a_id,
+                team_b_id=b_id,
+                date=date,
+                winner_id=winner,
+                season_type=2,
+            )
+        )
+    session.commit()
+    session.close()
+
+    rows = client.get("/api/playoff-odds").json()
+    by_team = {r["team"]: r for r in rows}
+    assert (by_team["Aces"]["wins"], by_team["Aces"]["losses"]) == (2, 1)
+    assert (by_team["Liberty"]["wins"], by_team["Liberty"]["losses"]) == (1, 2)
+
+
+def test_playoff_odds_endpoint_record_defaults_to_zero(env, client):
+    """A team with playoff probs but no completed games serializes 0-0."""
+    session = env.get_session()
+    upsert_team(session, name="Fire", abbreviation="POR", logo_url="", bpi_rating=0.0)
+    f_id = session.query(env.Team).filter_by(name="Fire").one().id
+    upsert_playoff_probability(
+        session,
+        date=today_et(),
+        team_id=f_id,
+        probability=0.5,
+        reach_semis_prob=0.2,
+        reach_finals_prob=0.1,
+        win_championship_prob=0.05,
+    )
+    session.close()
+
+    rows = client.get("/api/playoff-odds").json()
+    assert (rows[0]["wins"], rows[0]["losses"]) == (0, 0)

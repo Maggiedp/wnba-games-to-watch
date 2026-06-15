@@ -31,6 +31,7 @@ from src.db.queries import (
     get_playoff_probabilities,
     get_playoff_probability_history,
     get_rankings_by_broadcaster,
+    get_team_records,
     get_teams_by_ids,
     get_upcoming_rankings,
 )
@@ -437,6 +438,7 @@ async def get_playoff_odds(date: str = Query(default=None)):
         if not recs:
             return []
         teams = get_teams_by_ids(session, set(recs.keys()))
+        records = get_team_records(session, int(date[:4]))
         rows = [
             PlayoffOddsResponse(
                 team=teams[tid].name,
@@ -446,6 +448,8 @@ async def get_playoff_odds(date: str = Query(default=None)):
                 reach_semis_prob=recs[tid].reach_semis_prob or 0.0,
                 reach_finals_prob=recs[tid].reach_finals_prob or 0.0,
                 win_championship_prob=recs[tid].win_championship_prob or 0.0,
+                wins=records.get(tid, (0, 0))[0],
+                losses=records.get(tid, (0, 0))[1],
             )
             for tid in recs
             if tid in teams
