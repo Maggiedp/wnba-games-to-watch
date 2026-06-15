@@ -62,13 +62,18 @@ historical data change, not computed live.
 
 **Deliberately *not* in the model — rest & travel (we checked).** A common ask is whether back-to-backs,
 days of rest, and travel distance should shift the win probability. We investigated it directly
-(`scripts/validate_rest_travel.py`): a logistic fit on 2017–2025 (~1,910 games), controlling for the Elo
-rating differential, for rest-day differential, back-to-back, travel miles, and timezone crossings. **No
-term reached significance** (all p > 0.2), and folding the estimated effects back into the Elo replay did
-**not** improve held-out Brier beyond a paired-bootstrap confidence interval (improvement CI straddled
-zero). The point estimates have the physically sensible signs (rest helps, B2B and travel hurt) but are
-too small to matter once two teams' schedules are differenced — so per our pre-registered ship gate, the
-model carries **no rest/travel term**. The tooling stays in the tree to re-check as more seasons accrue.
+(`scripts/validate_rest_travel.py`). An in-sample logistic fit on 2017–2025 (~1,910 games), controlling
+for the Elo rating differential, found **no rest/travel term significant** — rest-day differential,
+back-to-back, travel miles, and timezone crossings all p > 0.2. More importantly, under a **rolling
+out-of-sample test** (coefficients fit only on *prior* seasons, then applied to each later season's games
+the fit never saw), adding the adjustment did **not** improve held-out Brier — the paired-bootstrap CI of
+the improvement sat at/below zero, i.e. if anything it was slightly *worse* out of sample. The point
+estimates carry physically sensible signs (rest helps, B2B and travel hurt) but are too small to matter
+once two teams' schedules are differenced, and home-court advantage already absorbs the bulk of the road
+penalty. So per our pre-registered ship gate, the model carries **no rest/travel term**. (A model-free
+check agrees: in the ~100 games where exactly one team was on a back-to-back, the rested team won 50.0%.
+WNBA back-to-backs are rare — ~11 one-sided/season vs ~13–15 per *team* in the NBA — so there is little
+fatigue signal to capture.) The tooling stays in the tree to re-check as more seasons accrue.
 
 ---
 

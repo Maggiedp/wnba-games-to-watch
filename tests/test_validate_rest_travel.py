@@ -3,6 +3,7 @@
 from scripts.validate_rest_travel import (
     build_design_row,
     coef_to_elo_points,
+    rest_travel_delta,
 )
 
 
@@ -29,3 +30,35 @@ def test_build_design_row_handles_none_rest():
 def test_coef_to_elo_points_divides_by_elo_coef():
     # b_elo = 0.005, b_rest = 0.010 -> 2.0 Elo points per rest unit.
     assert abs(coef_to_elo_points(b_feature=0.010, b_elo=0.005) - 2.0) < 1e-9
+
+
+def test_rest_travel_delta_sums_weighted_diffs():
+    feat = {
+        "rest_a": 3,
+        "rest_b": 1,
+        "b2b_a": 0,
+        "b2b_b": 1,
+        "travel_a": 0.0,
+        "travel_b": 2000.0,
+        "tz_a": 0.0,
+        "tz_b": -2.0,
+    }
+    # rest: 10*(3-1)=20 ; b2b: 5*(0-1)=-5 ; travel: -8*(0-2000)/1000=+16 ; tz: 3*(0-(-2))=6
+    d = rest_travel_delta(
+        feat, elo_rest=10.0, elo_b2b=5.0, elo_travel_per_1000=-8.0, elo_tz=3.0
+    )
+    assert abs(d - (20.0 - 5.0 + 16.0 + 6.0)) < 1e-9
+
+
+def test_rest_travel_delta_neutral_when_symmetric():
+    feat = {
+        "rest_a": None,
+        "rest_b": None,
+        "b2b_a": 0,
+        "b2b_b": 0,
+        "travel_a": 0.0,
+        "travel_b": 0.0,
+        "tz_a": 0.0,
+        "tz_b": 0.0,
+    }
+    assert rest_travel_delta(feat, 10.0, 5.0, -8.0, 3.0) == 0.0

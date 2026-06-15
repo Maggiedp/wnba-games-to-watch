@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
 """Investigate whether a rest/travel term improves the Elo win-probability model.
 
-Estimates the effect controlling for Elo (numpy IRLS logistic), converts the
-coefficients to Elo points, replays the season WITH that adjustment, and reports
-whether the held-out Brier improvement clears its paired-bootstrap CI.
+Two distinct outputs, deliberately kept separate:
+
+1. **In-sample coefficient estimate (descriptive).** A logistic fit on all
+   evaluated games, controlling for the Elo differential, reports each rest/travel
+   term's coefficient, standard error, and p-value. This answers "is the effect
+   statistically detectable in the historical sample?" It is in-sample by
+   construction and is NOT used to decide shipping.
+
+2. **Out-of-sample ship gate (rolling origin).** For each test season, coefficients
+   are fit ONLY on prior seasons, converted to Elo points, and applied at PREDICTION
+   TIME (an additive term on the baseline-rating differential) to that season's
+   games. Pooling these held-out predictions, the gate ships only if the
+   paired-bootstrap CI of the Brier improvement over baseline lies entirely above 0.
+   This is the honest test: coefficients never score the games they were fit on.
 
 Ships no model change — it prints a SHIP/NULL verdict. Run from repo root, venv
 active:  python -m scripts.validate_rest_travel
@@ -15,12 +26,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from scripts._calibration import (
-    bootstrap_brier_delta_ci,
-    brier_score,
-    log_loss,
-)
-from scripts._logistic import logistic_fit
+from scripts._calibration import bootstrap_brier_delta_ci, brier_score, log_loss
+from scripts._logistic import LogisticResult, logistic_fit
 from scripts.validate_elo import _EVAL_START, _fetch_all_games
 from src.scoring.elo import (
     DEFAULT_HOME_ADVANTAGE,
@@ -32,6 +39,11 @@ from src.scoring.rest_travel import (
     assert_all_teams_have_coords,
     compute_rest_travel_features,
 )
+
+# A test season is scored out-of-sample only once at least this many earlier
+# evaluated games exist to fit the coefficients on — keeps early rolling folds
+# from being fit on a trivially small training set.
+_MIN_TRAIN_GAMES = 500
 
 
 def build_design_row(x_elo: float, feat: dict) -> list[float]:
@@ -50,6 +62,35 @@ def coef_to_elo_points(b_feature: float, b_elo: float) -> float:
     return b_feature / b_elo
 
 
+def rest_travel_delta(
+    feat: dict,
+    elo_rest: float,
+    elo_b2b: float,
+    elo_travel_per_1000: float,
+    elo_tz: float,
+) -> float:
+    """Net Elo delta added to team A from one game's rest/travel features."""
+    rest_a = feat["rest_a"] if feat["rest_a"] is not None else 0
+    rest_b = feat["rest_b"] if feat["rest_b"] is not None else 0
+    return (
+        elo_rest * (rest_a - rest_b)
+        + elo_b2b * (feat["b2b_a"] - feat["b2b_b"])
+        + elo_travel_per_1000 * (feat["travel_a"] - feat["travel_b"]) / 1000.0
+        + elo_tz * (feat["tz_a"] - feat["tz_b"])
+    )
+
+
+def magnitudes_from_fit(res: LogisticResult) -> tuple[float, float, float, float]:
+    """(elo_rest, elo_b2b, elo_travel_per_1000, elo_tz) from a fit. b_elo = coef[1]."""
+    b_elo = res.coef[1]
+    return (
+        coef_to_elo_points(res.coef[2], b_elo),
+        coef_to_elo_points(res.coef[3], b_elo),
+        coef_to_elo_points(res.coef[4], b_elo),
+        coef_to_elo_points(res.coef[5], b_elo),
+    )
+
+
 def main() -> None:
     print("=== Rest/Travel Win-Probability Investigation ===\n")
     print("Fetching historical games...")
@@ -60,12 +101,12 @@ def main() -> None:
     assert_all_teams_have_coords(games)
     print(f"Total: {len(games)} games\n")
 
-    # Baseline replay (HCA on, no rest/travel).
+    # Baseline replay (HCA on, no rest/travel). history excludes winner-less games;
+    # recompute features over the same winner-filtered, identically-sorted list so
+    # zip() aligns element-for-element.
     base = replay_games(
         games, k=DEFAULT_K, home_advantage=DEFAULT_HOME_ADVANTAGE, use_mov=True
     )
-    # history excludes winner-less games; recompute features over the same
-    # winner-filtered, identically-sorted list so zip() aligns element-for-element.
     feats_hist = compute_rest_travel_features(
         sorted(
             (g for g in games if g.get("winner_team")),
@@ -73,69 +114,76 @@ def main() -> None:
         )
     )
 
-    rows: list[list[float]] = []
-    outcomes: list[float] = []
-    base_probs: list[float] = []
+    # Per-game evaluation records (>= _EVAL_START).
+    records: list[dict] = []
     for h, feat in zip(base.history, feats_hist):
         if h["date"] < _EVAL_START:
             continue
         x_elo = h["pre_a"] - h["pre_b"] + h["home_adv"]
-        rows.append(build_design_row(x_elo, feat))
-        outcomes.append(1.0 if h["winner"] == h["team_a"] else 0.0)
-        base_probs.append(expected_win_prob(h["pre_a"], h["pre_b"], h["home_adv"]))
+        records.append(
+            {
+                "season": int(h["date"][:4]),
+                "feat": feat,
+                "row": build_design_row(x_elo, feat),
+                "y": 1.0 if h["winner"] == h["team_a"] else 0.0,
+                "pre_a": h["pre_a"],
+                "pre_b": h["pre_b"],
+                "home_adv": h["home_adv"],
+                "base_prob": expected_win_prob(h["pre_a"], h["pre_b"], h["home_adv"]),
+            }
+        )
 
-    x = np.array(rows)
-    y = np.array(outcomes)
-    res = logistic_fit(x, y)
-
+    # --- (1) In-sample coefficient estimate (descriptive; significance only) ---
+    full = logistic_fit(
+        np.array([r["row"] for r in records]), np.array([r["y"] for r in records])
+    )
     names = ["intercept", "x_elo", "rest_diff", "b2b_diff", "travel_diff_k", "tz_diff"]
-    print("Logistic fit (controlling for Elo):")
+    print(f"In-sample coefficient estimate (descriptive), N={len(records)}:")
     for i, nm in enumerate(names):
         print(
-            f"  {nm:<14} coef={res.coef[i]:+.5f}  se={res.stderr[i]:.5f}  "
-            f"p={res.pvalues[i]:.4g}"
+            f"  {nm:<14} coef={full.coef[i]:+.5f}  se={full.stderr[i]:.5f}  "
+            f"p={full.pvalues[i]:.4g}"
         )
-
-    b_elo = res.coef[1]
-    elo_rest = coef_to_elo_points(res.coef[2], b_elo)
-    elo_b2b = coef_to_elo_points(res.coef[3], b_elo)
-    elo_travel_per_1000 = coef_to_elo_points(res.coef[4], b_elo)
-    elo_tz = coef_to_elo_points(res.coef[5], b_elo)
-    print("\nElo-point magnitudes (per unit):")
-    print(f"  rest_day_diff:   {elo_rest:+.1f} Elo")
-    print(f"  b2b_diff:        {elo_b2b:+.1f} Elo")
-    print(f"  travel/1000mi:   {elo_travel_per_1000:+.1f} Elo")
-    print(f"  tz_crossed:      {elo_tz:+.1f} Elo")
-
-    def adjust(feat: dict) -> float:
-        rest_a = feat["rest_a"] if feat["rest_a"] is not None else 0
-        rest_b = feat["rest_b"] if feat["rest_b"] is not None else 0
-        return (
-            elo_rest * (rest_a - rest_b)
-            + elo_b2b * (feat["b2b_a"] - feat["b2b_b"])
-            + elo_travel_per_1000 * (feat["travel_a"] - feat["travel_b"]) / 1000.0
-            + elo_tz * (feat["tz_a"] - feat["tz_b"])
-        )
-
-    adj = replay_games(
-        games,
-        k=DEFAULT_K,
-        home_advantage=DEFAULT_HOME_ADVANTAGE,
-        use_mov=True,
-        rest_travel_adjust=adjust,
+    er, eb, et, ez = magnitudes_from_fit(full)
+    print(
+        "\n  Elo-point magnitudes (per unit): "
+        f"rest {er:+.1f}, b2b {eb:+.1f}, travel/1000mi {et:+.1f}, tz {ez:+.1f}"
     )
-    adj_probs: list[float] = []
-    for h in adj.history:
-        if h["date"] < _EVAL_START:
+    print("  (In-sample — describes detectability, NOT the ship decision.)")
+
+    # --- (2) Out-of-sample rolling-origin ship gate ---
+    seasons = sorted({r["season"] for r in records})
+    oos_base: list[float] = []
+    oos_adj: list[float] = []
+    oos_y: list[float] = []
+    used: list[int] = []
+    for s in seasons:
+        train = [r for r in records if r["season"] < s]
+        test = [r for r in records if r["season"] == s]
+        if len(train) < _MIN_TRAIN_GAMES or not test:
             continue
-        adj_probs.append(expected_win_prob(h["pre_a"], h["pre_b"], h["home_adv"]))
+        fit = logistic_fit(
+            np.array([r["row"] for r in train]), np.array([r["y"] for r in train])
+        )
+        mags = magnitudes_from_fit(fit)
+        used.append(s)
+        for r in test:
+            delta = rest_travel_delta(r["feat"], *mags)
+            oos_base.append(r["base_prob"])
+            oos_adj.append(
+                expected_win_prob(r["pre_a"], r["pre_b"], r["home_adv"] + delta)
+            )
+            oos_y.append(r["y"])
 
-    base_arr, adj_arr, y_arr = (
-        np.array(base_probs),
-        np.array(adj_probs),
-        np.array(outcomes),
+    if not oos_y:
+        print("\nNot enough data for an out-of-sample fold — aborting gate.")
+        return
+
+    base_arr, adj_arr, y_arr = np.array(oos_base), np.array(oos_adj), np.array(oos_y)
+    print(
+        f"\nOut-of-sample rolling gate: test seasons {used} "
+        f"(coefs fit only on prior seasons), N={len(y_arr)}"
     )
-    print("\nHeld-out scoring:")
     print(
         f"  baseline  Brier={brier_score(base_arr, y_arr):.5f}  "
         f"LogLoss={log_loss(base_arr, y_arr):.5f}"
@@ -146,7 +194,7 @@ def main() -> None:
     )
 
     mean_d, lo, hi = bootstrap_brier_delta_ci(base_arr, adj_arr, y_arr, n_boot=2000)
-    print("\nBootstrap Brier improvement (baseline - adjusted):")
+    print("\nBootstrap OOS Brier improvement (baseline - adjusted):")
     print(f"  mean={mean_d:+.6f}  95% CI=[{lo:+.6f}, {hi:+.6f}]")
     verdict = "SHIP" if lo > 0 else "NULL (within noise)"
     print(f"\nVERDICT: {verdict}")
