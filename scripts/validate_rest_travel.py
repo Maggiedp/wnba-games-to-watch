@@ -47,15 +47,22 @@ from src.scoring.rest_travel import (
 _MIN_TRAIN_GAMES = 500
 
 
+def _rest_diff(feat: dict) -> int:
+    """Rest-day differential (home − away), or 0 when either side is a season
+    debut (rest is None). A debut team's rest is *unknown*, not zero — coercing
+    None→0 would read as "tired" (and is sign-wrong for a well-rested opener), so
+    we treat the differential as neutral instead."""
+    if feat["rest_a"] is None or feat["rest_b"] is None:
+        return 0
+    return feat["rest_a"] - feat["rest_b"]
+
+
 def build_design_row(x_elo: float, feat: dict) -> list[float]:
     """One design-matrix row: [x_elo, rest_diff, b2b_diff, travel_diff_k, tz_diff]."""
-    rest_a = feat["rest_a"] if feat["rest_a"] is not None else 0
-    rest_b = feat["rest_b"] if feat["rest_b"] is not None else 0
-    rest_diff = rest_a - rest_b
     b2b_diff = feat["b2b_a"] - feat["b2b_b"]
     travel_diff_k = (feat["travel_a"] - feat["travel_b"]) / 1000.0
     tz_diff = feat["tz_a"] - feat["tz_b"]
-    return [x_elo, rest_diff, b2b_diff, travel_diff_k, tz_diff]
+    return [x_elo, _rest_diff(feat), b2b_diff, travel_diff_k, tz_diff]
 
 
 def coef_to_elo_points(b_feature: float, b_elo: float) -> float:
@@ -71,10 +78,8 @@ def rest_travel_delta(
     elo_tz: float,
 ) -> float:
     """Net Elo delta added to team A from one game's rest/travel features."""
-    rest_a = feat["rest_a"] if feat["rest_a"] is not None else 0
-    rest_b = feat["rest_b"] if feat["rest_b"] is not None else 0
     return (
-        elo_rest * (rest_a - rest_b)
+        elo_rest * _rest_diff(feat)
         + elo_b2b * (feat["b2b_a"] - feat["b2b_b"])
         + elo_travel_per_1000 * (feat["travel_a"] - feat["travel_b"]) / 1000.0
         + elo_tz * (feat["tz_a"] - feat["tz_b"])
