@@ -405,6 +405,36 @@ def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]
     return base.order_by(Game.date, Game.time).all()
 
 
+def get_team_records(
+    session: Session, season_year: int = 2026
+) -> dict[int, tuple[int, int]]:
+    """Regular-season W-L record per team for a season, from completed games.
+
+    Returns {team_id: (wins, losses)}; teams with no completed regular-season
+    games are absent (callers default to 0-0).
+
+    Deliberately strict on `season_type == 2` (NOT the null-count-conditional
+    filter `get_completed_games` uses): a W-L record is a precise standings
+    claim, so fail-closed and exclude any NULL-`season_type` legacy row rather
+    than risk miscounting. For 2026 the backfill is complete, so this excludes
+    nothing real.
+    """
+    games = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(Game.season_type == 2)
+        .all()
+    )
+    records: dict[int, list[int]] = {}
+    for g in games:
+        # winner_id is always team_a_id or team_b_id (enforced on write).
+        loser_id = g.team_b_id if g.winner_id == g.team_a_id else g.team_a_id
+        records.setdefault(g.winner_id, [0, 0])[0] += 1
+        records.setdefault(loser_id, [0, 0])[1] += 1
+    return {tid: (w, losses) for tid, (w, losses) in records.items()}
+
+
 def get_completed_postseason_games(
     session: Session, season_year: int = 2026
 ) -> list[Game]:
