@@ -74,6 +74,19 @@ def test_features_rest_capped_at_four():
     assert feats[1]["b2b_a"] == 0
 
 
+def test_features_eastward_travel_crosses_timezones():
+    # Aces home in Vegas (UTC~-8), then away at NY Liberty (UTC~-5): ~+3 east.
+    games = [
+        _g("Las Vegas Aces", "Chicago Sky", "2026-05-20", "e1"),
+        _g("New York Liberty", "Las Vegas Aces", "2026-05-23", "e2"),
+    ]
+    feats = compute_rest_travel_features(games)
+    # Aces (team_b) travelled east -> positive tz crossings ~ +2.8.
+    assert 2.5 < feats[1]["tz_b"] < 3.2
+    # Liberty (team_a) first game -> neutral.
+    assert feats[1]["tz_a"] == 0.0
+
+
 def test_features_home_idle_zero_travel():
     games = [
         _g("Atlanta Dream", "Chicago Sky", "2026-05-01", "e1"),
@@ -82,6 +95,7 @@ def test_features_home_idle_zero_travel():
     feats = compute_rest_travel_features(games)
     assert feats[1]["travel_a"] == 0.0  # stayed home in Atlanta
     assert feats[1]["rest_a"] == 3  # 4 days between -> 3 rest
+    assert feats[1]["tz_a"] == 0.0  # no movement -> no tz crossings
 
 
 def test_features_unsorted_input_is_sorted_first():

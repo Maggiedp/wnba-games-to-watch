@@ -35,13 +35,14 @@ from src.scoring.rest_travel import (
 
 
 def build_design_row(x_elo: float, feat: dict) -> list[float]:
-    """One design-matrix row: [x_elo, rest_diff, b2b_diff, travel_diff_k]."""
+    """One design-matrix row: [x_elo, rest_diff, b2b_diff, travel_diff_k, tz_diff]."""
     rest_a = feat["rest_a"] if feat["rest_a"] is not None else 0
     rest_b = feat["rest_b"] if feat["rest_b"] is not None else 0
     rest_diff = rest_a - rest_b
     b2b_diff = feat["b2b_a"] - feat["b2b_b"]
     travel_diff_k = (feat["travel_a"] - feat["travel_b"]) / 1000.0
-    return [x_elo, rest_diff, b2b_diff, travel_diff_k]
+    tz_diff = feat["tz_a"] - feat["tz_b"]
+    return [x_elo, rest_diff, b2b_diff, travel_diff_k, tz_diff]
 
 
 def coef_to_elo_points(b_feature: float, b_elo: float) -> float:
@@ -87,7 +88,7 @@ def main() -> None:
     y = np.array(outcomes)
     res = logistic_fit(x, y)
 
-    names = ["intercept", "x_elo", "rest_diff", "b2b_diff", "travel_diff_k"]
+    names = ["intercept", "x_elo", "rest_diff", "b2b_diff", "travel_diff_k", "tz_diff"]
     print("Logistic fit (controlling for Elo):")
     for i, nm in enumerate(names):
         print(
@@ -99,10 +100,12 @@ def main() -> None:
     elo_rest = coef_to_elo_points(res.coef[2], b_elo)
     elo_b2b = coef_to_elo_points(res.coef[3], b_elo)
     elo_travel_per_1000 = coef_to_elo_points(res.coef[4], b_elo)
+    elo_tz = coef_to_elo_points(res.coef[5], b_elo)
     print("\nElo-point magnitudes (per unit):")
     print(f"  rest_day_diff:   {elo_rest:+.1f} Elo")
     print(f"  b2b_diff:        {elo_b2b:+.1f} Elo")
     print(f"  travel/1000mi:   {elo_travel_per_1000:+.1f} Elo")
+    print(f"  tz_crossed:      {elo_tz:+.1f} Elo")
 
     def adjust(feat: dict) -> float:
         rest_a = feat["rest_a"] if feat["rest_a"] is not None else 0
@@ -111,6 +114,7 @@ def main() -> None:
             elo_rest * (rest_a - rest_b)
             + elo_b2b * (feat["b2b_a"] - feat["b2b_b"])
             + elo_travel_per_1000 * (feat["travel_a"] - feat["travel_b"]) / 1000.0
+            + elo_tz * (feat["tz_a"] - feat["tz_b"])
         )
 
     adj = replay_games(
