@@ -80,6 +80,18 @@ def _mov_multiplier(mov: int, winner_elo_advantage: float) -> float:
     return math.log(mov + 1) * (2.2 / (winner_elo_advantage * 0.001 + 2.2))
 
 
+def is_replayable(game: dict) -> bool:
+    """True if a game updates ratings: it has a decisive winner that is one of the
+    two teams. The single source of truth for replay eligibility — callers that
+    need the exact set of games `replay_games` processes (e.g. to align per-game
+    features with `EloReplay.history`) must filter with this, not an ad-hoc check.
+    """
+    return bool(game.get("winner_team")) and game["winner_team"] in (
+        game["team_a"],
+        game["team_b"],
+    )
+
+
 def expected_win_prob(
     rating_a: float,
     rating_b: float,
@@ -190,11 +202,7 @@ def replay_games(
     # state forward) are computed over EXACTLY the replayed games — a skipped
     # winner-less or malformed row must never become the "previous game" for a
     # later one when the hook is enabled.
-    replayed = [
-        g
-        for g in ordered
-        if g.get("winner_team") and g["winner_team"] in (g["team_a"], g["team_b"])
-    ]
+    replayed = [g for g in ordered if is_replayable(g)]
 
     features: list[dict] | None = None
     if rest_travel_adjust is not None:
@@ -243,6 +251,7 @@ def replay_games(
                 "winner": winner,
                 "date": g.get("date", ""),
                 "home_adv": ha,
+                "event_id": g.get("event_id", ""),
             }
         )
 

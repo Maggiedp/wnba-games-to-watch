@@ -33,6 +33,7 @@ from src.scoring.elo import (
     DEFAULT_HOME_ADVANTAGE,
     DEFAULT_K,
     expected_win_prob,
+    is_replayable,
     replay_games,
 )
 from src.scoring.rest_travel import (
@@ -101,22 +102,34 @@ def main() -> None:
     assert_all_teams_have_coords(games)
     print(f"Total: {len(games)} games\n")
 
-    # Baseline replay (HCA on, no rest/travel). history excludes winner-less games;
-    # recompute features over the same winner-filtered, identically-sorted list so
-    # zip() aligns element-for-element.
+    # Baseline replay (HCA on, no rest/travel).
     base = replay_games(
         games, k=DEFAULT_K, home_advantage=DEFAULT_HOME_ADVANTAGE, use_mov=True
     )
-    feats_hist = compute_rest_travel_features(
-        sorted(
-            (g for g in games if g.get("winner_team")),
-            key=lambda g: (g.get("date", ""), g.get("event_id", "")),
+    # Build the feature stream over the EXACT same games replay_games processed,
+    # using its own eligibility predicate (is_replayable) and identical ordering —
+    # NOT an ad-hoc winner filter, which could select a different set under schema
+    # drift and silently shift features onto the wrong games via positional zip.
+    replayed = [
+        g
+        for g in sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
+        if is_replayable(g)
+    ]
+    feats_hist = compute_rest_travel_features(replayed)
+    if len(replayed) != len(base.history):
+        raise RuntimeError(
+            f"feature/history length mismatch: {len(replayed)} vs {len(base.history)}"
         )
-    )
 
-    # Per-game evaluation records (>= _EVAL_START).
+    # Per-game evaluation records (>= _EVAL_START). Fail loud on any per-row
+    # misalignment rather than trusting positional zip.
     records: list[dict] = []
-    for h, feat in zip(base.history, feats_hist):
+    for h, g, feat in zip(base.history, replayed, feats_hist):
+        if h.get("event_id", "") != g.get("event_id", ""):
+            raise RuntimeError(
+                f"feature/history event_id misalignment at {h['date']}: "
+                f"{h.get('event_id')!r} vs {g.get('event_id')!r}"
+            )
         if h["date"] < _EVAL_START:
             continue
         x_elo = h["pre_a"] - h["pre_b"] + h["home_adv"]
