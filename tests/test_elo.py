@@ -350,3 +350,55 @@ def test_season_regression_factor_one_resets_to_initial():
     # The first 2025 game inspects pre-game ratings — those should be the post-reset values.
     assert math.isclose(result.history[2]["pre_a"], INITIAL_RATING)
     assert math.isclose(result.history[2]["pre_b"], INITIAL_RATING)
+
+
+def _game(a, b, winner, date, sa=80, sb=70, eid="e"):
+    return {
+        "team_a": a,
+        "team_b": b,
+        "winner_team": winner,
+        "date": date,
+        "final_score_a": sa,
+        "final_score_b": sb,
+        "event_id": eid,
+    }
+
+
+def test_replay_records_home_adv_in_history():
+    games = [_game("Las Vegas Aces", "Seattle Storm", "Las Vegas Aces", "2026-05-20")]
+    replay = replay_games(games, home_advantage=50.0)
+    assert replay.history[0]["home_adv"] == 50.0
+
+
+def test_rest_travel_adjust_off_is_identical():
+    games = [
+        _game(
+            "Las Vegas Aces", "Seattle Storm", "Las Vegas Aces", "2026-05-20", eid="1"
+        ),
+        _game(
+            "Seattle Storm", "Las Vegas Aces", "Seattle Storm", "2026-05-21", eid="2"
+        ),
+    ]
+    base = replay_games(games, home_advantage=50.0)
+    same = replay_games(games, home_advantage=50.0, rest_travel_adjust=None)
+    assert base.final_ratings == same.final_ratings
+
+
+def test_rest_travel_adjust_changes_ratings():
+    games = [
+        _game("Las Vegas Aces", "Chicago Sky", "Las Vegas Aces", "2026-05-20", eid="1"),
+        _game(
+            "Seattle Storm", "Las Vegas Aces", "Seattle Storm", "2026-05-21", eid="2"
+        ),
+    ]
+
+    # Net +200 Elo to the home team A whenever the away team B is on a back-to-back.
+    def adjust(feat):
+        return 200.0 if feat["b2b_b"] else 0.0
+
+    base = replay_games(games, home_advantage=50.0)
+    adj = replay_games(games, home_advantage=50.0, rest_travel_adjust=adjust)
+    # Game 2: the Aces (team_b) are on a back-to-back, so the hook fires and the
+    # post-game ratings diverge from baseline; game 2's effective advantage is 250.
+    assert adj.final_ratings != base.final_ratings
+    assert adj.history[1]["home_adv"] == 250.0  # 50 HCA + 200 adjustment

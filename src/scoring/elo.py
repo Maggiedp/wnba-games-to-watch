@@ -13,6 +13,7 @@ current Monte Carlo assumption).
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -130,7 +131,7 @@ class EloReplay:
 
     final_ratings: dict[str, float]
     # One entry per game, in the order games were processed:
-    # {"team_a", "team_b", "pre_a", "pre_b", "winner", "date"}
+    # {"team_a", "team_b", "pre_a", "pre_b", "winner", "date", "home_adv"}
     history: list[dict] = field(default_factory=list)
 
 
@@ -142,6 +143,7 @@ def replay_games(
     season_regression: float = DEFAULT_SEASON_REGRESSION,
     use_mov: bool = True,
     presorted: bool = False,
+    rest_travel_adjust: Callable[[dict], float] | None = None,
 ) -> EloReplay:
     """Replay games chronologically and return final ratings + per-game history.
 
@@ -164,6 +166,14 @@ def replay_games(
     Pass `presorted=True` when the caller has already sorted by (date, event_id)
     to skip the redundant sort — useful in grid-search loops over thousands of
     replays of the same game list.
+
+    `rest_travel_adjust` is an optional callback that receives the per-game
+    rest/travel feature dict and returns a NET Elo delta added to team A
+    (positive favors home team A, negative favors away team B). When provided,
+    this delta is added to `home_advantage` for both the win-probability
+    prediction and the rating update. Each history entry records `home_adv` =
+    the effective advantage used. When None, `home_adv` equals `home_advantage`
+    and behavior is byte-identical to not passing the parameter.
     """
     ratings: dict[str, float] = dict(initial_ratings or {})
     history: list[dict] = []
@@ -175,7 +185,15 @@ def replay_games(
         else sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
     )
 
-    for g in ordered:
+    features: list[dict] | None = None
+    if rest_travel_adjust is not None:
+        from src.scoring.rest_travel import compute_rest_travel_features
+
+        # compute_rest_travel_features sorts identically by (date, event_id),
+        # so its output aligns with `ordered`.
+        features = compute_rest_travel_features(ordered)
+
+    for idx, g in enumerate(ordered):
         winner = g.get("winner_team")
         if not winner:
             continue
@@ -199,8 +217,12 @@ def replay_games(
             if sa is not None and sb is not None:
                 mov = abs(int(sa) - int(sb))
 
+        ha = home_advantage
+        if features is not None:
+            ha = home_advantage + rest_travel_adjust(features[idx])
+
         new_ra, new_rb = update_ratings(
-            ra, rb, team_a_won, k=k, home_advantage=home_advantage, mov=mov
+            ra, rb, team_a_won, k=k, home_advantage=ha, mov=mov
         )
         ratings[ta] = new_ra
         ratings[tb] = new_rb
@@ -213,6 +235,7 @@ def replay_games(
                 "pre_b": rb,
                 "winner": winner,
                 "date": g.get("date", ""),
+                "home_adv": ha,
             }
         )
 
