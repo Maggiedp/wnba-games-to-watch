@@ -100,3 +100,11 @@ def compute_rest_travel_features(games: list[dict]) -> list[dict]:
         out.append(entry)
 
     return out
+
+
+def assert_all_teams_have_coords(games: list[dict]) -> None:
+    """Raise KeyError listing any team in `games` missing from ARENA_COORDS."""
+    seen = {g["team_a"] for g in games} | {g["team_b"] for g in games}
+    missing = sorted(t for t in seen if t not in ARENA_COORDS)
+    if missing:
+        raise KeyError(f"No arena coords for: {', '.join(missing)}")

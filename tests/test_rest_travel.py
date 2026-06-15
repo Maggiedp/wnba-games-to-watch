@@ -1,7 +1,10 @@
 """Tests for rest/travel feature primitives."""
 
+import pytest
+
 from src.scoring.rest_travel import (
     ARENA_COORDS,
+    assert_all_teams_have_coords,
     compute_rest_travel_features,
     haversine_miles,
 )
@@ -90,3 +93,14 @@ def test_features_unsorted_input_is_sorted_first():
     # Output aligns to chronological order: first entry is the 05-01 game.
     assert feats[0]["rest_a"] is None
     assert feats[1]["rest_a"] == 4
+
+
+def test_coverage_assertion_passes_for_known_teams():
+    games = [_g("Las Vegas Aces", "Seattle Storm", "2026-05-20")]
+    assert_all_teams_have_coords(games)  # no raise
+
+
+def test_coverage_assertion_raises_for_unknown_team():
+    games = [_g("Las Vegas Aces", "Mystery BC", "2026-05-20")]
+    with pytest.raises(KeyError, match="Mystery BC"):
+        assert_all_teams_have_coords(games)
