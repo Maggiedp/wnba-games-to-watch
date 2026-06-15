@@ -111,6 +111,15 @@
             .playoff-table th.team-col {
                 text-align: left;
             }
+            .playoff-table th.record-col {
+                text-align: left;
+            }
+            .playoff-table td.record-cell {
+                text-align: left;
+                font-variant-numeric: tabular-nums;
+                color: var(--navy-3);
+                white-space: nowrap;
+            }
             .playoff-table td {
                 padding: 6px 8px;
                 border-bottom: 1px solid rgba(0,0,0,0.06);
@@ -1095,6 +1104,7 @@
                             <thead>
                                 <tr>
                                     <th class="team-col">Team</th>
+                                    <th class="record-col">Rec</th>
                                     <th>Playoffs</th>
                                     <th>Semis</th>
                                     <th>Finals</th>
@@ -1428,9 +1438,15 @@
                         const fill = `linear-gradient(to right, rgba(255,107,0,0.20) ${pct}%, transparent ${pct}%)`;
                         return `<td class="prob-cell" style="background: ${fill}" aria-label="${display} ${label}">${display}</td>`;
                     };
+                    // Record is present only on a today request (the homepage
+                    // always asks for today); a historical snapshot omits it.
+                    const recordCell = (t.wins == null || t.losses == null)
+                        ? '<td class="record-cell"></td>'
+                        : `<td class="record-cell" aria-label="${t.wins} wins, ${t.losses} losses">${t.wins}-${t.losses}</td>`;
                     return `
                         <tr${eliminated ? ' class="eliminated"' : ''}>
                             <td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span></td>
+                            ${recordCell}
                             ${cell(t.make_playoffs_prob, 'chance to make the playoffs')}
                             ${cell(t.reach_semis_prob, 'chance to reach the semifinals')}
                             ${cell(t.reach_finals_prob, 'chance to reach the finals')}

@@ -405,6 +405,45 @@ def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]
     return base.order_by(Game.date, Game.time).all()
 
 
+def get_team_records(
+    session: Session, season_year: int = 2026
+) -> dict[int, tuple[int, int]]:
+    """Regular-season W-L record per team for a season, from completed games.
+
+    Returns {team_id: (wins, losses)}; teams with no completed regular-season
+    games are absent (callers default to 0-0).
+
+    Counts the whole season-to-date — no as-of-date bound. A date cutoff can't
+    be made consistent with a past odds snapshot anyway (the correct cutoff is
+    which games were FINAL at snapshot time, unrecoverable from a date), so the
+    `/api/playoff-odds` endpoint instead only attaches this record to a *today*
+    request, where it's current and consistent with the live odds.
+
+    Deliberately strict on `season_type == 2`: a W-L record is a precise
+    standings claim, so any non-regular-season row is excluded. The 2026 DB
+    carries NULL-`season_type` rows, but they're uncompleted preseason
+    placeholders (no `winner_id`) — already dropped by the `winner_id` filter,
+    and excluding them is correct even if one completed. This is intentionally
+    NOT the looser null-count-conditional filter `get_completed_games` uses
+    (which keeps NULL rows for the completed *archive*); for a W-L record a
+    stray preseason game would be a miscount.
+    """
+    games = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(Game.season_type == 2)
+        .all()
+    )
+    records: dict[int, list[int]] = {}
+    for g in games:
+        # winner_id is always team_a_id or team_b_id (enforced on write).
+        loser_id = g.team_b_id if g.winner_id == g.team_a_id else g.team_a_id
+        records.setdefault(g.winner_id, [0, 0])[0] += 1
+        records.setdefault(loser_id, [0, 0])[1] += 1
+    return {tid: (w, losses) for tid, (w, losses) in records.items()}
+
+
 def get_completed_postseason_games(
     session: Session, season_year: int = 2026
 ) -> list[Game]:

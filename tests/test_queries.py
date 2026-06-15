@@ -8,6 +8,7 @@ from src.db.queries import (
     get_completed_postseason_games,
     get_head_to_head,
     get_playoff_probabilities,
+    get_team_records,
     upsert_daily_ranking,
     upsert_game,
     upsert_playoff_probability,
@@ -3692,3 +3693,66 @@ def test_delete_importance_ceilings_before_drops_only_stale_rows(session):
 
     # Idempotent: second run matches nothing.
     assert delete_importance_ceilings_before(session, cutoff) == []
+
+
+def _add_completed_game(session, team_a_id, team_b_id, winner_id, season_type, date):
+    session.add(
+        Game(
+            team_a_id=team_a_id,
+            team_b_id=team_b_id,
+            date=date,
+            winner_id=winner_id,
+            season_type=season_type,
+        )
+    )
+    session.commit()
+
+
+def test_get_team_records_counts_wins_and_losses_either_slot(session, team_ids):
+    """Loss lands on the non-winner regardless of home/away slot."""
+    a_id, b_id = team_ids
+    # A wins as team_a, then B wins as team_a (slots swapped) -> A: 1-1, B: 1-1
+    _add_completed_game(
+        session, a_id, b_id, winner_id=a_id, season_type=2, date="2026-05-20"
+    )
+    _add_completed_game(
+        session, b_id, a_id, winner_id=b_id, season_type=2, date="2026-05-22"
+    )
+
+    records = get_team_records(session, 2026)
+    assert records[a_id] == (1, 1)
+    assert records[b_id] == (1, 1)
+
+
+def test_get_team_records_excludes_postseason_and_null_season_type(session, team_ids):
+    """Only season_type == 2 counts; postseason (3) and legacy NULL are excluded."""
+    a_id, b_id = team_ids
+    _add_completed_game(
+        session, a_id, b_id, winner_id=a_id, season_type=2, date="2026-05-20"
+    )
+    _add_completed_game(
+        session, a_id, b_id, winner_id=a_id, season_type=3, date="2026-09-20"
+    )
+    _add_completed_game(
+        session, a_id, b_id, winner_id=a_id, season_type=None, date="2026-05-25"
+    )
+
+    records = get_team_records(session, 2026)
+    assert records[a_id] == (1, 0)
+    assert records[b_id] == (0, 1)
+
+
+def test_get_team_records_absent_for_team_with_no_regular_season_games(
+    session, team_ids
+):
+    """A team whose only completed game is postseason is absent (not 0-0)."""
+    a_id, b_id = team_ids
+    # Only a postseason game exists -> neither team has a regular-season record.
+    _add_completed_game(
+        session, a_id, b_id, winner_id=a_id, season_type=3, date="2026-09-20"
+    )
+
+    records = get_team_records(session, 2026)
+    assert a_id not in records
+    assert b_id not in records
+    assert records.get(a_id, (0, 0)) == (0, 0)
