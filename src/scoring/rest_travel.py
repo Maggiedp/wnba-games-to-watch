@@ -74,19 +74,28 @@ def compute_rest_travel_features(games: list[dict]) -> list[dict]:
     Input games each need: team_a (home), team_b (away), date (ISO), event_id.
     Sorted by (date, event_id) internally — the returned list is in that order.
     Each entry: {rest_a, rest_b, b2b_a, b2b_b, travel_a, travel_b, tz_a, tz_b}
-    where rest_* is int|None (None = team's first game in the stream; capped at 4
-    days), travel_* is float miles (0.0 on a team's first game), and tz_* is the
-    signed timezone offset crossed since the team's previous game (+east, derived
-    from longitude; 0.0 on a team's first game). The game's location is the home
-    team's (team_a) city.
+    where rest_* is int|None (None = a team's first game OF THE SEASON; capped at
+    4 days), travel_* is float miles (0.0 on a team's first game of the season),
+    and tz_* is the signed timezone offset crossed since the team's previous game
+    (+east, derived from longitude; 0.0 on a first game). The game's location is
+    the home team's (team_a) city.
+
+    Per-team state is reset at each season boundary (year change in the ISO date,
+    matching the Elo season model — WNBA seasons fit inside a calendar year), so a
+    season opener is neutral rather than carrying months-old travel/rest from the
+    previous season's final venue.
     """
     ordered = sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
     last: dict[str, tuple[_date, tuple[float, float]]] = {}  # team -> (date, coords)
     out: list[dict] = []
+    prev_season: int | None = None
 
     for g in ordered:
         ta, tb = g["team_a"], g["team_b"]
         game_date = _to_date(g["date"])
+        if prev_season is not None and game_date.year != prev_season:
+            last.clear()  # offseason: drop prior-season venue/rest state
+        prev_season = game_date.year
         game_coords = ARENA_COORDS[ta]  # location = home team's city
 
         entry: dict = {}

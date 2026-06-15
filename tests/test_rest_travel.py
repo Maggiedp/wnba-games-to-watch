@@ -74,6 +74,20 @@ def test_features_rest_capped_at_four():
     assert feats[1]["b2b_a"] == 0
 
 
+def test_features_reset_across_seasons():
+    # A new season's opener must be neutral, not "travel from last season's venue".
+    games = [
+        _g("Las Vegas Aces", "Chicago Sky", "2024-09-01", "e1"),  # 2024 game
+        _g("Seattle Storm", "Las Vegas Aces", "2025-05-15", "e2"),  # 2025 opener
+    ]
+    feats = compute_rest_travel_features(games)
+    g2 = feats[1]
+    assert g2["rest_a"] is None and g2["rest_b"] is None
+    assert g2["b2b_a"] == 0 and g2["b2b_b"] == 0
+    assert g2["travel_a"] == 0.0 and g2["travel_b"] == 0.0
+    assert g2["tz_a"] == 0.0 and g2["tz_b"] == 0.0
+
+
 def test_features_eastward_travel_crosses_timezones():
     # Aces home in Vegas (UTC~-8), then away at NY Liberty (UTC~-5): ~+3 east.
     games = [
