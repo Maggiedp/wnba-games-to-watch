@@ -350,3 +350,44 @@ def test_season_regression_factor_one_resets_to_initial():
     # The first 2025 game inspects pre-game ratings — those should be the post-reset values.
     assert math.isclose(result.history[2]["pre_a"], INITIAL_RATING)
     assert math.isclose(result.history[2]["pre_b"], INITIAL_RATING)
+
+
+def _game(a, b, winner, date, sa=80, sb=70, eid="e"):
+    return {
+        "team_a": a,
+        "team_b": b,
+        "winner_team": winner,
+        "date": date,
+        "final_score_a": sa,
+        "final_score_b": sb,
+        "event_id": eid,
+    }
+
+
+def test_is_replayable_predicate():
+    from src.scoring.elo import is_replayable
+
+    assert is_replayable({"team_a": "A", "team_b": "B", "winner_team": "A"})
+    assert not is_replayable({"team_a": "A", "team_b": "B", "winner_team": None})
+    assert not is_replayable({"team_a": "A", "team_b": "B", "winner_team": ""})
+    # truthy-but-invalid winner (e.g. ESPN name drift) is NOT replayable
+    assert not is_replayable({"team_a": "A", "team_b": "B", "winner_team": "Zzz"})
+
+
+def test_replay_skips_truthy_invalid_winner():
+    # A row with a truthy winner that is neither team must not be replayed.
+    games = [
+        _game(
+            "Las Vegas Aces", "Seattle Storm", "Las Vegas Aces", "2026-05-20", eid="1"
+        ),
+        {
+            "team_a": "Chicago Sky",
+            "team_b": "Atlanta Dream",
+            "winner_team": "Typo BC",  # neither team
+            "date": "2026-05-21",
+            "event_id": "2",
+        },
+    ]
+    replay = replay_games(games, home_advantage=50.0)
+    assert len(replay.history) == 1
+    assert replay.history[0]["team_a"] == "Las Vegas Aces"

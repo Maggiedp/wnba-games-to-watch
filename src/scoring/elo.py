@@ -79,6 +79,18 @@ def _mov_multiplier(mov: int, winner_elo_advantage: float) -> float:
     return math.log(mov + 1) * (2.2 / (winner_elo_advantage * 0.001 + 2.2))
 
 
+def is_replayable(game: dict) -> bool:
+    """True if a game updates ratings: it has a decisive winner that is one of the
+    two teams. The single source of truth for replay eligibility — callers that
+    need the exact set of games `replay_games` processes (e.g. to align per-game
+    features with `EloReplay.history`) must filter with this, not an ad-hoc check.
+    """
+    return bool(game.get("winner_team")) and game["winner_team"] in (
+        game["team_a"],
+        game["team_b"],
+    )
+
+
 def expected_win_prob(
     rating_a: float,
     rating_b: float,
@@ -164,6 +176,9 @@ def replay_games(
     Pass `presorted=True` when the caller has already sorted by (date, event_id)
     to skip the redundant sort — useful in grid-search loops over thousands of
     replays of the same game list.
+
+    Only games where `is_replayable` holds (decisive winner that is one of the two
+    teams) update ratings and appear in `history`, in chronological order.
     """
     ratings: dict[str, float] = dict(initial_ratings or {})
     history: list[dict] = []
@@ -176,12 +191,12 @@ def replay_games(
     )
 
     for g in ordered:
-        winner = g.get("winner_team")
-        if not winner:
+        # Only games with a decisive, valid winner update ratings (ESPN can emit
+        # winner-less scheduled rows or, rarely, a malformed winner).
+        if not is_replayable(g):
             continue
+        winner = g["winner_team"]
         ta, tb = g["team_a"], g["team_b"]
-        if winner not in (ta, tb):
-            continue
 
         season = _season_for_date(g.get("date", ""))
         if season is not None:

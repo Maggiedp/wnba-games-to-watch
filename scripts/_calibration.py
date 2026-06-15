@@ -40,3 +40,35 @@ def calibration_table(
             }
         )
     return rows
+
+
+def bootstrap_brier_delta_ci(
+    probs_baseline: np.ndarray,
+    probs_adjusted: np.ndarray,
+    outcomes: np.ndarray,
+    n_boot: int = 1000,
+    seed: int = 0,
+    ci: float = 0.95,
+) -> tuple[float, float, float]:
+    """Paired bootstrap CI of the Brier improvement (baseline - adjusted).
+
+    Resamples GAME INDICES with replacement (paired: the same indices score both
+    models each draw, preserving per-game correlation). Positive = adjusted model
+    has the lower (better) Brier. Returns (mean_delta, ci_low, ci_high).
+    """
+    probs_baseline = np.asarray(probs_baseline, dtype=float)
+    probs_adjusted = np.asarray(probs_adjusted, dtype=float)
+    outcomes = np.asarray(outcomes, dtype=float)
+    n = len(outcomes)
+    se_base = (probs_baseline - outcomes) ** 2
+    se_adj = (probs_adjusted - outcomes) ** 2
+
+    rng = np.random.default_rng(seed)
+    deltas = np.empty(n_boot)
+    for i in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        deltas[i] = se_base[idx].mean() - se_adj[idx].mean()
+
+    alpha = (1.0 - ci) / 2.0
+    lo, hi = np.quantile(deltas, [alpha, 1.0 - alpha])
+    return float(deltas.mean()), float(lo), float(hi)

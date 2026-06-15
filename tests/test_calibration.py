@@ -1,3 +1,6 @@
+import numpy as np
+
+from scripts._calibration import bootstrap_brier_delta_ci
 from src.scoring.calibration import compute_calibration
 
 
@@ -41,3 +44,26 @@ def test_top_bucket_is_inclusive_of_one():
 def test_none_predictions_dropped():
     r = compute_calibration([(None, True), (0.5, False)])
     assert r.n == 1
+
+
+def test_bootstrap_detects_real_improvement():
+    rng = np.random.default_rng(0)
+    n = 2000
+    outcomes = (rng.uniform(size=n) < 0.5).astype(float)
+    # "adjusted" is perfectly calibrated; "baseline" is always 0.5 (worse Brier).
+    adjusted = np.where(outcomes == 1, 0.9, 0.1)
+    baseline = np.full(n, 0.5)
+    mean, lo, hi = bootstrap_brier_delta_ci(
+        baseline, adjusted, outcomes, n_boot=500, seed=1
+    )
+    assert mean > 0  # baseline Brier - adjusted Brier > 0 (improvement)
+    assert lo > 0  # CI entirely above 0 -> ships
+
+
+def test_bootstrap_null_difference_straddles_zero():
+    rng = np.random.default_rng(2)
+    n = 2000
+    outcomes = (rng.uniform(size=n) < 0.5).astype(float)
+    probs = rng.uniform(0.4, 0.6, size=n)
+    mean, lo, hi = bootstrap_brier_delta_ci(probs, probs, outcomes, n_boot=500, seed=3)
+    assert lo <= 0 <= hi  # identical models -> CI contains 0
