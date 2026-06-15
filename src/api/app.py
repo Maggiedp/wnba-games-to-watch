@@ -421,9 +421,10 @@ async def get_playoff_odds(date: str = Query(default=None)):
     table reads monotonically), then win_championship_prob desc, then team name
     as tiebreakers.
     """
+    today = today_et()
     if date is None:
-        date = today_et()
-    is_today = date == today_et()
+        date = today
+    is_today = date == today
     session = get_session()
     try:
         recs = get_playoff_probabilities(session, date)
@@ -439,28 +440,32 @@ async def get_playoff_odds(date: str = Query(default=None)):
         if not recs:
             return []
         teams = get_teams_by_ids(session, set(recs.keys()))
-        # Regular-season W-L, attached ONLY for a today (live) request. Records
-        # are current-season-to-date; pairing them with a historical ?date=
-        # snapshot would publish mixed-time data, so omit (None) when not today.
-        # On the live path whole-season records are consistent with the odds in
-        # every cadence (a future game can't be FINAL; a same-day final lands in
-        # the DB the same run that recomputes the odds). See get_team_records.
-        records = get_team_records(session, int(date[:4])) if is_today else {}
-        rows = [
-            PlayoffOddsResponse(
-                team=teams[tid].name,
-                abbreviation=teams[tid].abbreviation or "",
-                logo_url=teams[tid].logo_url or "",
-                make_playoffs_prob=recs[tid].make_playoffs_prob,
-                reach_semis_prob=recs[tid].reach_semis_prob or 0.0,
-                reach_finals_prob=recs[tid].reach_finals_prob or 0.0,
-                win_championship_prob=recs[tid].win_championship_prob or 0.0,
-                wins=records.get(tid, (0, 0))[0] if is_today else None,
-                losses=records.get(tid, (0, 0))[1] if is_today else None,
+        # Regular-season W-L, attached ONLY for a today (live) request: records
+        # are current-season-to-date, so pairing them with a historical ?date=
+        # snapshot would publish mixed-time data. See get_team_records.
+        records = get_team_records(session, int(date[:4])) if is_today else None
+        rows = []
+        for tid in recs:
+            if tid not in teams:
+                continue
+            # Today: (w, l), or (0, 0) for a team with no completed games.
+            # Historical: (None, None) — record omitted (see above).
+            wins, losses = (
+                records.get(tid, (0, 0)) if records is not None else (None, None)
             )
-            for tid in recs
-            if tid in teams
-        ]
+            rows.append(
+                PlayoffOddsResponse(
+                    team=teams[tid].name,
+                    abbreviation=teams[tid].abbreviation or "",
+                    logo_url=teams[tid].logo_url or "",
+                    make_playoffs_prob=recs[tid].make_playoffs_prob,
+                    reach_semis_prob=recs[tid].reach_semis_prob or 0.0,
+                    reach_finals_prob=recs[tid].reach_finals_prob or 0.0,
+                    win_championship_prob=recs[tid].win_championship_prob or 0.0,
+                    wins=wins,
+                    losses=losses,
+                )
+            )
         return sorted(
             rows,
             key=lambda x: (-x.make_playoffs_prob, -x.win_championship_prob, x.team),

@@ -413,28 +413,20 @@ def get_team_records(
     Returns {team_id: (wins, losses)}; teams with no completed regular-season
     games are absent (callers default to 0-0).
 
-    Counts the whole season-to-date with NO as-of-date bound. This stays
-    consistent with the playoff-odds snapshot it's shown beside on the live
-    (today) view in every run cadence: a future game can't be FINAL, and a
-    same-day final only gains a `winner_id` when `daily_update` ingests it —
-    the same moment that day's odds are recomputed, so record and odds move
-    together. A date-based cutoff can't improve on this (the correct cutoff
-    depends on what was FINAL at snapshot time, which a date can't recover
-    after the fact) and would make a same-day off-cadence rerun show a record
-    that lags the odds. Because the record is current-season-to-date, the
-    `/api/playoff-odds` endpoint attaches it ONLY to a today request and omits
-    it (None) on a historical `?date=<past>` snapshot — so a past snapshot is
-    never paired with a current record.
+    Counts the whole season-to-date — no as-of-date bound. A date cutoff can't
+    be made consistent with a past odds snapshot anyway (the correct cutoff is
+    which games were FINAL at snapshot time, unrecoverable from a date), so the
+    `/api/playoff-odds` endpoint instead only attaches this record to a *today*
+    request, where it's current and consistent with the live odds.
 
     Deliberately strict on `season_type == 2`: a W-L record is a precise
     standings claim, so any non-regular-season row is excluded. The 2026 DB
-    does carry NULL-`season_type` rows, but they are uncompleted preseason
-    placeholders (no `winner_id`) — already removed by the `winner_id` filter,
-    and if one ever completed, excluding it is still correct (it's preseason,
-    not a regular-season result). This is intentionally NOT the looser
-    null-count-conditional filter `get_completed_games` uses: that path keeps
-    NULL rows for the completed *archive*, but for a W-L record a stray
-    preseason game would be a miscount.
+    carries NULL-`season_type` rows, but they're uncompleted preseason
+    placeholders (no `winner_id`) — already dropped by the `winner_id` filter,
+    and excluding them is correct even if one completed. This is intentionally
+    NOT the looser null-count-conditional filter `get_completed_games` uses
+    (which keeps NULL rows for the completed *archive*); for a W-L record a
+    stray preseason game would be a miscount.
     """
     games = (
         session.query(Game)
