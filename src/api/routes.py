@@ -101,8 +101,11 @@ class PlayoffOddsResponse(BaseModel):
     reach_semis_prob: float  # 0.0–1.0; 0 if not yet computed
     reach_finals_prob: float  # 0.0–1.0
     win_championship_prob: float  # 0.0–1.0
-    wins: int  # completed regular-season wins
-    losses: int  # completed regular-season losses
+    # Regular-season W-L, present only for a today (live) request. Null on a
+    # historical ?date= snapshot — records are current-season-to-date, so
+    # pairing them with a past odds snapshot would publish mixed-time data.
+    wins: int | None  # completed regular-season wins
+    losses: int | None  # completed regular-season losses
 
 
 def format_games_response(

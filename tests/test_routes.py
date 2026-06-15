@@ -1337,3 +1337,29 @@ def test_playoff_odds_endpoint_record_defaults_to_zero(env, client):
 
     rows = client.get("/api/playoff-odds").json()
     assert (rows[0]["wins"], rows[0]["losses"]) == (0, 0)
+
+
+def test_playoff_odds_endpoint_omits_record_for_historical_date(env, client):
+    """A non-today ?date= snapshot omits wins/losses (no mixed-time data).
+
+    Records are current-season-to-date; attaching them to a past odds snapshot
+    would publish internally inconsistent (mixed-time) data, so the endpoint
+    returns null wins/losses for any date that isn't today.
+    """
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    upsert_playoff_probability(
+        session,
+        date="2026-05-15",  # a past snapshot, not today_et()
+        team_id=a_id,
+        probability=0.8,
+        reach_semis_prob=0.5,
+        reach_finals_prob=0.3,
+        win_championship_prob=0.2,
+    )
+    session.close()
+
+    rows = client.get("/api/playoff-odds?date=2026-05-15").json()
+    assert rows[0]["wins"] is None
+    assert rows[0]["losses"] is None

@@ -421,10 +421,10 @@ def get_team_records(
     together. A date-based cutoff can't improve on this (the correct cutoff
     depends on what was FINAL at snapshot time, which a date can't recover
     after the fact) and would make a same-day off-cadence rerun show a record
-    that lags the odds. KNOWN LIMITATION: a historical
-    `/api/playoff-odds?date=<past>` request pairs that day's odds with the
-    *current* record — accepted because no caller passes a historical date
-    (the homepage always requests today).
+    that lags the odds. Because the record is current-season-to-date, the
+    `/api/playoff-odds` endpoint attaches it ONLY to a today request and omits
+    it (None) on a historical `?date=<past>` snapshot — so a past snapshot is
+    never paired with a current record.
 
     Deliberately strict on `season_type == 2`: a W-L record is a precise
     standings claim, so any non-regular-season row is excluded. The 2026 DB

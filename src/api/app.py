@@ -423,6 +423,7 @@ async def get_playoff_odds(date: str = Query(default=None)):
     """
     if date is None:
         date = today_et()
+    is_today = date == today_et()
     session = get_session()
     try:
         recs = get_playoff_probabilities(session, date)
@@ -438,11 +439,13 @@ async def get_playoff_odds(date: str = Query(default=None)):
         if not recs:
             return []
         teams = get_teams_by_ids(session, set(recs.keys()))
-        # Whole-season-to-date W-L (no as-of bound). Consistent with the odds on
-        # the live (today) view in every cadence; a historical ?date= request
-        # pairs old odds with the current record (known limitation, no caller —
-        # the homepage always requests today). See get_team_records.
-        records = get_team_records(session, int(date[:4]))
+        # Regular-season W-L, attached ONLY for a today (live) request. Records
+        # are current-season-to-date; pairing them with a historical ?date=
+        # snapshot would publish mixed-time data, so omit (None) when not today.
+        # On the live path whole-season records are consistent with the odds in
+        # every cadence (a future game can't be FINAL; a same-day final lands in
+        # the DB the same run that recomputes the odds). See get_team_records.
+        records = get_team_records(session, int(date[:4])) if is_today else {}
         rows = [
             PlayoffOddsResponse(
                 team=teams[tid].name,
@@ -452,8 +455,8 @@ async def get_playoff_odds(date: str = Query(default=None)):
                 reach_semis_prob=recs[tid].reach_semis_prob or 0.0,
                 reach_finals_prob=recs[tid].reach_finals_prob or 0.0,
                 win_championship_prob=recs[tid].win_championship_prob or 0.0,
-                wins=records.get(tid, (0, 0))[0],
-                losses=records.get(tid, (0, 0))[1],
+                wins=records.get(tid, (0, 0))[0] if is_today else None,
+                losses=records.get(tid, (0, 0))[1] if is_today else None,
             )
             for tid in recs
             if tid in teams
