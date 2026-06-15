@@ -14,6 +14,7 @@ team appearing in the data is missing here - add its canonical name then.
 from __future__ import annotations
 
 import math
+from datetime import date as _date
 
 # Canonical team name -> (latitude, longitude) of home arena/city.
 # Canonical names match src.data.espn_api._canonical_name output.
@@ -53,3 +54,49 @@ def haversine_miles(a: tuple[float, float], b: tuple[float, float]) -> float:
         + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
     )
     return 2 * _EARTH_RADIUS_MILES * math.asin(math.sqrt(h))
+
+
+_REST_CAP = 4
+
+
+def _to_date(s: str) -> _date:
+    return _date.fromisoformat(s)
+
+
+def compute_rest_travel_features(games: list[dict]) -> list[dict]:
+    """Per-game rest/travel features for both teams, aligned to chronological order.
+
+    Input games each need: team_a (home), team_b (away), date (ISO), event_id.
+    Sorted by (date, event_id) internally — the returned list is in that order.
+    Each entry: {rest_a, rest_b, b2b_a, b2b_b, travel_a, travel_b} where rest_*
+    is int|None (None = team's first game in the stream; capped at 4 days) and
+    travel_* is float miles (0.0 on a team's first game). The game's location is
+    the home team's (team_a) city.
+    """
+    ordered = sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
+    last: dict[str, tuple[_date, tuple[float, float]]] = {}  # team -> (date, coords)
+    out: list[dict] = []
+
+    for g in ordered:
+        ta, tb = g["team_a"], g["team_b"]
+        game_date = _to_date(g["date"])
+        game_coords = ARENA_COORDS[ta]  # location = home team's city
+
+        entry: dict = {}
+        for team, key in ((ta, "a"), (tb, "b")):
+            prev = last.get(team)
+            if prev is None:
+                entry[f"rest_{key}"] = None
+                entry[f"b2b_{key}"] = 0
+                entry[f"travel_{key}"] = 0.0
+            else:
+                prev_date, prev_coords = prev
+                rest = min((game_date - prev_date).days - 1, _REST_CAP)
+                rest = max(rest, 0)
+                entry[f"rest_{key}"] = rest
+                entry[f"b2b_{key}"] = 1 if rest == 0 else 0
+                entry[f"travel_{key}"] = haversine_miles(prev_coords, game_coords)
+            last[team] = (game_date, game_coords)
+        out.append(entry)
+
+    return out
