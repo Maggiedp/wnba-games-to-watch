@@ -13,7 +13,6 @@ current Monte Carlo assumption).
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -155,7 +154,6 @@ def replay_games(
     season_regression: float = DEFAULT_SEASON_REGRESSION,
     use_mov: bool = True,
     presorted: bool = False,
-    rest_travel_adjust: Callable[[dict], float] | None = None,
 ) -> EloReplay:
     """Replay games chronologically and return final ratings + per-game history.
 
@@ -179,13 +177,9 @@ def replay_games(
     to skip the redundant sort — useful in grid-search loops over thousands of
     replays of the same game list.
 
-    `rest_travel_adjust` is an optional callback that receives the per-game
-    rest/travel feature dict and returns a NET Elo delta added to team A
-    (positive favors home team A, negative favors away team B). When provided,
-    this delta is added to `home_advantage` for both the win-probability
-    prediction and the rating update. Each history entry records `home_adv` =
-    the effective advantage used. When None, `home_adv` equals `home_advantage`
-    and behavior is byte-identical to not passing the parameter.
+    Each history entry records `home_adv` (the home-court advantage applied) and
+    `event_id`, so callers can reproduce a game's prediction and align per-game
+    side data to the exact replayed games.
     """
     ratings: dict[str, float] = dict(initial_ratings or {})
     history: list[dict] = []
@@ -197,22 +191,12 @@ def replay_games(
         else sorted(games, key=lambda g: (g.get("date", ""), g.get("event_id", "")))
     )
 
-    # Only games with a decisive, valid winner update ratings. Filter to those
-    # first so rest/travel features (which carry each team's last-venue/rest
-    # state forward) are computed over EXACTLY the replayed games — a skipped
-    # winner-less or malformed row must never become the "previous game" for a
-    # later one when the hook is enabled.
+    # Only games with a decisive, valid winner update ratings (ESPN can emit
+    # winner-less scheduled rows or, rarely, a malformed winner). is_replayable is
+    # the shared eligibility predicate.
     replayed = [g for g in ordered if is_replayable(g)]
 
-    features: list[dict] | None = None
-    if rest_travel_adjust is not None:
-        from src.scoring.rest_travel import compute_rest_travel_features
-
-        # Built over `replayed` (the exact games processed below), so feature
-        # state advances only on replayed games and aligns by index.
-        features = compute_rest_travel_features(replayed)
-
-    for idx, g in enumerate(replayed):
+    for g in replayed:
         winner = g["winner_team"]
         ta, tb = g["team_a"], g["team_b"]
 
@@ -232,12 +216,8 @@ def replay_games(
             if sa is not None and sb is not None:
                 mov = abs(int(sa) - int(sb))
 
-        ha = home_advantage
-        if features is not None:
-            ha = home_advantage + rest_travel_adjust(features[idx])
-
         new_ra, new_rb = update_ratings(
-            ra, rb, team_a_won, k=k, home_advantage=ha, mov=mov
+            ra, rb, team_a_won, k=k, home_advantage=home_advantage, mov=mov
         )
         ratings[ta] = new_ra
         ratings[tb] = new_rb
@@ -250,7 +230,7 @@ def replay_games(
                 "pre_b": rb,
                 "winner": winner,
                 "date": g.get("date", ""),
-                "home_adv": ha,
+                "home_adv": home_advantage,
                 "event_id": g.get("event_id", ""),
             }
         )
