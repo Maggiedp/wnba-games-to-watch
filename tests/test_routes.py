@@ -1337,3 +1337,64 @@ def test_playoff_odds_endpoint_record_defaults_to_zero(env, client):
 
     rows = client.get("/api/playoff-odds").json()
     assert (rows[0]["wins"], rows[0]["losses"]) == (0, 0)
+
+
+def test_playoff_odds_endpoint_record_is_as_of_requested_date(env, client):
+    """Records pair with the requested odds date, not the whole season.
+
+    A historical ?date= snapshot must show the record as it stood for that
+    snapshot (games strictly before it), not the current full-season record.
+    """
+    from src.db.schema import Game
+
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    b_id = session.query(env.Team).filter_by(name="Liberty").one().id
+    # Odds snapshot stored for an OLD date.
+    upsert_playoff_probability(
+        session,
+        date="2026-05-15",
+        team_id=a_id,
+        probability=0.8,
+        reach_semis_prob=0.5,
+        reach_finals_prob=0.3,
+        win_championship_prob=0.2,
+    )
+    upsert_playoff_probability(
+        session,
+        date="2026-05-15",
+        team_id=b_id,
+        probability=0.7,
+        reach_semis_prob=0.4,
+        reach_finals_prob=0.2,
+        win_championship_prob=0.1,
+    )
+    # One game before the snapshot, one after.
+    session.add(
+        Game(
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-05-10",
+            winner_id=a_id,
+            season_type=2,
+        )
+    )
+    session.add(
+        Game(
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-06-01",
+            winner_id=b_id,
+            season_type=2,
+        )
+    )
+    session.commit()
+    session.close()
+
+    rows = client.get("/api/playoff-odds?date=2026-05-15").json()
+    by_team = {r["team"]: r for r in rows}
+    # Only the May 10 game counts as of 2026-05-15: Aces 1-0, Liberty 0-1.
+    assert (by_team["Aces"]["wins"], by_team["Aces"]["losses"]) == (1, 0)
+    assert (by_team["Liberty"]["wins"], by_team["Liberty"]["losses"]) == (0, 1)

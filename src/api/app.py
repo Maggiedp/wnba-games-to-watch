@@ -438,7 +438,7 @@ async def get_playoff_odds(date: str = Query(default=None)):
         if not recs:
             return []
         teams = get_teams_by_ids(session, set(recs.keys()))
-        records = get_team_records(session, int(date[:4]))
+        records = get_team_records(session, int(date[:4]), as_of_date=date)
         rows = [
             PlayoffOddsResponse(
                 team=teams[tid].name,

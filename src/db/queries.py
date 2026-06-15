@@ -406,26 +406,40 @@ def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]
 
 
 def get_team_records(
-    session: Session, season_year: int = 2026
+    session: Session, season_year: int = 2026, as_of_date: str | None = None
 ) -> dict[int, tuple[int, int]]:
     """Regular-season W-L record per team for a season, from completed games.
 
     Returns {team_id: (wins, losses)}; teams with no completed regular-season
     games are absent (callers default to 0-0).
 
-    Deliberately strict on `season_type == 2` (NOT the null-count-conditional
-    filter `get_completed_games` uses): a W-L record is a precise standings
-    claim, so fail-closed and exclude any NULL-`season_type` legacy row rather
-    than risk miscounting. For 2026 the backfill is complete, so this excludes
-    nothing real.
+    `as_of_date` (a YYYY-MM-DD string) bounds the record to games played
+    *strictly before* that date, so a record paired with a given day's
+    playoff-odds snapshot reflects only the games those odds were computed from
+    (the daily odds are computed each morning, before that day's games). `<`
+    not `<=` because the snapshot for date D predates D's games. For the live
+    path (D = today) the bound changes nothing — today's games are uncompleted
+    (no `winner_id`) and already excluded. When None, counts the whole season.
+
+    Deliberately strict on `season_type == 2`: a W-L record is a precise
+    standings claim, so any non-regular-season row is excluded. The 2026 DB
+    does carry NULL-`season_type` rows, but they are uncompleted preseason
+    placeholders (no `winner_id`) — already removed by the `winner_id` filter,
+    and if one ever completed, excluding it is still correct (it's preseason,
+    not a regular-season result). This is intentionally NOT the looser
+    null-count-conditional filter `get_completed_games` uses: that path keeps
+    NULL rows for the completed *archive*, but for a W-L record a stray
+    preseason game would be a miscount.
     """
-    games = (
+    query = (
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
         .filter(Game.season_type == 2)
-        .all()
     )
+    if as_of_date is not None:
+        query = query.filter(Game.date < as_of_date)
+    games = query.all()
     records: dict[int, list[int]] = {}
     for g in games:
         # winner_id is always team_a_id or team_b_id (enforced on write).
