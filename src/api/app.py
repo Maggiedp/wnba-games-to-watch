@@ -29,7 +29,6 @@ from src.db.queries import (
     get_daily_rankings,
     get_elo_history,
     get_playoff_probabilities,
-    get_playoff_probability_history,
     get_rankings_by_broadcaster,
     get_team_records,
     get_teams_by_ids,
@@ -493,32 +492,6 @@ async def get_elo_history_endpoint(season: int = Query(default=None)):
                 continue
             out.setdefault(t.name, []).append(
                 {"date": r.date, "rating": round(r.rating, 1)}
-            )
-            abbrevs.setdefault(t.name, t.abbreviation or "")
-        return {"season": season, "teams": out, "abbrevs": abbrevs}
-    finally:
-        session.close()
-
-
-@app.get("/api/playoff-odds-history")
-async def get_playoff_odds_history_endpoint(season: int = Query(default=None)):
-    """Per-team make-playoffs probability over a season (DB-only; never ESPN)."""
-    if season is None:
-        season = int(today_et()[:4])
-    session = get_session()
-    try:
-        rows = get_playoff_probability_history(session, season)
-        if not rows:
-            return {"season": season, "teams": {}}
-        teams = get_teams_by_ids(session, {r.team_id for r in rows})
-        out: dict[str, list[dict]] = {}
-        abbrevs: dict[str, str] = {}
-        for r in rows:
-            t = teams.get(r.team_id)
-            if t is None:
-                continue
-            out.setdefault(t.name, []).append(
-                {"date": r.date, "value": round(r.probability, 4)}
             )
             abbrevs.setdefault(t.name, t.abbreviation or "")
         return {"season": season, "teams": out, "abbrevs": abbrevs}
