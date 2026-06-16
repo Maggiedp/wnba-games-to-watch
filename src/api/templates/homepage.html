@@ -79,8 +79,6 @@
             #playoff-section {
                 margin: 24px 0;
             }
-            .playoff-trend { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
-            .playoff-trend-title { font-family: var(--display); font-size: 1rem; font-weight: 600; color: var(--navy); margin: 0 0 12px; }
             .playoff-picture {
                 margin: 16px 0 0;
             }
@@ -1113,11 +1111,6 @@
                             </thead>
                             <tbody id="playoff-tbody"></tbody>
                         </table>
-                        <div class="playoff-trend">
-                            <div class="playoff-trend-title">Make-playoffs odds over time</div>
-                            <div id="playoff-chart" class="chart"></div>
-                            <div id="playoff-legend" class="legend"></div>
-                        </div>
                     </div>
                 </div>
             </section>
@@ -1468,29 +1461,7 @@
                     content.hidden = !next;
                     btn.querySelector('.playoff-toggle-text').textContent =
                         next ? 'Hide playoff picture' : 'Show playoff picture';
-                    if (next) loadPlayoffTrend();
                 });
-            }
-
-            let playoffTrendLoaded = false;
-            async function loadPlayoffTrend() {
-                if (playoffTrendLoaded) return;
-                playoffTrendLoaded = true;
-                const mount = document.getElementById('playoff-chart');
-                const legend = document.getElementById('playoff-legend');
-                if (!mount || !legend) return;
-                mount.innerHTML = '<p class="empty">Loading…</p>';
-                try {
-                    const res = await fetch('/api/playoff-odds-history');
-                    if (!res.ok) throw new Error('HTTP ' + res.status);
-                    const data = await res.json();
-                    renderTeamTrendChart(mount, legend, data, {
-                        yMin: 0, yMax: 1,
-                        yFormat: v => Math.round(v * 100) + '%' });
-                } catch (e) {
-                    playoffTrendLoaded = false;  // allow retry on next expand
-                    mount.innerHTML = '<p class="empty">Could not load playoff odds history.</p>';
-                }
             }
 
             // Idempotent: sources options from the union of upcoming and
@@ -1862,8 +1833,6 @@
             }
 
 %%SHARED_JS%%
-
-%%LINE_CHART_JS%%
 
 %%HOMEPAGE_HELPERS_JS%%
 
