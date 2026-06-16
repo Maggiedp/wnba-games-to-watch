@@ -220,7 +220,7 @@ def test_rankings_page_renders(client):
     assert 'id="elo-chart"' in r.text
     assert 'id="elo-legend"' in r.text
     assert "WNBA Power Rankings" in r.text
-    assert "showRankDelta" in r.text  # arrows opted in here
+    assert "showRankDelta" not in r.text  # rank-movement arrows removed
     assert "/og-rankings.png" in r.text  # og card wired up
     assert r.text.lstrip().startswith("<!DOCTYPE")
     assert "%%" not in r.text  # all tokens substituted
