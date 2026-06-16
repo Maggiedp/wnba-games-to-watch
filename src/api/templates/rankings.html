@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>WNBA Power Rankings · %%SITE_TITLE%%</title>
-<meta name="description" content="%%SITE_TITLE%% power rankings: every WNBA team by Elo rating, with week-over-week movement.">
+<meta name="description" content="%%SITE_TITLE%% power rankings: every WNBA team by Elo rating, charted over the season.">
 
 <meta property="og:title" content="WNBA Power Rankings · %%SITE_TITLE%%">
-<meta property="og:description" content="Every WNBA team ranked by Elo rating, with week-over-week movement.">
+<meta property="og:description" content="Every WNBA team ranked by Elo rating, charted over the season.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="%%SITE_URL%%/rankings">
 <meta property="og:image" content="%%SITE_URL%%/og-rankings.png">
@@ -17,7 +17,7 @@
 <meta property="og:image:alt" content="WNBA power rankings by Elo rating">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="WNBA Power Rankings · %%SITE_TITLE%%">
-<meta name="twitter:description" content="Every WNBA team ranked by Elo rating, with week-over-week movement.">
+<meta name="twitter:description" content="Every WNBA team ranked by Elo rating, charted over the season.">
 <meta name="twitter:image" content="%%SITE_URL%%/og-rankings.png">
 
 %%SHARED_HEAD%%
@@ -41,8 +41,7 @@
   <section>
     <h2>Elo ratings over time</h2>
     <p class="desc">Each team's Elo rating entering every game this season.
-       Replayed from results — higher is stronger. Arrows show week-over-week
-       movement in the standings.</p>
+       Replayed from results — higher is stronger.</p>
     <div id="elo-chart" class="chart"><p class="empty">Loading…</p></div>
     <div id="elo-legend" class="legend"></div>
   </section>
@@ -65,7 +64,7 @@ async function loadElo() {
     for (const [name, pts] of Object.entries(data.teams || {})) {
       teams[name] = pts.map(p => ({ date: p.date, value: p.rating }));
     }
-    renderTeamTrendChart(mount, legend, { teams, abbrevs: data.abbrevs }, { showRankDelta: true });
+    renderTeamTrendChart(mount, legend, { teams, abbrevs: data.abbrevs });
   } catch (e) {
     mount.innerHTML = '<p class="empty">Could not load Elo history.</p>';
   }
