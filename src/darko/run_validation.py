@@ -60,8 +60,12 @@ def _build_stints(seasons) -> pd.DataFrame:
     arg-order-safe (derives home/away from pbp internally)."""
     all_rows = []
     for season in seasons:
-        pbp = load_pbp(season)
-        box = load_player_box(season)
+        try:
+            pbp = load_pbp(season)
+            box = load_player_box(season)
+        except Exception as e:  # one season's download shouldn't sink the run
+            print(f"  season {season} load failed: {e}; skipping")
+            continue
         games = (
             pbp[["game_id", "home_team_id", "away_team_id"]]
             .dropna()
