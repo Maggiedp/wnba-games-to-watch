@@ -49,3 +49,4 @@ docs/
 .claude/
 
 scripts/spikes/cache/
+src/darko/_cache/
