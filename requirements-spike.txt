@@ -1,0 +1,4 @@
+# Spike-only deps (DARKO data feasibility). NEVER add to requirements.txt — the
+# spike reads sportsdataverse/wehoop parquet; prod is untouched.
+pandas==2.2.2
+pyarrow==16.1.0

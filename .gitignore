@@ -47,3 +47,5 @@ docs/
 
 # Claude Code local agent tooling/config — local-only, never track
 .claude/
+
+scripts/spikes/cache/
