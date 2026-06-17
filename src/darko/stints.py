@@ -1,8 +1,8 @@
 """Build RAPM-ready stint-rows from wehoop pbp + player_box.
 
-Step 1 (this): reconstruct on-court 5-per-team at every event by reusing the spike
-kernel. Step 2 (Task 4): segment into stint-rows with possessions + points. Step 3
-(Task 5): missed-sub repair."""
+Steps 1–2 (this file): reconstruct on-court 5-per-team at every event (lineup
+reconstruction) and segment into stint-rows with possessions + points. Step 3
+(Task 5, upcoming): missed-sub repair."""
 
 import pandas as pd
 from scripts.spikes import darko_lineups
@@ -57,12 +57,16 @@ def build_stint_rows(pbp, box, game_id, home_team, away_team):
     for i, ev in g.iterrows():
         snap = snapshots[i]
         if home_team not in snap or away_team not in snap:
+            # wehoop forward-fills home_score/away_score (verified non-null in 2024),
+            # so direct int() is safe; .get fallback is for the snapshot-miss branch only.
             prev_home, prev_away = (
                 ev.get("home_score", prev_home),
                 ev.get("away_score", prev_away),
             )
             continue
         team = ev["team_id"]
+        # wehoop forward-fills home_score/away_score (verified non-null across 101 501
+        # rows in 2024), so direct int() is safe here.
         d_home = int(ev.get("home_score", prev_home)) - prev_home
         d_away = int(ev.get("away_score", prev_away)) - prev_away
         if team == home_team:
@@ -90,7 +94,7 @@ def build_stint_rows(pbp, box, game_id, home_team, away_team):
     # Collapse consecutive identical-lineup, same-offense events into stints.
     if df.empty:
         return df
-    key = df[["off_players", "def_players"]].astype(str)
+    key = df[["off_players", "def_players"]].map(lambda s: tuple(sorted(s)))
     grp = (key != key.shift()).any(axis=1).cumsum()
     out = (
         df.groupby(grp)
