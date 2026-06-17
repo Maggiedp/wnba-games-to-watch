@@ -57,4 +57,28 @@ def walk_forward_retrodiction(
     return {
         "mae": {m: float(np.mean(abs_err[m])) for m in models},
         "coverage_80": {m: covered[m] / counted[m] for m in ("box_only", "full")},
+        # per-prediction absolute errors, ALIGNED across models (element i is the
+        # same prediction event), for paired bootstrap of MAE deltas.
+        "abs_err": {m: np.asarray(abs_err[m], dtype=float) for m in models},
     }
+
+
+def bootstrap_mae_delta_ci(err_baseline, err_adjusted, n_boot=1000, seed=0, ci=0.95):
+    """Paired bootstrap CI of the MAE improvement (baseline - adjusted).
+
+    err_* are per-prediction absolute-error arrays, ALIGNED (element i is the same
+    prediction event for both). Resamples indices with replacement (paired), so the
+    same draws score both models. Positive = adjusted has the LOWER (better) MAE.
+    Returns (mean_delta, ci_low, ci_high). Mirrors
+    scripts/_calibration.bootstrap_brier_delta_ci."""
+    err_baseline = np.asarray(err_baseline, dtype=float)
+    err_adjusted = np.asarray(err_adjusted, dtype=float)
+    n = len(err_baseline)
+    rng = np.random.default_rng(seed)
+    deltas = np.empty(n_boot)
+    for i in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        deltas[i] = err_baseline[idx].mean() - err_adjusted[idx].mean()
+    alpha = (1.0 - ci) / 2.0
+    lo, hi = np.quantile(deltas, [alpha, 1.0 - alpha])
+    return float(deltas.mean()), float(lo), float(hi)
