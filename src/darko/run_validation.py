@@ -1,8 +1,12 @@
 """End-to-end DARKO-for-WNBA validation driver on REAL 2023-2025 wehoop data.
 
-Wires the whole offline model and prints the honest walk-forward retrodiction
-verdict (naive < box_only < full is the hypothesis). This is a driver, not a
+Wires the whole offline model and prints the walk-forward retrodiction verdict
+(naive < kalman < kalman_anchored is the hypothesis). This is a driver, not a
 library: readable top-to-bottom, no abstractions beyond what the wiring needs.
+
+NOTE: this is the CONFOUNDED first driver — its walk-forward target is the box
+model's own fitted value, so the RAPM-anchor comparison can't separate (see
+run_validation_clean.py + FINDINGS). Kept only for contrast.
 
 Run: python -m src.darko.run_validation
 """
@@ -97,7 +101,7 @@ def _build_signals(box_pool: pd.DataFrame, model: box_prior.BoxModel) -> pd.Data
 
 
 def _build_anchor(impacts, signals: pd.DataFrame, player_prior: pd.Series) -> dict:
-    """RAPM .total -> full's Kalman x0, made unit-coherent with the box signal.
+    """RAPM .total -> kalman_anchored's Kalman x0, unit-coherent with the box signal.
 
     The anchor is a per-100 RAPM impact; the Kalman OBSERVATIONS are per-game
     plus-minus signals. For the anchor to help, it must live on the signal's scale.
