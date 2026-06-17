@@ -10,9 +10,11 @@ def validate_game(pbp, box, game_id):
     rows = list(events.itertuples(index=False))
     cols = {c: i for i, c in enumerate(events.columns)}
 
-    # 1. Invariant: exactly 5 per team at every event.
+    # 1. Invariant: exactly 2 teams, each with exactly 5 players, at every event.
+    # The 2-team requirement is load-bearing: without it a snapshot missing a team
+    # (e.g. an unseeded team from incomplete starter flags) scores as valid.
     total = len(snaps)
-    bad = sum(1 for s in snaps if any(len(v) != 5 for v in s.values()))
+    bad = sum(1 for s in snaps if len(s) != 2 or any(len(v) != 5 for v in s.values()))
     invariant_ok = (total - bad) / total if total else 0.0
 
     # 2. Starters: P1 seed loaded as exactly 5 per team for two teams.
