@@ -50,7 +50,11 @@ def test_rapm_recovers_offense_and_defense_ordering():
 
 def test_rapm_scales_without_dense_weight_matrix():
     # 20k rows would be a 20k x 20k (~3GB) np.diag -> must NOT be formed.
+    import math
+
     stints, _, _ = _synthetic_stints(n=20000, seed=2)
     prior = pd.Series({p: 0.0 for p in PLAYERS})
     impacts = fit_rapm(stints, prior_off=prior, prior_def=prior, lam=1.0)
     assert len(impacts) == len(PLAYERS)
+    assert all(math.isfinite(pi.off_sd) and pi.off_sd >= 0 for pi in impacts)
+    assert all(math.isfinite(pi.def_sd) and pi.def_sd >= 0 for pi in impacts)

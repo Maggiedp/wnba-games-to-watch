@@ -10,7 +10,7 @@ from src.darko.types import PlayerImpact
 
 def fit_rapm(
     stints: pd.DataFrame, prior_off: pd.Series, prior_def: pd.Series, lam: float = 1.0
-) -> list:
+) -> list[PlayerImpact]:
     players = sorted(set().union(*stints["off_players"], *stints["def_players"]))
     idx = {p: i for i, p in enumerate(players)}
     n_p = len(players)
@@ -21,7 +21,11 @@ def fit_rapm(
     # in +points-prevented units — reported directly, no output flip).
     X = np.zeros((n, 2 * n_p))
     y = np.zeros(n)
-    w = stints.get("weight", pd.Series(np.ones(n))).to_numpy(dtype=float)
+    w = (
+        stints["weight"].to_numpy(dtype=float)
+        if "weight" in stints.columns
+        else np.ones(n)
+    )
     w = w * stints["possessions"].to_numpy(dtype=float)
     for r, (_, row) in enumerate(stints.iterrows()):
         for p in row["off_players"]:
@@ -45,9 +49,10 @@ def fit_rapm(
     A = X.T @ Xw + lam * np.eye(2 * n_p)
     b = X.T @ (w * y) + lam * mu
     beta = np.linalg.solve(A, b)
-    # crude per-coef SD from the ridge posterior covariance diagonal
+    # SD scales by residual variance from the ridge posterior covariance diagonal
     cov = np.linalg.inv(A)
-    sd = np.sqrt(np.clip(np.diag(cov), 0, None)) * np.std(y)
+    resid_var = float(np.mean((X @ beta - y) ** 2))
+    sd = np.sqrt(np.clip(np.diag(cov), 0, None) * resid_var)
 
     out = []
     for p in players:
