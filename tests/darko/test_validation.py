@@ -151,7 +151,7 @@ def test_clustered_bootstrap_brackets_known_improvement():
     cluster_ids = np.repeat(np.arange(40), 10)
     err_base = np.abs(rng.normal(0, 1, size=400)) + 0.5
     err_adj = np.abs(rng.normal(0, 1, size=400))
-    mean_d, lo, hi = bootstrap_mae_delta_ci_clustered(
+    mean_d, _, _ = bootstrap_mae_delta_ci_clustered(
         err_base, err_adj, cluster_ids, n_boot=500, seed=2
     )
     assert mean_d > 0
