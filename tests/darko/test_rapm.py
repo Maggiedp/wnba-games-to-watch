@@ -29,16 +29,23 @@ def _synthetic_stints(n=4000, seed=1):
     return pd.DataFrame(rows), true_off, true_def
 
 
-def test_rapm_recovers_relative_ordering():
+def _spearman(a_by_player, b_by_player, players):
+    a = pd.Series({p: a_by_player[p] for p in players})
+    b = pd.Series({p: b_by_player[p] for p in players})
+    # Spearman = Pearson of ranks; computed via pandas rank to avoid a scipy dep.
+    return a.rank().corr(b.rank())
+
+
+def test_rapm_recovers_offense_and_defense_ordering():
     stints, true_off, true_def = _synthetic_stints()
     prior = pd.Series({p: 0.0 for p in PLAYERS})
     impacts = fit_rapm(stints, prior_off=prior, prior_def=prior, lam=1.0)
-    est = {pi.player_id: pi.off for pi in impacts}
-    # rank correlation between estimated and true offensive impact is strong
-    order_true = sorted(PLAYERS, key=lambda p: true_off[p])
-    order_est = sorted(PLAYERS, key=lambda p: est[p])
-    agree = sum(a == b for a, b in zip(order_true, order_est))
-    assert agree >= len(PLAYERS) // 2
+    est_off = {pi.player_id: pi.off for pi in impacts}
+    est_def = {pi.player_id: pi.def_ for pi in impacts}
+    # Rank-correlation recovery (the model's stated purpose), deterministic at seed 1.
+    assert _spearman(true_off, est_off, PLAYERS) >= 0.5
+    # Defense guard: a correct sign means good defenders (high true_def) rank high.
+    assert _spearman(true_def, est_def, PLAYERS) >= 0.5
 
 
 def test_rapm_scales_without_dense_weight_matrix():
