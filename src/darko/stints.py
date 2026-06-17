@@ -109,3 +109,35 @@ def build_stint_rows(pbp, box, game_id, home_team, away_team):
         .reset_index(drop=True)
     )
     return out[out["possessions"] > 0].reset_index(drop=True)
+
+
+def minutes_discrepancy(recon_seconds: dict, box, game_id):
+    """{athlete_id: reconstructed_seconds - box_seconds} for players whose
+    reconstructed on-court time overruns the box. Positive = overrun (missed sub).
+    Used to down-weight games with poor sub fidelity in RAPM."""
+    g = box[(box["game_id"] == game_id) & box["minutes"].notna()]
+    truth = dict(zip(g["athlete_id"].astype(int), g["minutes"].astype(float) * 60.0))
+    out = {}
+    for pid, box_s in truth.items():
+        recon_s = recon_seconds.get(int(pid), 0.0)
+        if recon_s - box_s > 0:
+            out[int(pid)] = recon_s - box_s
+    return out
+
+
+def game_reliability(
+    recon_seconds: dict, box, game_id, tol_seconds: float = 75.0
+) -> float:
+    """Fraction of checked players whose reconstructed minutes reconcile within tol.
+    A per-game weight in [0,1] for RAPM (Task 7). Mirrors the spike's minutes-ok
+    metric so RAPM trusts clean games more than ragged ones."""
+    g = box[(box["game_id"] == game_id) & box["minutes"].notna()]
+    truth = dict(zip(g["athlete_id"].astype(int), g["minutes"].astype(float) * 60.0))
+    checked = ok = 0
+    for pid, box_s in truth.items():
+        if box_s <= 0:
+            continue
+        checked += 1
+        if abs(recon_seconds.get(int(pid), 0.0) - box_s) <= tol_seconds:
+            ok += 1
+    return ok / checked if checked else 0.0
