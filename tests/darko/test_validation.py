@@ -21,3 +21,22 @@ def test_full_and_box_beat_naive_on_drifting_player():
     assert res["mae"]["box_only"] < res["mae"]["naive"]
     assert "full" in res["mae"]
     assert 0.6 <= res["coverage_80"]["box_only"] <= 0.95
+
+
+def test_full_uses_anchor_and_drift():
+    # Two games; anchor seeds full's x0=5.0 (box_only starts at 0); a drift entry
+    # lifts the game-1 predict by 0.5. With signals at/near 5, full should beat box.
+    df = pd.DataFrame(
+        [
+            {"athlete_id": 1, "game_idx": 0, "signal": 5.0},
+            {"athlete_id": 1, "game_idx": 1, "signal": 5.5},
+        ]
+    )
+    res = walk_forward_retrodiction(
+        df,
+        q=0.1,
+        r=1.0,
+        anchor={1: 5.0},
+        drift={(1, 1): 0.5},
+    )
+    assert res["mae"]["full"] < res["mae"]["box_only"]

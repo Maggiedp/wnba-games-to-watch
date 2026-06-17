@@ -24,8 +24,8 @@ def walk_forward_retrodiction(
     drift = drift or {}
     models = ["naive", "box_only", "full"]
     abs_err = {m: [] for m in models}
-    covered = {m: 0 for m in models}
-    counted = {m: 0 for m in models}
+    covered = {m: 0 for m in ("box_only", "full")}
+    counted = {m: 0 for m in ("box_only", "full")}
     z80 = NormalDist().inv_cdf(0.5 + 0.80 / 2)
 
     for pid, grp in signals.sort_values("game_idx").groupby("athlete_id"):
