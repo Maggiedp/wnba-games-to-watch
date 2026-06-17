@@ -59,25 +59,38 @@ def run_depth():
             results.append({"season": season, "status": f"no data: {e}"})
             continue
         n_sub = int((pbp["type_text"] == "Substitution").sum())
-        gid = int(pbp.sort_values("sequence_number")["game_id"].iloc[0])
-        try:
-            rep = validate_game(pbp, box, gid)
+        # Sample games spread across the season (NOT a single opener) — a season's
+        # verdict must not hinge on one possibly-malformed early game.
+        gids = list(pbp.sort_values("sequence_number")["game_id"].drop_duplicates())
+        sample = gids[:: max(1, len(gids) // 8)][:8]
+        inv, mins = [], []
+        for g in sample:
+            try:
+                rep = validate_game(pbp, box, int(g))
+                inv.append(rep["invariant_ok_frac"])
+                mins.append(rep["minutes_ok_frac"])
+            except Exception:
+                pass
+        if not inv:
             results.append(
                 {
                     "season": season,
                     "sub_events": n_sub,
-                    "invariant_ok_frac": rep["invariant_ok_frac"],
-                    "minutes_ok_frac": rep["minutes_ok_frac"],
+                    "status": "reconstruct failed for whole sample",
                 }
             )
-        except Exception as e:
-            results.append(
-                {
-                    "season": season,
-                    "sub_events": n_sub,
-                    "status": f"reconstruct failed: {e}",
-                }
-            )
+            continue
+        results.append(
+            {
+                "season": season,
+                "sub_events": n_sub,
+                "games_sampled": len(inv),
+                "invariant_mean": round(sum(inv) / len(inv), 3),
+                "invariant_worst": round(min(inv), 3),
+                "minutes_mean": round(sum(mins) / len(mins), 3),
+                "minutes_worst": round(min(mins), 3),
+            }
+        )
     print(json.dumps(results, indent=2, default=str))
 
 
