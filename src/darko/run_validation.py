@@ -169,22 +169,22 @@ def main():
     mae = res["mae"]
     cov = res["coverage_80"]
     print("\n--- Retrodiction MAE (out-of-sample, walk-forward) ---")
-    print(f"  naive    : {mae['naive']:.4f}")
-    print(f"  box_only : {mae['box_only']:.4f}")
-    print(f"  full     : {mae['full']:.4f}")
+    print(f"  naive           : {mae['naive']:.4f}")
+    print(f"  kalman          : {mae['kalman']:.4f}")
+    print(f"  kalman_anchored : {mae['kalman_anchored']:.4f}")
     print("\n--- 80% interval coverage ---")
-    print(f"  box_only : {cov['box_only']:.3f}")
-    print(f"  full     : {cov['full']:.3f}")
+    print(f"  kalman          : {cov['kalman']:.3f}")
+    print(f"  kalman_anchored : {cov['kalman_anchored']:.3f}")
 
-    box_vs_naive = mae["naive"] - mae["box_only"]
-    full_vs_box = mae["box_only"] - mae["full"]
+    box_vs_naive = mae["naive"] - mae["kalman"]
+    full_vs_box = mae["kalman"] - mae["kalman_anchored"]
     print("\n--- VERDICT ---")
     print(
-        f"  box_only beats naive? {box_vs_naive > 0}  "
+        f"  kalman beats naive? {box_vs_naive > 0}  "
         f"(delta {box_vs_naive:+.4f}, lower MAE is better)"
     )
     print(
-        f"  full beats box_only?  {full_vs_box > 0}  "
+        f"  kalman_anchored beats kalman?  {full_vs_box > 0}  "
         f"(delta {full_vs_box:+.4f}, lower MAE is better)"
     )
 

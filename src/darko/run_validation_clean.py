@@ -215,31 +215,33 @@ def main():
     )
 
     mae = res_scaled["mae"]
-    mae_raw_full = res_raw["mae"]["full"]
+    mae_raw_full = res_raw["mae"]["kalman_anchored"]
     cov = res_scaled["coverage_80"]
-    cov_raw_full = res_raw["coverage_80"]["full"]
+    cov_raw_full = res_raw["coverage_80"]["kalman_anchored"]
 
     print("\n--- Retrodiction MAE on 2025 (out-of-sample, walk-forward) ---")
     print(f"  naive          : {mae['naive']:.4f}")
-    print(f"  box_only       : {mae['box_only']:.4f}")
-    print(f"  full (scaled)  : {mae['full']:.4f}")
-    print(f"  full_raw       : {mae_raw_full:.4f}")
+    print(f"  kalman         : {mae['kalman']:.4f}")
+    print(f"  kalman_anchored (scaled)  : {mae['kalman_anchored']:.4f}")
+    print(f"  kalman_anchored_raw       : {mae_raw_full:.4f}")
     print("\n--- 80% interval coverage ---")
-    print(f"  box_only       : {cov['box_only']:.3f}")
-    print(f"  full (scaled)  : {cov['full']:.3f}")
-    print(f"  full_raw       : {cov_raw_full:.3f}")
+    print(f"  kalman         : {cov['kalman']:.3f}")
+    print(f"  kalman_anchored (scaled)  : {cov['kalman_anchored']:.3f}")
+    print(f"  kalman_anchored_raw       : {cov_raw_full:.3f}")
 
     # ---- Bootstrap CIs (the headline). abs_err arrays are aligned per model. ----
     ab = res_scaled["abs_err"]
     ab_raw = res_raw["abs_err"]
-    d_bn, lo_bn, hi_bn = bootstrap_mae_delta_ci(ab["naive"], ab["box_only"])
-    d_fb, lo_fb, hi_fb = bootstrap_mae_delta_ci(ab["box_only"], ab["full"])
-    d_fbr, lo_fbr, hi_fbr = bootstrap_mae_delta_ci(ab_raw["box_only"], ab_raw["full"])
+    d_bn, lo_bn, hi_bn = bootstrap_mae_delta_ci(ab["naive"], ab["kalman"])
+    d_fb, lo_fb, hi_fb = bootstrap_mae_delta_ci(ab["kalman"], ab["kalman_anchored"])
+    d_fbr, lo_fbr, hi_fbr = bootstrap_mae_delta_ci(
+        ab_raw["kalman"], ab_raw["kalman_anchored"]
+    )
 
     print("\n--- Bootstrap 95% CIs (positive delta = adjusted has LOWER MAE) ---")
-    print(_fmt_ci("box_only vs naive", d_bn, lo_bn, hi_bn))
-    print(_fmt_ci("full(scaled) vs box_only", d_fb, lo_fb, hi_fb))
-    print(_fmt_ci("full_raw vs box_only", d_fbr, lo_fbr, hi_fbr))
+    print(_fmt_ci("kalman vs naive", d_bn, lo_bn, hi_bn))
+    print(_fmt_ci("kalman_anchored(scaled) vs kalman", d_fb, lo_fb, hi_fb))
+    print(_fmt_ci("kalman_anchored_raw vs kalman", d_fbr, lo_fbr, hi_fbr))
 
     sig_bn = lo_bn > 0 or hi_bn < 0
     sig_fb = lo_fb > 0 or hi_fb < 0
@@ -247,18 +249,21 @@ def main():
 
     print("\n=== VERDICT ===")
     print(
-        f"  box_only beats naive?      {'YES' if d_bn > 0 else 'no'}  "
+        f"  kalman beats naive?        {'YES' if d_bn > 0 else 'no'}  "
         f"(delta {d_bn:+.4f}, CI [{lo_bn:+.4f},{hi_bn:+.4f}], significant={sig_bn})"
     )
     print(
-        f"  full(scaled) beats box?    {'YES' if d_fb > 0 else 'no'}  "
+        f"  anchored(scaled) beats kalman? {'YES' if d_fb > 0 else 'no'}  "
         f"(delta {d_fb:+.4f}, CI [{lo_fb:+.4f},{hi_fb:+.4f}], significant={sig_fb})"
     )
     print(
-        f"  full_raw beats box?        {'YES' if d_fbr > 0 else 'no'}  "
+        f"  anchored_raw beats kalman? {'YES' if d_fbr > 0 else 'no'}  "
         f"(delta {d_fbr:+.4f}, CI [{lo_fbr:+.4f},{hi_fbr:+.4f}], significant={sig_fbr})"
     )
-    print(f"  coverage_80 box_only={cov['box_only']:.3f} full={cov['full']:.3f}")
+    print(
+        f"  coverage_80 kalman={cov['kalman']:.3f} "
+        f"anchored={cov['kalman_anchored']:.3f}"
+    )
 
     box_msg = (
         "Kalman smoothing significantly beats naive last-game"
