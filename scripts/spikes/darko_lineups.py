@@ -4,7 +4,6 @@ sequence. Lineups carry across periods (ESPN logs period-boundary subs as events
 the start of the period)."""
 
 import pandas as pd
-from scripts.spikes import darko_fetch as fetch  # noqa: F401  (kept for module symmetry)
 
 SUB = "Substitution"
 
@@ -19,11 +18,13 @@ def starters_by_team(box: pd.DataFrame, game_id: int) -> dict[int, set[int]]:
 
 
 def walk_lineups(pbp: pd.DataFrame, box: pd.DataFrame, game_id: int):
-    """Return (events, snapshots) where events is the game's pbp rows ordered by
-    sequence_number and snapshots[i] = {team_id: frozenset(on_court 5)} AFTER
-    event i. Seeds from box starters; applies each Substitution."""
+    """Return (events, snapshots, seed) where events is the game's pbp rows ordered
+    by sequence_number, snapshots[i] = {team_id: frozenset(on_court 5)} AFTER
+    event i, and seed is the opening {team_id: starters} (returned so callers don't
+    recompute it). Seeds from box starters; applies each Substitution."""
     events = pbp[pbp["game_id"] == game_id].sort_values("sequence_number")
-    on_court = {t: set(s) for t, s in starters_by_team(box, game_id).items()}
+    seed = starters_by_team(box, game_id)
+    on_court = {t: set(s) for t, s in seed.items()}
     snapshots = []
     for _, r in events.iterrows():
         if r["type_text"] == SUB and pd.notna(r["team_id"]):
@@ -36,4 +37,4 @@ def walk_lineups(pbp: pd.DataFrame, box: pd.DataFrame, game_id: int):
                 if a_in is not None:
                     on_court[t].add(a_in)
         snapshots.append({t: frozenset(s) for t, s in on_court.items()})
-    return events, snapshots
+    return events, snapshots, seed

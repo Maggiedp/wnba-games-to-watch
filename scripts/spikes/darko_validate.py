@@ -6,7 +6,7 @@ from scripts.spikes import darko_lineups as lineups
 
 
 def validate_game(pbp, box, game_id):
-    events, snaps = lineups.walk_lineups(pbp, box, game_id)
+    events, snaps, seed = lineups.walk_lineups(pbp, box, game_id)
     rows = list(events.itertuples(index=False))
     cols = {c: i for i, c in enumerate(events.columns)}
 
@@ -17,9 +17,7 @@ def validate_game(pbp, box, game_id):
     bad = sum(1 for s in snaps if len(s) != 2 or any(len(v) != 5 for v in s.values()))
     invariant_ok = (total - bad) / total if total else 0.0
 
-    # 2. Starters: P1 seed loaded as exactly 5 per team for two teams.
-    seed = lineups.starters_by_team(box, game_id)
-    box_starters = set().union(*seed.values()) if seed else set()
+    # 2. Starters: P1 seed (from walk_lineups) loaded as exactly 5 per team, 2 teams.
     starters_ok = all(len(v) == 5 for v in seed.values()) and len(seed) == 2
 
     # 3. Minutes reconcile: integrate on-court seconds per player vs box minutes.
@@ -32,7 +30,6 @@ def validate_game(pbp, box, game_id):
         "invariant_ok_frac": invariant_ok,
         "invariant_bad_events": bad,
         "starters_ok": starters_ok,
-        "n_box_starters": len(box_starters),
         "minutes_ok_frac": minutes_ok,
         "minute_misses": detail[:10],
     }
@@ -62,7 +59,7 @@ def _on_court_seconds(rows, cols, snaps):
 
 def _box_minutes(box, game_id):
     g = box[(box["game_id"] == game_id) & box["minutes"].notna()]
-    return {int(r["athlete_id"]): float(r["minutes"]) * 60.0 for _, r in g.iterrows()}
+    return dict(zip(g["athlete_id"].astype(int), g["minutes"].astype(float) * 60.0))
 
 
 def _reconcile_minutes(secs, box, game_id, tol_seconds):

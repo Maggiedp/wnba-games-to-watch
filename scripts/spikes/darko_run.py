@@ -61,7 +61,7 @@ def run_depth():
         n_sub = int((pbp["type_text"] == "Substitution").sum())
         # Sample games spread across the season (NOT a single opener) — a season's
         # verdict must not hinge on one possibly-malformed early game.
-        gids = list(pbp.sort_values("sequence_number")["game_id"].drop_duplicates())
+        gids = fetch.game_ids(season)
         sample = gids[:: max(1, len(gids) // 8)][:8]
         inv, mins = [], []
         for g in sample:
