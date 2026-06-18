@@ -81,13 +81,19 @@ def _fetch_json_cached(url: str, cache_path: str) -> dict:
 
 
 def wnba_game_ids(season: int) -> list[str]:
-    """Completed-game (stt == "Final") game ids for a season, in schedule order."""
+    """Completed regular-season + playoff game ids for a season, schedule order.
+
+    WNBA game ids are 10 digits "10 S YY NNNNN"; the 3rd char (gid[2]) is the
+    season type: 1=preseason, 2=regular, 3=All-Star, 4=playoffs, 5=other
+    exhibition. We keep ONLY S in {2, 4} (regular season + playoffs) so
+    exhibition/All-Star/preseason games don't leak into the train/test sets.
+    """
     cache_path = os.path.join(_CACHE_DIR, "schedule", f"{season}_full_schedule.json")
     data = _fetch_json_cached(_SCHEDULE_URL.format(season=season), cache_path)
     ids: list[str] = []
     for month in data["lscd"]:
         for g in month["mscd"]["g"]:
-            if g.get("stt") == "Final":
+            if g.get("stt") == "Final" and g["gid"][2] in ("2", "4"):
                 ids.append(g["gid"])
     return ids
 

@@ -454,13 +454,27 @@ def main():
         else "the box model does NOT beat pure recency (CI straddles 0) — "
         "it doesn't earn its place over a recency baseline on this target"
     )
-    rapm_msg = (
-        "the RAPM anchor significantly improves on recency"
-        if (sig_ar or sig_arr)
-        else "the RAPM anchor does NOT earn its keep — rapm_anchored is "
-        "indistinguishable from recency (scaled and raw CIs both straddle 0), "
-        "now under correctly-wider athlete-clustered CIs"
-    )
+    # Direction-aware. positive delta = lower/better MAE (improves on recency),
+    # negative delta = higher/worse MAE (harms vs recency). The scaled anchor is
+    # the HEADLINE model; the raw anchor is a sensitivity check. A significant
+    # delta only earns the "improves" message if it is significant in the
+    # POSITIVE direction; a headline anchor that is significantly NEGATIVE is a
+    # harm, not an improvement; a raw-only-negative with a null headline is the
+    # "does NOT earn its keep" case (raw anchor actually worse).
+    sig_pos_ar = sig_ar and d_ar > 0
+    sig_pos_arr = sig_arr and d_arr > 0
+    sig_neg_ar = sig_ar and d_ar < 0
+    if sig_pos_ar or sig_pos_arr:
+        rapm_msg = "the RAPM anchor significantly improves on recency"
+    elif sig_neg_ar:
+        rapm_msg = "the RAPM anchor significantly HARMS prediction (worse than recency)"
+    else:
+        rapm_msg = (
+            "the RAPM anchor does NOT earn its keep — indistinguishable from "
+            "(or worse than) recency (neither scaled nor raw delta is "
+            "significantly positive), now under correctly-wider "
+            "athlete-clustered CIs"
+        )
     print(f"\n  CONCLUSION: {recency_msg}; {box_msg}; {rapm_msg}.")
 
 
