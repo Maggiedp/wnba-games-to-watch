@@ -193,25 +193,28 @@ def _build_test_frame(
 
 
 def _build_anchor_scaled(impacts, player_prior: pd.Series, k: float) -> dict:
-    """RAPM .total (per-100) -> per-game anchor via the FIXED train constant k.
+    """All anchors in PER-GAME units (the Kalman observes per-game plus_minus).
 
-    anchor[pid] = rapm_total[pid] * k. Players RAPM didn't estimate fall back to
-    player_prior[pid] * k. NOTE on units: player_prior is the box regression's
-    fitted plus-minus per game-box-line (already per-game, plus-minus units),
-    so multiplying it by k slightly under-scales those fallback players; we
-    accept this as a documented, conservative approximation rather than mix two
-    unit systems in one anchor dict. The fallback only fires for players with no
-    2023-24 stint coverage, a minority — and the raw-anchor sensitivity run
-    (`rapm_anchored_raw`, raw unscaled totals) brackets the scaling choice."""
+    RAPM players: anchor[pid] = rapm_total[pid] (per-100) * k  -> per-game. Players
+    RAPM didn't estimate fall back to player_prior[pid], which is the box
+    regression's fitted plus-minus per game-box-line and is ALREADY per-game — so
+    the fallback uses it DIRECTLY (no * k). The previous code multiplied the
+    fallback by k as well, double-scaling those players (per-game / k-ish), which
+    under-scaled every no-RAPM-coverage anchor. Both branches now land in per-game
+    units, consistent with the Kalman observation scale."""
     anchor = {imp.player_id: imp.total * k for imp in impacts}
     for pid, val in player_prior.items():
-        anchor.setdefault(int(pid), float(val) * k)
+        anchor.setdefault(int(pid), float(val))
     return anchor
 
 
 def _build_anchor_raw(impacts, player_prior: pd.Series) -> dict:
-    """Sensitivity: RAW unscaled RAPM total as the anchor (no per-game scaling).
-    Players RAPM didn't estimate fall back to the raw player_prior."""
+    """Sensitivity: RAW unscaled RAPM total (per-100) as the anchor, with NO
+    per-game scaling. This is deliberately an upper-magnitude bracket on the
+    scaling choice — it over-states RAPM's anchor by ~1/k vs the scaled run.
+    Fallback players use the raw per-game player_prior; the two branches are thus
+    in different unit systems on purpose (this run exists only to show the scaled
+    anchor's verdict is insensitive to the scaling, not to be unit-correct)."""
     anchor = {imp.player_id: imp.total for imp in impacts}
     for pid, val in player_prior.items():
         anchor.setdefault(int(pid), float(val))
@@ -247,14 +250,24 @@ def main():
     n_games = train_stints["game_id"].nunique() if not train_stints.empty else 0
     print(f"  train stint-rows: {len(train_stints)}  (games covered: {n_games})")
 
-    print("Computing TRAIN box player_prior + fitting ridge RAPM ...")
+    print("Computing TRAIN box player_prior ...")
     prior = box_prior.player_prior(model, train_box)
-    impacts = rapm.fit_rapm(train_stints, prior, prior, lam=LAM)
-    print(f"  RAPM estimated {len(impacts)} players (lam={LAM})")
 
+    # k must be computed BEFORE fit_rapm: the RAPM ridge target is per-100
+    # (100*points/possessions), but `prior` (box model fitted plus_minus) is in
+    # PER-GAME units. k only depends on train_stints (not on RAPM), so compute it
+    # first and rescale the prior into per-100 before it enters the ridge.
     print("Estimating fixed per-100 -> per-game scaling k (TRAIN only) ...")
     k = _estimate_k(train_stints)
     print(f"  k = mean on-court possessions per player-game / 100 = {k:.4f}")
+
+    # UNIT CONTRACT: per_game = per_100 * k, so per_100 = per_game / k. The RAPM
+    # ridge prior mean must be in the SAME per-100 units as its target — pass the
+    # per-game box prior divided by k for BOTH offense and defense priors.
+    prior_per100 = prior / k
+    print("Fitting ridge RAPM (prior rescaled per-game -> per-100 by /k) ...")
+    impacts = rapm.fit_rapm(train_stints, prior_per100, prior_per100, lam=LAM)
+    print(f"  RAPM estimated {len(impacts)} players (lam={LAM})")
 
     # ---- TEST: build ONE sorted 2025 frame, two aligned streams ----
     print(f"\nLoading TEST played box for {TEST_SEASON} ...")

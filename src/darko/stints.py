@@ -69,14 +69,31 @@ def build_stint_rows(pbp, box, game_id, home_team, away_team):
         # rows in 2024), so direct int() is safe here.
         d_home = int(ev.get("home_score", prev_home)) - prev_home
         d_away = int(ev.get("away_score", prev_away)) - prev_away
-        if team == home_team:
+        # The possession OWNER (offense) for a possession-ending event is the event's
+        # team_id EXCEPT for a defensive rebound: in wehoop a "Defensive Rebound" row's
+        # team_id is the REBOUNDING (defending) team, but the possession that just ended
+        # belonged to the SHOOTER — the OTHER team. So charge that possession to the
+        # opponent of the rebounder. (Made shots / turnovers: poss_owner == team_id.)
+        if ev.get("type_text") == "Defensive Rebound":
+            if team == home_team:
+                poss_owner = away_team
+            elif team == away_team:
+                poss_owner = home_team
+            else:
+                poss_owner = team
+        else:
+            poss_owner = team
+        if poss_owner == home_team:
             off, deff = home_team, away_team
-        elif team == away_team:
+        elif poss_owner == away_team:
             off, deff = away_team, home_team
         else:
             prev_home, prev_away = prev_home + d_home, prev_away + d_away
             continue
-        pts = d_home if team == pbp_home_id else d_away
+        # Points stay tied to the SCORING team via the score delta. A defensive
+        # rebound scores nothing (score delta 0), so the shooter's possession
+        # correctly contributes possessions=1, points=0.
+        pts = d_home if poss_owner == pbp_home_id else d_away
         poss = 1.0 if _ends_possession(ev) else 0.0
         rows.append(
             {
