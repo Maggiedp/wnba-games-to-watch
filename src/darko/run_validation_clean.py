@@ -99,7 +99,15 @@ def _build_stints(seasons, label: str) -> pd.DataFrame:
     FAIL-CLOSED: a SEASON load failure is FATAL (you cannot validate on partial
     seasons — propagate). Per-game build failures are tolerated individually but
     counted; if more than MAX_SKIP_FRAC of attempted games fail, RAISE (systematic
-    loss must not silently bias the verdict). Explicit coverage is printed."""
+    loss must not silently bias the verdict). Explicit coverage is printed.
+
+    SCOPE CAVEAT: this gate catches CRASHES only (exceptions from a missing/corrupt
+    parquet or an unparseable game). It does NOT catch silent lineup DEGRADATION —
+    build_stint_rows returns sub-5-man rows for missed-sub games rather than raising,
+    so the ~2% missed-sub residual passes through as `with_stints`, not `skipped`.
+    That contamination was tested via RAPM reliability weighting and found immaterial
+    (it only handicaps RAPM; the null anchor verdict is robust) — see the model
+    FINDINGS doc. Don't rely on this gate as protection against lineup divergence."""
     all_rows = []
     attempted = skipped = with_stints = 0
     for season in seasons:
