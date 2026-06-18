@@ -94,29 +94,52 @@ KALMAN_Q = 0.05
 KALMAN_R = 9.0
 
 
-def _load_played_box(season: int) -> pd.DataFrame:
+def _load_played_box(season: int, label: str) -> pd.DataFrame:
     """Box rows for players who actually played, with a numeric plus_minus.
 
     Pools `wnba_stats_source.game_box` over every completed game in the season
     (pbpstats/data.wnba.com legacy feed). game_box already drops DNPs and returns
     a numeric plus_minus + the box stats in NBA-stack `pid` space; rename `pid`
     -> `athlete_id` so box_prior.fit / player_prior / _build_signals work
-    UNCHANGED. drop any residual rows missing a needed column (defensive)."""
+    UNCHANGED. drop any residual rows missing a needed column (defensive).
+
+    FAIL-CLOSED (symmetric with _build_stints): a SEASON with zero completed games
+    is FATAL. Per-game box-load failures (exception) or empty payloads are counted;
+    a game is "covered" only if it yields >=1 played row. If more than
+    MAX_SKIP_FRAC of the season's games are uncovered, RAISE before any model fit —
+    a silently-shrunk box set would bias both the box baseline and the RAPM prior
+    just as a partial stint set would. (Concretely a stub like a Final-status
+    All-Star game with no `pstsg` block raises in game_box and counts as uncovered;
+    the season-type filter already excludes those, so coverage should be ~1.0.)"""
     gids = wnba_stats_source.wnba_game_ids(season)
+    if not gids:
+        raise RuntimeError(
+            f"[{label} BOX] season {season} returned zero completed games — "
+            "refusing to validate on a missing season."
+        )
     frames = []
+    covered = 0
     for gid in gids:
         try:
-            frames.append(wnba_stats_source.game_box(gid, season))
+            gb = wnba_stats_source.game_box(gid, season)
         except Exception as e:
-            # Tolerate a per-game box-parse failure the same way _build_stints
-            # tolerates a per-game stint-build failure: contribute zero rows and
-            # let the season-level coverage guard (which caps the missing-game
-            # fraction at MAX_SKIP_FRAC) decide whether the loss is systematic.
-            # Concretely the 2025 WNBA All-Star game (gid 1032500001) is published
-            # to the data.wnba.com legacy feed as a Final-status stub with NO
-            # `pstsg` player-stats block, so game_box raises KeyError on it; it is
-            # an exhibition with no real box line and contributes nothing anyway.
             print(f"  box load failed for game {gid} (season {season}): {e}")
+            continue
+        if gb is not None and not gb.empty:
+            frames.append(gb)
+            covered += 1
+    attempted = len(gids)
+    skipped = attempted - covered
+    print(
+        f"  [{label} BOX season {season}] attempted={attempted} loaded={covered} "
+        f"skipped={skipped} coverage={covered / attempted:.4f}"
+    )
+    if skipped / attempted > MAX_SKIP_FRAC:
+        raise RuntimeError(
+            f"[{label} BOX season {season}] systematic box-load loss: "
+            f"{skipped}/{attempted} games ({skipped / attempted:.2%} > "
+            f"{MAX_SKIP_FRAC:.0%}) — refusing to fit on partial box data."
+        )
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     df = df.rename(columns={"pid": "athlete_id"})
     needed = STAT_COLS + [TARGET_COL, "minutes"]
@@ -284,7 +307,7 @@ def main():
     # ---- TRAIN: box model + RAPM on 2023+2024 only ----
     print(f"Loading + pooling TRAIN played box for {TRAIN_SEASONS} ...")
     train_box = pd.concat(
-        [_load_played_box(s) for s in TRAIN_SEASONS], ignore_index=True
+        [_load_played_box(s, label="TRAIN") for s in TRAIN_SEASONS], ignore_index=True
     )
     print(f"  train played box rows: {len(train_box)}")
 
@@ -319,30 +342,10 @@ def main():
 
     # ---- TEST: build ONE sorted 2025 frame, two aligned streams ----
     print(f"\nLoading TEST played box for {TEST_SEASON} ...")
-    # Fail-closed coverage check on the TEST path too: a silently-shrunk test box
-    # could bias the verdict just as a partial train load could. Compare games that
-    # yield played box rows against all completed games in the season's schedule.
-    test_attempted = len(wnba_stats_source.wnba_game_ids(TEST_SEASON))
-    if test_attempted == 0:
-        raise RuntimeError(
-            f"[TEST] season {TEST_SEASON} returned zero completed games — "
-            "refusing to validate on a missing season."
-        )
-    test_box = _load_played_box(TEST_SEASON)
-    test_covered = test_box["game_id"].nunique()
-    test_cov_frac = test_covered / test_attempted if test_attempted else 0.0
-    print(
-        f"  [TEST] completed games={test_attempted} games with played rows="
-        f"{test_covered} coverage={test_cov_frac:.4f}"
-    )
-    if (
-        test_attempted
-        and (test_attempted - test_covered) / test_attempted > MAX_SKIP_FRAC
-    ):
-        raise RuntimeError(
-            f"[TEST] systematic game loss: only {test_covered}/{test_attempted} "
-            f"games have played box rows — refusing to emit a verdict on partial data."
-        )
+    # The fail-closed coverage guard (zero-games-fatal + MAX_SKIP_FRAC) now lives
+    # INSIDE _load_played_box, so the TRAIN and TEST box paths are guarded
+    # symmetrically — a silently-shrunk box set raises before any verdict.
+    test_box = _load_played_box(TEST_SEASON, label="TEST")
     print(f"  test played box rows: {len(test_box)}")
 
     print("Building ONE sorted test frame (signal_pm + signal_box, aligned) ...")
