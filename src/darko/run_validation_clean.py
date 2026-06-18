@@ -45,16 +45,19 @@ Honest model labels:
 Run: python -m src.darko.run_validation_clean
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 
-from src.darko import box_prior, rapm
-from src.darko.ingest import load_pbp, load_player_box
-from src.darko.stints import build_stint_rows
+from src.darko import box_prior, rapm, wnba_stats_source
 from src.darko.validation import (
     bootstrap_mae_delta_ci_clustered,
     walk_forward_retrodiction,
 )
+
+# pbpstats per-game cache (shared with wnba_stats_source's default location).
+_STINT_CACHE_DIR = os.path.join(os.path.dirname(__file__), "_stats_cache")
 
 # Abort the run if more than this fraction of attempted games fail to build
 # stints — a rare malformed game is tolerated, systematic data loss is not.
@@ -79,53 +82,53 @@ KALMAN_R = 9.0
 def _load_played_box(season: int) -> pd.DataFrame:
     """Box rows for players who actually played, with a numeric plus_minus.
 
-    wehoop stores plus_minus as a signed string ('+5'/'-4', None for DNP); coerce
-    to float and drop rows missing it or the box stats (DNPs)."""
-    df = load_player_box(season)
-    df = df[~df["did_not_play"]].copy()
-    df["plus_minus"] = pd.to_numeric(
-        df["plus_minus"].astype(str).str.replace("+", "", regex=False),
-        errors="coerce",
-    )
+    Pools `wnba_stats_source.game_box` over every completed game in the season
+    (pbpstats/data.wnba.com legacy feed). game_box already drops DNPs and returns
+    a numeric plus_minus + the box stats in NBA-stack `pid` space; rename `pid`
+    -> `athlete_id` so box_prior.fit / player_prior / _build_signals work
+    UNCHANGED. drop any residual rows missing a needed column (defensive)."""
+    gids = wnba_stats_source.wnba_game_ids(season)
+    frames = [wnba_stats_source.game_box(gid, season) for gid in gids]
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    df = df.rename(columns={"pid": "athlete_id"})
     needed = STAT_COLS + [TARGET_COL, "minutes"]
     df = df.dropna(subset=needed)
     return df
 
 
 def _build_stints(seasons, label: str) -> pd.DataFrame:
-    """Pooled stint-rows across all games in all seasons. build_stint_rows is
-    arg-order-safe (derives home/away from pbp internally).
+    """Pooled stint-rows across all completed games in all seasons, from
+    `wnba_stats_source.stint_rows_for_game` (pbpstats/data.wnba.com). The
+    stint-rows carry NBA-stack `pid`s in off_players/def_players — the SAME id
+    space as game_box's athlete_id — so RAPM players and the box prior align
+    with NO crosswalk.
 
-    FAIL-CLOSED: a SEASON load failure is FATAL (you cannot validate on partial
-    seasons — propagate). Per-game build failures are tolerated individually but
-    counted; if more than MAX_SKIP_FRAC of attempted games fail, RAISE (systematic
-    loss must not silently bias the verdict). Explicit coverage is printed.
+    FAIL-CLOSED: a SEASON with zero completed games is FATAL (you cannot validate
+    on a missing season — propagate). Per-game build failures are tolerated
+    individually but counted; if more than MAX_SKIP_FRAC of attempted games fail,
+    RAISE (systematic loss must not silently bias the verdict). Explicit coverage
+    is printed.
 
-    SCOPE CAVEAT: this gate catches CRASHES only (exceptions from a missing/corrupt
-    parquet or an unparseable game). It does NOT catch silent lineup DEGRADATION —
-    build_stint_rows returns sub-5-man rows for missed-sub games rather than raising,
-    so the ~2% missed-sub residual passes through as `with_stints`, not `skipped`.
-    That contamination was tested via RAPM reliability weighting and found immaterial
-    (it only handicaps RAPM; the null anchor verdict is robust) — see the model
-    FINDINGS doc. Don't rely on this gate as protection against lineup divergence."""
+    SCOPE CAVEAT: this gate catches per-game build CRASHES (a failed fetch/parse)
+    only. It does NOT catch silent lineup DEGRADATION — stint_rows_for_game drops
+    non-5-on-5 possessions per game rather than raising, so possession-level loss
+    passes through as `with_stints`, not `skipped`. That contamination was tested
+    via RAPM reliability weighting and found immaterial (it only handicaps RAPM;
+    the null anchor verdict is robust) — see the model FINDINGS doc. Don't rely on
+    this gate as protection against lineup divergence."""
     all_rows = []
     attempted = skipped = with_stints = 0
     for season in seasons:
-        # Season load failure is FATAL — let it propagate (no partial-season run).
-        pbp = load_pbp(season)
-        box = load_player_box(season)
-        games = (
-            pbp[["game_id", "home_team_id", "away_team_id"]]
-            .dropna()
-            .drop_duplicates("game_id")
-        )
-        for _, gr in games.iterrows():
-            gid = int(gr["game_id"])
-            home = int(gr["home_team_id"])
-            away = int(gr["away_team_id"])
+        gids = wnba_stats_source.wnba_game_ids(season)
+        if not gids:
+            raise RuntimeError(
+                f"[{label}] season {season} returned zero completed games — "
+                "refusing to validate on a missing season."
+            )
+        for gid in gids:
             attempted += 1
             try:
-                rows = build_stint_rows(pbp, box, gid, home, away)
+                rows = wnba_stats_source.stint_rows_for_game(gid, _STINT_CACHE_DIR)
             except Exception as e:
                 skipped += 1
                 print(f"  stint build failed for game {gid} (season {season}): {e}")
@@ -273,14 +276,18 @@ def main():
     print(f"\nLoading TEST played box for {TEST_SEASON} ...")
     # Fail-closed coverage check on the TEST path too: a silently-shrunk test box
     # could bias the verdict just as a partial train load could. Compare games that
-    # survive the played-box filter against all games in the season's box.
-    full_test_box = load_player_box(TEST_SEASON)
+    # yield played box rows against all completed games in the season's schedule.
+    test_attempted = len(wnba_stats_source.wnba_game_ids(TEST_SEASON))
+    if test_attempted == 0:
+        raise RuntimeError(
+            f"[TEST] season {TEST_SEASON} returned zero completed games — "
+            "refusing to validate on a missing season."
+        )
     test_box = _load_played_box(TEST_SEASON)
-    test_attempted = full_test_box["game_id"].nunique()
     test_covered = test_box["game_id"].nunique()
     test_cov_frac = test_covered / test_attempted if test_attempted else 0.0
     print(
-        f"  [TEST] games in box={test_attempted} games with played rows="
+        f"  [TEST] completed games={test_attempted} games with played rows="
         f"{test_covered} coverage={test_cov_frac:.4f}"
     )
     if (
@@ -301,9 +308,9 @@ def main():
     anchor_raw = _build_anchor_raw(impacts, prior)
     print(f"  anchor players (scaled/raw): {len(anchor_scaled)}/{len(anchor_raw)}")
 
-    # Aging: player_box has NO age / birth-date column (verified). Not wired.
+    # Aging: game_box has NO age / birth-date column. Not wired.
     drift = {}
-    print("Aging: NOT wired (no age column in wehoop player_box).\n")
+    print("Aging: NOT wired (no age column in the box source).\n")
 
     # ---- Run A: observe ACTUAL plus_minus (no target col => target = signal) ----
     run_a = frame[["athlete_id", "game_idx", "signal_pm"]].rename(
