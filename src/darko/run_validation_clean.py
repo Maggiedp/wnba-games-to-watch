@@ -56,6 +56,10 @@ from src.darko.validation import (
     walk_forward_retrodiction,
 )
 
+# Abort the run if more than this fraction of attempted games fail to build
+# stints — a rare malformed game is tolerated, systematic data loss is not.
+MAX_SKIP_FRAC = 0.01
+
 TRAIN_SEASONS = [2023, 2024]
 TEST_SEASON = 2025
 
@@ -88,18 +92,20 @@ def _load_played_box(season: int) -> pd.DataFrame:
     return df
 
 
-def _build_stints(seasons) -> pd.DataFrame:
+def _build_stints(seasons, label: str) -> pd.DataFrame:
     """Pooled stint-rows across all games in all seasons. build_stint_rows is
-    arg-order-safe (derives home/away from pbp internally). Per-season loads and
-    per-game stint builds are guarded so one failure can't sink the run."""
+    arg-order-safe (derives home/away from pbp internally).
+
+    FAIL-CLOSED: a SEASON load failure is FATAL (you cannot validate on partial
+    seasons — propagate). Per-game build failures are tolerated individually but
+    counted; if more than MAX_SKIP_FRAC of attempted games fail, RAISE (systematic
+    loss must not silently bias the verdict). Explicit coverage is printed."""
     all_rows = []
+    attempted = skipped = with_stints = 0
     for season in seasons:
-        try:
-            pbp = load_pbp(season)
-            box = load_player_box(season)
-        except Exception as e:
-            print(f"  season {season} load failed: {e}; skipping")
-            continue
+        # Season load failure is FATAL — let it propagate (no partial-season run).
+        pbp = load_pbp(season)
+        box = load_player_box(season)
         games = (
             pbp[["game_id", "home_team_id", "away_team_id"]]
             .dropna()
@@ -109,13 +115,28 @@ def _build_stints(seasons) -> pd.DataFrame:
             gid = int(gr["game_id"])
             home = int(gr["home_team_id"])
             away = int(gr["away_team_id"])
+            attempted += 1
             try:
                 rows = build_stint_rows(pbp, box, gid, home, away)
             except Exception as e:
+                skipped += 1
                 print(f"  stint build failed for game {gid} (season {season}): {e}")
                 continue
             if rows is not None and not rows.empty:
                 all_rows.append(rows)
+                with_stints += 1
+
+    coverage = (attempted - skipped) / attempted if attempted else 0.0
+    print(
+        f"  [{label}] games attempted={attempted} with_stints={with_stints} "
+        f"skipped={skipped} coverage={coverage:.4f}"
+    )
+    if attempted and skipped / attempted > MAX_SKIP_FRAC:
+        raise RuntimeError(
+            f"[{label}] systematic stint-build loss: skipped {skipped}/{attempted} "
+            f"games ({skipped / attempted:.2%} > {MAX_SKIP_FRAC:.0%}) — refusing to "
+            "emit a verdict on partial data."
+        )
     return pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
 
 
@@ -214,7 +235,7 @@ def main():
     print(f"  coef={dict(zip(STAT_COLS, np.round(model.coef, 4)))}")
 
     print("Building TRAIN stint-rows (lineup reconstruction) ...")
-    train_stints = _build_stints(TRAIN_SEASONS)
+    train_stints = _build_stints(TRAIN_SEASONS, label="TRAIN")
     n_games = train_stints["game_id"].nunique() if not train_stints.empty else 0
     print(f"  train stint-rows: {len(train_stints)}  (games covered: {n_games})")
 
@@ -229,7 +250,26 @@ def main():
 
     # ---- TEST: build ONE sorted 2025 frame, two aligned streams ----
     print(f"\nLoading TEST played box for {TEST_SEASON} ...")
+    # Fail-closed coverage check on the TEST path too: a silently-shrunk test box
+    # could bias the verdict just as a partial train load could. Compare games that
+    # survive the played-box filter against all games in the season's box.
+    full_test_box = load_player_box(TEST_SEASON)
     test_box = _load_played_box(TEST_SEASON)
+    test_attempted = full_test_box["game_id"].nunique()
+    test_covered = test_box["game_id"].nunique()
+    test_cov_frac = test_covered / test_attempted if test_attempted else 0.0
+    print(
+        f"  [TEST] games in box={test_attempted} games with played rows="
+        f"{test_covered} coverage={test_cov_frac:.4f}"
+    )
+    if (
+        test_attempted
+        and (test_attempted - test_covered) / test_attempted > MAX_SKIP_FRAC
+    ):
+        raise RuntimeError(
+            f"[TEST] systematic game loss: only {test_covered}/{test_attempted} "
+            f"games have played box rows — refusing to emit a verdict on partial data."
+        )
     print(f"  test played box rows: {len(test_box)}")
 
     print("Building ONE sorted test frame (signal_pm + signal_box, aligned) ...")
