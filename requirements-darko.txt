@@ -1,0 +1,5 @@
+# Offline DARKO model+validation deps. NEVER add to requirements.txt — this is the
+# offline modeling sub-project (no prod runtime surface yet). Mirrors the spike's
+# isolation discipline (requirements-spike.txt).
+pandas==2.2.3
+pbpstats==1.3.11
