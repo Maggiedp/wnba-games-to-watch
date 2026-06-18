@@ -18,6 +18,25 @@ def _skip_if_offline(exc):
     raise exc
 
 
+def test_import_does_not_globally_patch_requests():
+    """Importing the module must NOT leave a global UA patch on Session.request.
+
+    The UA injection is scoped to a `_wnba_ua_session` context manager; outside
+    it, the global `requests.sessions.Session.request` must be the unpatched one.
+    """
+    import contextlib
+
+    import requests
+
+    import src.darko.wnba_stats_source as src
+
+    # The patched callable is the inner `_patched`; at module top level the global
+    # must NOT be it.
+    assert requests.sessions.Session.request.__name__ != "_patched"
+    # And the scoping helper is exposed as a context manager.
+    assert isinstance(src._wnba_ua_session(), contextlib._GeneratorContextManager)
+
+
 def test_stint_rows_reconcile_to_final_score():
     from src.darko.wnba_stats_source import game_box, stint_rows_for_game
 
@@ -34,6 +53,10 @@ def test_stint_rows_reconcile_to_final_score():
     assert abs(rows["points"].sum() - box["points"].sum()) < 1e-6
     # realistic pace: ~150-170 total possessions
     assert 140 <= rows["possessions"].sum() <= 180
+    # degradation counts are exposed on the frame for the coverage guard; this
+    # game is known-clean (every possession resolved to a 5-on-5).
+    assert rows.attrs["dropped_possessions"] == 0
+    assert rows.attrs["total_possessions"] == len(rows)
 
 
 def test_wnba_game_ids_returns_completed_games():

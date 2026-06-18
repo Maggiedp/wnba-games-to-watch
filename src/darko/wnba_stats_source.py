@@ -5,8 +5,10 @@ wehoop/ESPN possession reconstruction with `pbpstats` parsing the data.wnba.com
 legacy feed, which gives possession objects with an on-court 5-on-5 snapshot and
 NBA-stack player ids that match the boxscore feed (single id space).
 
-The legacy feed 403s without a browser User-Agent, so we monkeypatch
-requests.Session.request at import time to inject a browser UA + wnba.com Referer.
+The legacy feed 403s without a browser User-Agent. pbpstats fetches via
+`requests` internally, so we scope a UA/Referer monkeypatch to JUST the pbpstats
+fetch via the `_wnba_ua_session` context manager (our own fetches use
+urllib.request with explicit headers and don't need it).
 
 Public API:
   wnba_game_ids(season)            -> list[str] of completed game ids
@@ -14,34 +16,44 @@ Public API:
   game_box(gid, season)            -> per-player box DataFrame (single id space)
 """
 
+import contextlib
 import json
 import os
 import urllib.request
 
 import pandas as pd
+import requests
 
-# --- UA monkeypatch (import-time, once) -------------------------------------
-# data.wnba.com 403s without a browser User-Agent. Inject one on every requests
-# Session call so pbpstats' data_nba web loader works for WNBA.
-import requests  # noqa: E402
+from pbpstats.client import Client
 
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124"
 _REFERER = "https://www.wnba.com/"
 
-if not getattr(requests.sessions.Session.request, "_wnba_ua_patched", False):
-    _orig_request = requests.sessions.Session.request
 
-    def _patched_request(self, method, url, *args, **kwargs):
+@contextlib.contextmanager
+def _wnba_ua_session():
+    """Scope a browser UA/Referer onto requests.Session.request for pbpstats only.
+
+    data.wnba.com 403s without a browser User-Agent and pbpstats fetches via
+    `requests` internally. Rather than patch the process globally at import time
+    (which leaked the WNBA UA into every requests call), patch only for the
+    duration of the pbpstats fetch and restore the original in `finally`. Our own
+    fetches use urllib.request with explicit headers and don't go through here.
+    """
+    orig = requests.sessions.Session.request
+
+    def _patched(self, method, url, *args, **kwargs):
         headers = dict(kwargs.pop("headers", None) or {})
         headers.setdefault("User-Agent", _UA)
         headers.setdefault("Referer", _REFERER)
-        return _orig_request(self, method, url, *args, headers=headers, **kwargs)
+        return orig(self, method, url, *args, headers=headers, **kwargs)
 
-    _patched_request._wnba_ua_patched = True
-    requests.sessions.Session.request = _patched_request
+    requests.sessions.Session.request = _patched
+    try:
+        yield
+    finally:
+        requests.sessions.Session.request = orig
 
-# Import pbpstats AFTER the monkeypatch is installed.
-from pbpstats.client import Client  # noqa: E402
 
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), "_stats_cache")
 # pbpstats requires these subdirs under its working dir.
@@ -137,8 +149,9 @@ def stint_rows_for_game(game_id: str, cache_dir: str) -> pd.DataFrame:
     5-on-5 snapshot); points from the cumulative-score delta over the possession.
     """
     client = _pbp_client(cache_dir)
-    game = client.Game(game_id)
-    possessions = game.possessions.items
+    with _wnba_ua_session():
+        game = client.Game(game_id)
+        possessions = list(game.possessions.items)
 
     # Game date from the boxscore feed (schedule order season is unknown here, so
     # derive season from the game id: chars 3-4 are the 2-digit season year).
@@ -179,7 +192,12 @@ def stint_rows_for_game(game_id: str, cache_dir: str) -> pd.DataFrame:
             f"[wnba_stats_source] game {game_id}: skipped {n_bad_lineup} "
             f"possession(s) lacking a clean 5-on-5"
         )
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    # Expose possession-degradation counts so the driver's coverage guard can
+    # measure silent 5-on-5 loss (not just thrown-exception game failures).
+    df.attrs["dropped_possessions"] = n_bad_lineup
+    df.attrs["total_possessions"] = len(possessions)
+    return df
 
 
 def _team_ids(possessions) -> list:

@@ -70,6 +70,14 @@ _STINT_CACHE_DIR = os.path.join(os.path.dirname(__file__), "_stats_cache")
 # data → weaken the anchor → push toward the null, never toward a false RAPM win.
 MAX_SKIP_FRAC = 0.02
 
+# A game that BUILDS without raising but drops more than this fraction of its
+# possessions to non-5-on-5 lineup gaps is degraded, not covered. Such a game is
+# treated as FAILED (counts toward MAX_SKIP_FRAC, rows excluded) so silent
+# possession-level loss can't pass through as full coverage. Bias-safe: dropping
+# a degraded game only shrinks RAPM training data → weakens the anchor → pushes
+# toward the null, never toward a false RAPM win.
+MAX_GAME_DROP_FRAC = 0.10
+
 TRAIN_SEASONS = [2023, 2024]
 TEST_SEASON = 2025
 
@@ -129,15 +137,17 @@ def _build_stints(seasons, label: str) -> pd.DataFrame:
     RAISE (systematic loss must not silently bias the verdict). Explicit coverage
     is printed.
 
-    SCOPE CAVEAT: this gate catches per-game build CRASHES (a failed fetch/parse)
-    only. It does NOT catch silent lineup DEGRADATION — stint_rows_for_game drops
-    non-5-on-5 possessions per game rather than raising, so possession-level loss
-    passes through as `with_stints`, not `skipped`. That contamination was tested
-    via RAPM reliability weighting and found immaterial (it only handicaps RAPM;
-    the null anchor verdict is robust) — see the model FINDINGS doc. Don't rely on
-    this gate as protection against lineup divergence."""
+    POSSESSION DEGRADATION: stint_rows_for_game drops non-5-on-5 possessions per
+    game rather than raising, exposing the counts on df.attrs
+    (dropped_possessions / total_possessions). A game that builds but drops more
+    than MAX_GAME_DROP_FRAC of its possessions (or yields zero rows) is treated as
+    a FAILED game — it counts toward `skipped` (and thus the MAX_SKIP_FRAC season
+    abort) and its rows are excluded — so silent lineup degradation counts against
+    the fail-closed guard instead of passing as full coverage. The season
+    aggregate dropped-possession fraction over KEPT games is printed."""
     all_rows = []
     attempted = skipped = with_stints = 0
+    total_dropped = total_poss = 0
     for season in seasons:
         gids = wnba_stats_source.wnba_game_ids(season)
         if not gids:
@@ -153,14 +163,29 @@ def _build_stints(seasons, label: str) -> pd.DataFrame:
                 skipped += 1
                 print(f"  stint build failed for game {gid} (season {season}): {e}")
                 continue
-            if rows is not None and not rows.empty:
-                all_rows.append(rows)
-                with_stints += 1
+            dropped = int(rows.attrs.get("dropped_possessions", 0))
+            total = int(rows.attrs.get("total_possessions", 0))
+            drop_frac = dropped / total if total else 1.0
+            if rows.empty or drop_frac > MAX_GAME_DROP_FRAC:
+                skipped += 1
+                print(
+                    f"  game {gid} (season {season}) degraded: dropped "
+                    f"{dropped}/{total} possessions ({drop_frac:.2%} > "
+                    f"{MAX_GAME_DROP_FRAC:.0%}) — treating as failed"
+                )
+                continue
+            all_rows.append(rows)
+            with_stints += 1
+            total_dropped += dropped
+            total_poss += total
 
     coverage = (attempted - skipped) / attempted if attempted else 0.0
+    agg_drop_frac = total_dropped / total_poss if total_poss else 0.0
     print(
         f"  [{label}] games attempted={attempted} with_stints={with_stints} "
-        f"skipped={skipped} coverage={coverage:.4f}"
+        f"skipped={skipped} coverage={coverage:.4f} "
+        f"dropped_poss={total_dropped}/{total_poss} "
+        f"agg_drop_frac={agg_drop_frac:.4f}"
     )
     if attempted and skipped / attempted > MAX_SKIP_FRAC:
         raise RuntimeError(
