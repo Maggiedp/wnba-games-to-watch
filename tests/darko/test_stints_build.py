@@ -133,3 +133,78 @@ def test_defensive_rebound_possession_charged_to_shooter():
     # Every stint keeps full 5-on-5 lineups.
     assert rows["off_players"].apply(len).eq(5).all()
     assert rows["def_players"].apply(len).eq(5).all()
+
+
+def _box10(game_id):
+    return pd.DataFrame(
+        {
+            "game_id": [game_id] * 10,
+            "athlete_id": list(range(1, 11)),
+            "team_id": [100] * 5 + [200] * 5,
+            "starter": [True] * 10,
+            "minutes": [20.0] * 10,
+        }
+    )
+
+
+def test_multi_ft_trip_counts_one_possession():
+    """A two-shot free-throw trip is ONE possession, not one per made FT. Team 100
+    MAKES both "1 of 2" and "2 of 2": old code counted each made FT as a possession
+    (2); only the terminal FT should end the possession, so the trip contributes
+    exactly 1 possession."""
+    box = _box10(3)
+    pbp = pd.DataFrame(
+        {
+            "game_id": [3, 3],
+            "sequence_number": [1, 2],
+            "type_text": ["Free Throw - 1 of 2", "Free Throw - 2 of 2"],
+            # BOTH FTs made (scoring) — this is the case the old code overcounted.
+            "scoring_play": [True, True],
+            "team_id": [100, 100],
+            "athlete_id_1": [None, None],
+            "athlete_id_2": [None, None],
+            "home_team_id": [200, 200],
+            "away_team_id": [100, 100],
+            # forward-filled scores: +1 on each made FT (2 total).
+            "home_score": [0, 0],
+            "away_score": [1, 2],
+            "game_date": [dt.date(2024, 6, 1)] * 2,
+        }
+    )
+    rows = build_stint_rows(pbp, box, game_id=3, home_team=100, away_team=200)
+    off100 = rows[rows["off_players"].apply(lambda s: 1 in s)]
+    # Exactly ONE possession-ending FT for the whole trip (old code counted 2).
+    assert off100["possessions"].sum() == 1
+    # Both made FTs still score (1 + 1 = 2); only the COUNT was wrong.
+    assert off100["points"].sum() == 2
+
+
+def test_and_one_bonus_ft_not_counted():
+    """An and-1: a made field goal ends the possession (1), and the bonus
+    "Free Throw - 1 of 1" must NOT add a second possession. The FG owns the only
+    possession in the segment; the 1-of-1 bonus contributes 0 possessions."""
+    box = _box10(4)
+    pbp = pd.DataFrame(
+        {
+            "game_id": [4, 4],
+            "sequence_number": [1, 2],
+            "type_text": ["Jump Shot", "Free Throw - 1 of 1"],
+            # made FG (scoring), made bonus FT (scoring).
+            "scoring_play": [True, True],
+            "team_id": [100, 100],
+            "athlete_id_1": [None, None],
+            "athlete_id_2": [None, None],
+            "home_team_id": [200, 200],
+            "away_team_id": [100, 100],
+            # forward-filled: +2 on the FG, +1 on the bonus FT (3 total).
+            "home_score": [0, 0],
+            "away_score": [2, 3],
+            "game_date": [dt.date(2024, 6, 1)] * 2,
+        }
+    )
+    rows = build_stint_rows(pbp, box, game_id=4, home_team=100, away_team=200)
+    off100 = rows[rows["off_players"].apply(lambda s: 1 in s)]
+    # The made FG ends the possession (1); the 1-of-1 bonus adds NONE (old code: 2).
+    assert off100["possessions"].sum() == 1
+    # Points still tally the full and-1 (2 + 1 = 3); only the COUNT was wrong.
+    assert off100["points"].sum() == 3

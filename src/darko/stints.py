@@ -4,8 +4,16 @@ Steps 1–2 (this file): reconstruct on-court 5-per-team at every event (lineup
 reconstruction) and segment into stint-rows with possessions + points. Step 3
 (Task 5, upcoming): missed-sub repair."""
 
+import re
+
 import pandas as pd
 from scripts.spikes import darko_lineups
+
+# Trailing "X of Y" in a free-throw type_text (e.g. "Free Throw - 2 of 2",
+# "Free Throw - Flagrant 2 of 2", "Free Throw - Clear Path 2 of 2"). "Free Throw
+# - Technical" has no "X of Y" and so never matches (correct: a technical FT does
+# not end a possession).
+_FT_NOFN = re.compile(r"(\d+)\s+of\s+(\d+)")
 
 
 def on_court_snapshots(pbp: pd.DataFrame, box: pd.DataFrame, game_id: int):
@@ -19,12 +27,26 @@ def _ends_possession(ev) -> bool:
     """A possession ends on a made shot, a turnover, a defensive rebound, or the end
     of a period. The real wehoop taxonomy has no single "Made Shot"/"Turnover"
     type_text — made shots are flagged by `scoring_play`, and turnovers/rebounds are
-    families of type_text strings — so match against those instead of literals."""
-    if bool(ev.get("scoring_play", False)):
-        return True
+    families of type_text strings — so match against those instead of literals.
+
+    Free throws need special handling: every made FT carries scoring_play=True, but
+    a multi-shot trip is ONE possession, not one per made FT. A made FT ends a
+    possession only when it is the TERMINAL FT of a multi-shot trip (parsed "N of N",
+    N>=2). This excludes the and-1 "1 of 1" bonus (the made field goal already ended
+    that possession) and non-terminal FTs ("1 of 2", "2 of 3", ...). A missed FT
+    (scoring_play False) returns False here — the possession is ended by the following
+    "Defensive Rebound" (correctly attributed to the shooter) or continued by an
+    "Offensive Rebound". Technical FTs have no "N of M" suffix and so never count."""
     tt = ev["type_text"]
     if not isinstance(tt, str):
         return False
+    if "Free Throw" in tt:
+        if not bool(ev.get("scoring_play", False)):
+            return False
+        m = _FT_NOFN.search(tt)
+        return bool(m) and m.group(1) == m.group(2) and int(m.group(2)) >= 2
+    if bool(ev.get("scoring_play", False)):
+        return True  # made field goal
     if "Turnover" in tt and tt != "No Turnover":
         return True
     return tt in ("Defensive Rebound", "End Period")
