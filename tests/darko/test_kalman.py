@@ -18,8 +18,14 @@ def test_tracks_a_known_trajectory_better_than_naive():
     assert np.mean(errs_kf[10:]) < np.mean(errs_naive[10:])
 
 
-def test_intervals_are_calibrated():
+def test_state_variance_is_calibrated():
+    # The state variance p should yield calibrated credible intervals for the latent
+    # value: ~80% of (x ± z*sqrt(p)) intervals cover the true state. (The interval is
+    # computed inline — validation uses the p+r OBSERVATION interval, not this one.)
+    from statistics import NormalDist
+
     rng = np.random.default_rng(4)
+    z80 = NormalDist().inv_cdf(0.5 + 0.80 / 2)
     covered = 0
     trials = 300
     for _ in range(trials):
@@ -27,8 +33,7 @@ def test_intervals_are_calibrated():
         kf = KalmanFilter(x0=0.0, p0=9.0, q=0.0, r=1.0)
         for _ in range(20):
             kf.update(true + rng.normal(0, 1.0))
-        lo, hi = kf.interval(0.80)
-        if lo <= true <= hi:
+        half = z80 * (kf.p**0.5)
+        if kf.x - half <= true <= kf.x + half:
             covered += 1
-    frac = covered / trials
-    assert 0.70 <= frac <= 0.90  # ~80% nominal
+    assert 0.70 <= covered / trials <= 0.90  # ~80% nominal

@@ -2,8 +2,6 @@
 and defense). Daily driver = box signal (update); slow structural anchor = RAPM
 (via x0); drift = aging curve (predict). q = process noise, r = observation noise."""
 
-import math
-
 
 class KalmanFilter:
     def __init__(self, x0: float, p0: float, q: float, r: float):
@@ -22,11 +20,3 @@ class KalmanFilter:
         self.x = self.x + k * (z - self.x)
         self.p = (1 - k) * self.p
         return self.x
-
-    def interval(self, level: float = 0.80):
-        # two-sided normal interval; z for 0.80 ~ 1.2816
-        from statistics import NormalDist
-
-        z = NormalDist().inv_cdf(0.5 + level / 2)
-        half = z * math.sqrt(self.p)
-        return (self.x - half, self.x + half)

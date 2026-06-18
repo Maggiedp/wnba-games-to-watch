@@ -44,7 +44,6 @@ def test_full_uses_anchor_and_drift():
 
 
 def test_walk_forward_returns_paired_abs_errors():
-    import numpy as np
 
     df = _player_game_signals()  # existing helper in this file
     res = walk_forward_retrodiction(df, q=0.05, r=1.0)
@@ -56,7 +55,6 @@ def test_walk_forward_returns_paired_abs_errors():
 
 
 def test_bootstrap_mae_delta_ci_brackets_known_improvement():
-    import numpy as np
     from src.darko.validation import bootstrap_mae_delta_ci
 
     rng = np.random.default_rng(0)
@@ -71,7 +69,6 @@ def test_bootstrap_mae_delta_ci_brackets_known_improvement():
 
 
 def test_bootstrap_mae_delta_ci_straddles_zero_for_noise():
-    import numpy as np
     from src.darko.validation import bootstrap_mae_delta_ci
 
     rng = np.random.default_rng(2)
@@ -87,7 +84,6 @@ def test_bootstrap_mae_delta_ci_straddles_zero_for_noise():
 def test_target_distinct_from_signal_is_scored_against_target():
     # Kalman observes `signal` but is scored against `target`. If target is a constant
     # 5.0 while signal trends, errors are |pred(from signal) - 5.0|.
-    import numpy as np
 
     df = pd.DataFrame(
         {
@@ -115,7 +111,6 @@ def test_clustered_bootstrap_wider_than_iid_under_within_cluster_correlation():
     # Construct per-player correlated error advantage: each athlete is EITHER all-better
     # or all-worse. iid bootstrap sees many independent rows; clustered sees few
     # independent clusters -> clustered CI must be WIDER.
-    import numpy as np
 
     from src.darko.validation import (
         bootstrap_mae_delta_ci,
@@ -143,7 +138,6 @@ def test_clustered_bootstrap_wider_than_iid_under_within_cluster_correlation():
 
 
 def test_clustered_bootstrap_brackets_known_improvement():
-    import numpy as np
 
     from src.darko.validation import bootstrap_mae_delta_ci_clustered
 

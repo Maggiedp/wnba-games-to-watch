@@ -256,44 +256,43 @@ def _build_test_frame(
     athlete/game order), which makes cross-run paired CIs valid."""
     rows = test_box.sort_values(["athlete_id", "game_date"]).copy()
     rows["signal_pm"] = rows[TARGET_COL].to_numpy(dtype=float)
-    rows["signal_box"] = [box_prior.game_signal(model, r) for _, r in rows.iterrows()]
+    # box-model fitted plus-minus per game (vectorized — same x·coef+intercept as
+    # box_prior.game_signal / player_prior, applied to the whole frame at once).
+    rows["signal_box"] = (
+        rows[model.stat_cols].to_numpy(dtype=float) @ model.coef + model.intercept
+    )
     rows["game_idx"] = rows.groupby("athlete_id").cumcount()
     return rows[["athlete_id", "game_idx", "signal_pm", "signal_box"]].reset_index(
         drop=True
     )
 
 
-def _build_anchor_scaled(impacts, player_prior: pd.Series, k: float) -> dict:
-    """All anchors in PER-GAME units (the Kalman observes per-game plus_minus).
+def _build_anchor(impacts, player_prior: pd.Series, scale: float = 1.0) -> dict:
+    """Per-player Kalman x0 anchor. RAPM players: rapm_total (per-100) * scale;
+    players RAPM didn't estimate fall back to player_prior[pid] (the box
+    regression's fitted plus-minus, ALREADY per-game) used DIRECTLY (no scale).
 
-    RAPM players: anchor[pid] = rapm_total[pid] (per-100) * k  -> per-game. Players
-    RAPM didn't estimate fall back to player_prior[pid], which is the box
-    regression's fitted plus-minus per game-box-line and is ALREADY per-game — so
-    the fallback uses it DIRECTLY (no * k). The previous code multiplied the
-    fallback by k as well, double-scaling those players (per-game / k-ish), which
-    under-scaled every no-RAPM-coverage anchor. Both branches now land in per-game
-    units, consistent with the Kalman observation scale."""
-    anchor = {imp.player_id: imp.total * k for imp in impacts}
+    Two call sites:
+      - scale=k   -> per-game units (the Kalman observes per-game plus_minus); both
+        branches land in per-game units. (An earlier version multiplied the fallback
+        by k too, double-scaling no-RAPM players — fixed: fallback is used directly.)
+      - scale=1.0 -> RAW unscaled per-100 RAPM, a deliberate upper-magnitude
+        sensitivity bracket (over-states the anchor by ~1/k vs the scaled run); the
+        RAPM and fallback branches are then in different unit systems on purpose,
+        only to show the scaled verdict is insensitive to the scaling choice."""
+    anchor = {imp.player_id: imp.total * scale for imp in impacts}
     for pid, val in player_prior.items():
         anchor.setdefault(int(pid), float(val))
     return anchor
 
 
-def _build_anchor_raw(impacts, player_prior: pd.Series) -> dict:
-    """Sensitivity: RAW unscaled RAPM total (per-100) as the anchor, with NO
-    per-game scaling. This is deliberately an upper-magnitude bracket on the
-    scaling choice — it over-states RAPM's anchor by ~1/k vs the scaled run.
-    Fallback players use the raw per-game player_prior; the two branches are thus
-    in different unit systems on purpose (this run exists only to show the scaled
-    anchor's verdict is insensitive to the scaling, not to be unit-correct)."""
-    anchor = {imp.player_id: imp.total for imp in impacts}
-    for pid, val in player_prior.items():
-        anchor.setdefault(int(pid), float(val))
-    return anchor
+def _sig(lo, hi) -> bool:
+    """A two-sided 95% CI is significant iff it excludes 0 (both bounds same sign)."""
+    return lo > 0 or hi < 0
 
 
 def _fmt_ci(label, delta, lo, hi):
-    sig = "YES" if (lo > 0 or hi < 0) else "no"
+    sig = "YES" if _sig(lo, hi) else "no"
     return (
         f"  {label:34s} mean_delta={delta:+.4f}  "
         f"95% CI [{lo:+.4f}, {hi:+.4f}]  significant={sig}"
@@ -352,8 +351,8 @@ def main():
     frame = _build_test_frame(test_box, model)
     print(f"  test rows: {len(frame)}  athletes: {frame['athlete_id'].nunique()}")
 
-    anchor_scaled = _build_anchor_scaled(impacts, prior, k)
-    anchor_raw = _build_anchor_raw(impacts, prior)
+    anchor_scaled = _build_anchor(impacts, prior, scale=k)
+    anchor_raw = _build_anchor(impacts, prior)
     print(f"  anchor players (scaled/raw): {len(anchor_scaled)}/{len(anchor_raw)}")
 
     # Aging: game_box has NO age / birth-date column. Not wired.
@@ -444,10 +443,10 @@ def main():
     print(_fmt_ci("rapm_anchored vs recency", d_ar, lo_ar, hi_ar))
     print(_fmt_ci("rapm_anchored_raw vs recency", d_arr, lo_arr, hi_arr))
 
-    sig_rn = lo_rn > 0 or hi_rn < 0
-    sig_br = lo_br > 0 or hi_br < 0
-    sig_ar = lo_ar > 0 or hi_ar < 0
-    sig_arr = lo_arr > 0 or hi_arr < 0
+    sig_rn = _sig(lo_rn, hi_rn)
+    sig_br = _sig(lo_br, hi_br)
+    sig_ar = _sig(lo_ar, hi_ar)
+    sig_arr = _sig(lo_arr, hi_arr)
 
     print("\n=== VERDICT ===")
     print(
