@@ -17,3 +17,7 @@ env
 .DS_Store
 logs
 data/games_to_watch.db
+# offline darko/spike data caches (gitignored; never needed in the prod image)
+src/darko/_stats_cache
+src/darko/_cache
+scripts/spikes/cache
