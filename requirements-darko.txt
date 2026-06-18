@@ -2,5 +2,4 @@
 # offline modeling sub-project (no prod runtime surface yet). Mirrors the spike's
 # isolation discipline (requirements-spike.txt).
 pandas==2.2.3
-pyarrow==24.0.0
 pbpstats==1.3.11
