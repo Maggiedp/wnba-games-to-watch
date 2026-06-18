@@ -50,3 +50,4 @@ docs/
 
 scripts/spikes/cache/
 src/darko/_cache/
+src/darko/_stats_cache/
