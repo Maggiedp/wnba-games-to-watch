@@ -142,6 +142,37 @@ class SeasonConfig(Base):
     created_at = Column(DateTime, default=func.now())
 
 
+class GameShape(Base):
+    """Self-contained per-game win-probability shape for the Replay Value
+    archive. Keyed by espn_id (NOT FK'd to games) so it holds 2024-2026
+    uniformly — 2024/2025 games are never written to the games table (the Elo
+    replay fetches them from ESPN at runtime). Correlates to 2026 games/live
+    rows by shared espn_id."""
+
+    __tablename__ = "game_shapes"
+
+    id = Column(Integer, primary_key=True)
+    espn_id = Column(String(20), nullable=False, unique=True)
+    season = Column(Integer, nullable=False)
+    date = Column(String(10), nullable=False)  # YYYY-MM-DD
+    home_team = Column(String(64), nullable=False)
+    away_team = Column(String(64), nullable=False)
+    home_abbr = Column(String(16), nullable=False)
+    away_abbr = Column(String(16), nullable=False)
+    home_score = Column(Integer, nullable=False)
+    away_score = Column(Integer, nullable=False)
+    winner = Column(String(4), nullable=False)  # 'home' | 'away'
+    excitement = Column(Float, nullable=False)
+    tension = Column(Float, nullable=False)
+    comeback = Column(Float, nullable=False)
+    lead_changes = Column(Integer, nullable=False)
+    winner_low_wp = Column(Float, nullable=False)
+    curve = Column(Text, nullable=False)  # JSON [[t_sec, home_pct], ...]
+    computed_at = Column(DateTime, default=func.now())
+
+    __table_args__ = (Index("idx_game_shapes_season", "season"),)
+
+
 def get_database_url() -> str:
     db_url = os.getenv("DATABASE_URL", "sqlite:///./data/games_to_watch.db")
     if db_url.startswith("sqlite:///./"):
