@@ -1,5 +1,6 @@
 """Database query helpers for WNBA Games to Watch."""
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -11,10 +12,12 @@ from src.db.schema import (
     DailyRanking,
     EloHistory,
     Game,
+    GameShape,
     PlayoffProbability,
     SeasonConfig,
     Team,
 )
+
 
 # Reused predicate: include regular-season (2) + postseason (3) + legacy
 # NULL season_type rows; exclude only known preseason (1). Used by the
@@ -977,3 +980,85 @@ def delete_importance_ceilings_before(
     if stale:
         session.commit()
     return deleted
+
+
+def upsert_game_shape(
+    session: Session,
+    *,
+    espn_id: str,
+    season: int,
+    date: str,
+    home_team: str,
+    away_team: str,
+    home_abbr: str,
+    away_abbr: str,
+    home_score: int,
+    away_score: int,
+    winner: str,
+    excitement: float,
+    tension: float,
+    comeback: float,
+    lead_changes: int,
+    winner_low_wp: float,
+    curve: list,
+) -> GameShape:
+    """Insert or update the game_shapes row for `espn_id` (idempotent). `curve`
+    is a Python list, serialized to JSON here."""
+
+    row = session.query(GameShape).filter(GameShape.espn_id == espn_id).first()
+    if row is None:
+        row = GameShape(espn_id=espn_id)
+        session.add(row)
+    row.season = season
+    row.date = date
+    row.home_team = home_team
+    row.away_team = away_team
+    row.home_abbr = home_abbr
+    row.away_abbr = away_abbr
+    row.home_score = home_score
+    row.away_score = away_score
+    row.winner = winner
+    row.excitement = excitement
+    row.tension = tension
+    row.comeback = comeback
+    row.lead_changes = lead_changes
+    row.winner_low_wp = winner_low_wp
+    row.curve = json.dumps(curve)
+    row.computed_at = datetime.now()
+    return row
+
+
+def get_existing_shape_espn_ids(session: Session, espn_ids: list[str]) -> set[str]:
+    """The subset of `espn_ids` that already have a game_shapes row (backfill
+    skip-set). Empty input -> empty set (avoids an empty IN clause)."""
+    if not espn_ids:
+        return set()
+    rows = (
+        session.query(GameShape.espn_id).filter(GameShape.espn_id.in_(espn_ids)).all()
+    )
+    return {r[0] for r in rows}
+
+
+def get_team_abbrev_map(session: Session) -> dict[str, str]:
+    """Canonical team name -> abbreviation, for compact card display."""
+    return {t.name: t.abbreviation for t in session.query(Team).all()}
+
+
+def get_completed_games_missing_shape(
+    session: Session, season_year: int = 2026, limit: int | None = None
+) -> list[Game]:
+    """Completed `season_year` games (in the games table) with an espn_id but no
+    game_shapes row yet - the daily-update candidate set. Newest first."""
+    existing = session.query(GameShape.espn_id)
+    q = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(Game.espn_id.isnot(None))
+        .filter(Game.espn_id.notin_(existing))
+        .filter(_NOT_PRESEASON)
+        .order_by(Game.date.desc())
+    )
+    if limit is not None:
+        q = q.limit(limit)
+    return q.all()
