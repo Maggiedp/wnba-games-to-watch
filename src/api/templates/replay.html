@@ -101,6 +101,7 @@
   };
   let games = [];
   let sortKey = 'excitement';
+  let loadSeq = 0;  // monotonic guard: a slow response from an earlier season load must not clobber a newer one
 
   const metricValue = (g, key) => g[key] * METRICS[key].scale;
   const fmtMetric = (g, key) => metricValue(g, key).toFixed(1);
@@ -174,12 +175,14 @@
   }
 
   async function load(season) {
+    const seq = ++loadSeq;
     leadMount.innerHTML = '';
     grid.innerHTML = '<p class="empty">Loading…</p>';
     try {
       const res = await fetch('/api/replay' + (season ? '?season=' + season : ''));
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
+      if (seq !== loadSeq) return;  // a newer season load superseded this one
       games = data.games || [];
       if (seasonSel.options.length === 0) {
         for (const s of (data.seasons || [])) {
@@ -191,6 +194,7 @@
       }
       render();
     } catch (e) {
+      if (seq !== loadSeq) return;  // stale failure — don't clobber a newer load
       leadMount.innerHTML = '';
       grid.innerHTML = '<p class="empty">Could not load the replay archive.</p>';
     }
