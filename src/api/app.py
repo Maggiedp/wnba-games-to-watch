@@ -520,15 +520,19 @@ async def get_elo_history_endpoint(season: int = Query(default=None)):
 async def get_replay_endpoint(season: int = Query(default=None)):
     """Game-shape archive for a season (DB-only; reads game_shapes alone — it's
     self-contained, so no join). Returns the season's games + the list of seasons
-    that have data (for the page's season selector). Default season = current."""
-    if season is None:
-        season = int(today_et()[:4])
+    that have data (for the page's season selector). When no season is requested,
+    defaults to the newest POPULATED season (not the current calendar year, which
+    is empty off-season / before a new season's backfill)."""
     session = get_session()
     try:
+        seasons = get_shape_seasons(session)
+        if season is None:
+            season = seasons[0] if seasons else int(today_et()[:4])
+        known_ids = get_all_known_espn_ids(session)
         shapes = get_game_shapes(session, season)
         return {
             "season": season,
-            "seasons": get_shape_seasons(session),
+            "seasons": seasons,
             "games": [
                 {
                     "espn_id": s.espn_id,
@@ -545,6 +549,7 @@ async def get_replay_endpoint(season: int = Query(default=None)):
                     "comeback": round(s.comeback, 4),
                     "lead_changes": s.lead_changes,
                     "winner_low_wp": round(s.winner_low_wp, 4),
+                    "has_detail": s.espn_id in known_ids,
                     "curve": json.loads(s.curve),
                 }
                 for s in shapes

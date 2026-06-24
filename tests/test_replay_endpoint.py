@@ -64,3 +64,43 @@ def test_replay_empty_season_returns_empty_games(env, client):
     r = client.get("/api/replay?season=2024")
     assert r.status_code == 200
     assert r.json()["games"] == []
+
+
+def test_replay_defaults_to_newest_populated_season(env, client):
+    # Only past seasons populated; the current calendar year is empty. The
+    # default must land on the newest POPULATED season, not the empty current
+    # year (otherwise /replay reads as "No games yet" off-season).
+    _seed(env, "p", 2024, "2024-06-01")
+    _seed(env, "q", 2025, "2025-06-01")
+    r = client.get("/api/replay")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["season"] == 2025
+    assert len(data["games"]) == 1
+
+
+def test_replay_has_detail_true_only_when_game_in_table(env, client):
+    from src.db.queries import upsert_game, upsert_team
+
+    session = env.get_session()
+    a = upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
+    b = upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    upsert_game(
+        session,
+        team_a_id=a.id,
+        team_b_id=b.id,
+        date="2026-08-15",
+        time="",
+        broadcaster="",
+        espn_id="indb",
+        winner_id=a.id,
+        season_type=2,
+    )
+    session.commit()
+    session.close()
+    _seed(env, "indb", 2026, "2026-08-15")  # in the games table -> detail exists
+    _seed(env, "notindb", 2026, "2026-08-16")  # archive-only -> would 404 if linked
+    r = client.get("/api/replay?season=2026")
+    flags = {g["espn_id"]: g["has_detail"] for g in r.json()["games"]}
+    assert flags["indb"] is True
+    assert flags["notindb"] is False

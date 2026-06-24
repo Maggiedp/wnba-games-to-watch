@@ -38,7 +38,7 @@
 
             .shape-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
             .shape-card { display: block; text-decoration: none; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; transition: border-color .12s ease, box-shadow .12s ease; }
-            .shape-card:hover { border-color: var(--orange); box-shadow: 0 2px 14px rgba(13,27,42,.06); }
+            a.shape-card:hover { border-color: var(--orange); box-shadow: 0 2px 14px rgba(13,27,42,.06); }
             .shape-card.lead { border-color: var(--orange); margin-bottom: 16px; padding: 22px; }
             .shape-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: .9rem; }
             .shape-star { color: var(--orange); }
@@ -138,13 +138,18 @@
       accent: lead ? 'var(--orange)' : 'var(--navy-3)', emphasis: sortKey,
       width: lead ? 640 : 320, height: lead ? 150 : 90 });
     const star = lead ? '<span class="shape-star" aria-hidden="true">✸</span>' : '';
-    return `<a class="shape-card${lead ? ' lead' : ''}" href="/game/${encodeURIComponent(g.espn_id)}">`
-      + `<div class="shape-head">${star}<span class="shape-score">${scoreLine(g)}</span>`
+    const inner = `<div class="shape-head">${star}<span class="shape-score">${scoreLine(g)}</span>`
       + `<span class="shape-date">${fmtDate(g.date)}</span></div>`
       + `<div class="shape-chart">${svg}</div>`
       + `<div class="shape-metric"><span class="shape-metric-val">${fmtMetric(g, sortKey)}</span>`
       + `<span class="shape-metric-lbl">${m.label}</span></div>`
-      + `<div class="shape-caption">${caption(g)}</div></a>`;
+      + `<div class="shape-caption">${caption(g)}</div>`;
+    const cls = `shape-card${lead ? ' lead' : ''}`;
+    // Only link to a detail page that exists. Archived (2024/2025) games are not
+    // in the `games` table, so /game/{espn_id} would 404 — render a static card.
+    return g.has_detail
+      ? `<a class="${cls}" href="/game/${encodeURIComponent(g.espn_id)}">${inner}</a>`
+      : `<div class="${cls}">${inner}</div>`;
   }
 
   function render() {
