@@ -121,3 +121,39 @@ def test_get_completed_games_missing_shape_excludes_shaped(env):
     session.commit()
     assert get_completed_games_missing_shape(session) == []
     session.close()
+
+
+def test_get_completed_games_missing_shape_orders_oldest_first(env):
+    session = env.get_session()
+    a = upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
+    b = upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    session.commit()
+    upsert_game(
+        session,
+        team_a_id=a.id,
+        team_b_id=b.id,
+        date="2026-06-10",
+        time="",
+        broadcaster="",
+        espn_id="older",
+        winner_id=a.id,
+        season_type=2,
+    )
+    upsert_game(
+        session,
+        team_a_id=a.id,
+        team_b_id=b.id,
+        date="2026-08-15",
+        time="",
+        broadcaster="",
+        espn_id="newer",
+        winner_id=a.id,
+        season_type=2,
+    )
+    session.commit()
+    # oldest-first so transient-failing recent games can't starve older rows
+    assert [g.espn_id for g in get_completed_games_missing_shape(session)] == [
+        "older",
+        "newer",
+    ]
+    session.close()

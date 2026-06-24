@@ -1001,10 +1001,15 @@ def upsert_game_shape(
     lead_changes: int,
     winner_low_wp: float,
     curve: list,
+    _retry: bool = False,
 ) -> GameShape:
     """Insert or update the game_shapes row for `espn_id` (idempotent). `curve`
-    is a Python list, serialized to JSON here."""
+    is a Python list, serialized to JSON here.
 
+    Commits per row and, like `upsert_game`, retries once on `IntegrityError`
+    so a concurrent insert of the same `espn_id` (an overlapping daily run / the
+    one-shot backfill racing it) is contained to this row — the retry re-queries
+    and takes the update path — instead of failing the caller's whole batch."""
     row = session.query(GameShape).filter(GameShape.espn_id == espn_id).first()
     if row is None:
         row = GameShape(espn_id=espn_id)
@@ -1025,6 +1030,34 @@ def upsert_game_shape(
     row.winner_low_wp = winner_low_wp
     row.curve = json.dumps(curve)
     row.computed_at = datetime.now()
+    try:
+        session.commit()
+    except IntegrityError:
+        # Another writer inserted this espn_id concurrently — roll back and
+        # re-enter; the second pass matches the row via espn_id and updates.
+        session.rollback()
+        if _retry:
+            raise
+        return upsert_game_shape(
+            session,
+            espn_id=espn_id,
+            season=season,
+            date=date,
+            home_team=home_team,
+            away_team=away_team,
+            home_abbr=home_abbr,
+            away_abbr=away_abbr,
+            home_score=home_score,
+            away_score=away_score,
+            winner=winner,
+            excitement=excitement,
+            tension=tension,
+            comeback=comeback,
+            lead_changes=lead_changes,
+            winner_low_wp=winner_low_wp,
+            curve=curve,
+            _retry=True,
+        )
     return row
 
 
@@ -1048,7 +1081,13 @@ def get_completed_games_missing_shape(
     session: Session, season_year: int = 2026, limit: int | None = None
 ) -> list[Game]:
     """Completed `season_year` games (in the games table) with an espn_id but no
-    game_shapes row yet - the daily-update candidate set. Newest first."""
+    game_shapes row yet - the daily-update candidate set.
+
+    Oldest first: a just-completed game whose ESPN WP feed isn't live yet fails
+    its shape fetch, and newest-first ordering would let a cluster of such recent
+    failures monopolize the capped retry queue and starve older missing rows (the
+    starvation `get_completed_games_missing_excitement` guards against via attempt
+    tracking). Oldest-first sends transient-failing recent games to the tail."""
     existing = session.query(GameShape.espn_id)
     q = (
         session.query(Game)
@@ -1057,7 +1096,7 @@ def get_completed_games_missing_shape(
         .filter(Game.espn_id.isnot(None))
         .filter(Game.espn_id.notin_(existing))
         .filter(_NOT_PRESEASON)
-        .order_by(Game.date.desc())
+        .order_by(Game.date.asc())
     )
     if limit is not None:
         q = q.limit(limit)
