@@ -48,24 +48,28 @@ def compute_tension(plays: list[dict]) -> float | None:
     return num / den
 
 
-def _winner_series(plays: list[dict]) -> list[float] | None:
-    """The eventual winner's WP series (q_i), or None if <2 plays. Winner = home
-    if the final home_pct > 0.5 else away (q = 1 - p for away)."""
+def _winner_series(plays: list[dict], home_won: bool) -> list[float] | None:
+    """The winner's WP series (q_i), or None if <2 plays. `home_won` is the
+    ACTUAL result (from the final score), NOT inferred from the last WP sample —
+    ESPN can mark a game FINAL before its WP feed crosses to the real winner, so
+    inferring here would mis-score exactly the late comebacks this metric exists
+    to catch. For the away winner, q = 1 - p."""
     if not plays or len(plays) < 2:
         return None
-    home_won = plays[-1]["home_pct"] > 0.5
     return [(p["home_pct"] if home_won else 1.0 - p["home_pct"]) for p in plays]
 
 
-def winner_low_wp(plays: list[dict]) -> float | None:
-    """The eventual winner's lowest win probability (min q_i)."""
-    q = _winner_series(plays)
+def winner_low_wp(plays: list[dict], home_won: bool) -> float | None:
+    """The winner's lowest win probability (min q_i). `home_won` is the actual
+    result (see `_winner_series`)."""
+    q = _winner_series(plays, home_won)
     return None if q is None else min(q)
 
 
-def compute_comeback(plays: list[dict]) -> float | None:
-    """How far below 50% the eventual winner fell: max(0, 0.5 - min q_i)."""
-    low = winner_low_wp(plays)
+def compute_comeback(plays: list[dict], home_won: bool) -> float | None:
+    """How far below 50% the winner fell: max(0, 0.5 - min q_i). `home_won` is
+    the actual result (see `_winner_series`)."""
+    low = winner_low_wp(plays, home_won)
     return None if low is None else max(0.0, 0.5 - low)
 
 
@@ -104,13 +108,17 @@ class ShapeMetrics:
     curve: list[list[float]]
 
 
-def compute_game_shape(plays: list[dict]) -> ShapeMetrics | None:
+def compute_game_shape(plays: list[dict], home_won: bool) -> ShapeMetrics | None:
     """All archive metrics + the downsampled curve, or None if the feed has
-    <2 usable plays (caller leaves the row absent and retries next run)."""
+    <2 usable plays (caller leaves the row absent and retries next run).
+
+    `home_won` is the ACTUAL result from the final score (not inferred from the
+    last WP sample) so the winner-dependent metrics stay consistent with the
+    stored `winner` column even when ESPN's WP feed lags the final whistle."""
     excitement = compute_excitement(plays, final=True)
     tension = compute_tension(plays)
-    comeback = compute_comeback(plays)
-    low = winner_low_wp(plays)
+    comeback = compute_comeback(plays, home_won)
+    low = winner_low_wp(plays, home_won)
     lead_changes = compute_lead_changes(plays)
     if None in (excitement, tension, comeback, low, lead_changes):
         return None

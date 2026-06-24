@@ -346,13 +346,17 @@ def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
     wp = fetch_live_win_probability(espn_id, timeout=timeout)
     if wp.get("status") != GameStatus.FINAL:
         return False
-    metrics = compute_game_shape(wp.get("plays") or [])
-    if metrics is None:
-        return False
     try:
         home_score = int(wp["home_score"])
         away_score = int(wp["away_score"])
     except (KeyError, ValueError, TypeError):
+        return False
+    # Use the ACTUAL winner (final score), not the last WP sample — see
+    # compute_game_shape; ESPN can finalize before the WP feed catches up.
+    metrics = compute_game_shape(
+        wp.get("plays") or [], home_won=home_score > away_score
+    )
+    if metrics is None:
         return False
     home_team = wp["home_team"]
     away_team = wp["away_team"]
@@ -385,7 +389,14 @@ def populate_game_shapes_for_recent_completions(
 ) -> None:
     """For completed 2026 games with no game_shapes row, fetch PBP and store the
     shape. Mirrors populate_excitement_for_recent_completions; transient failures
-    leave the row absent for next-run retry."""
+    leave the row absent for next-run retry.
+
+    Known limitation (deliberate): unlike excitement, a stored shape gets NO
+    post-FINAL refresh — the first successful write is permanent. Mirroring the
+    excitement refresh machinery isn't worth it for a watchability archive, and
+    the main late-correction risk (a winner flip before the WP feed catches up)
+    is already neutralized by deriving winner-based metrics from the final score
+    (see _build_and_store_shape / compute_game_shape), not the last WP sample."""
     games = get_completed_games_missing_shape(session, season_year=2026, limit=limit)
     if not games:
         logger.info("No completed games need game-shape backfill")
