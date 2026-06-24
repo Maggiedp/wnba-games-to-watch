@@ -29,9 +29,11 @@ from src.db.queries import (
     get_all_teams,
     get_completed_games,
     get_completed_games_missing_excitement,
+    get_completed_games_missing_shape,
     get_completed_postseason_games,
     get_games_for_excitement_refresh,
     get_importance_max_swing,
+    get_team_abbrev_map,
     get_team_by_id,
     get_team_by_name,
     get_teams_by_ids,
@@ -39,6 +41,7 @@ from src.db.queries import (
     save_importance_max_swing,
     upsert_daily_ranking,
     upsert_game,
+    upsert_game_shape,
     upsert_playoff_probability,
     upsert_team,
 )
@@ -54,6 +57,7 @@ from src.scoring.elo import (
     replay_games,
 )
 from src.scoring.excitement import compute_excitement
+from src.scoring.game_shape import compute_game_shape
 from src.scoring.importance import (
     normalize_importance_score,
     normalize_postseason_importance,
@@ -332,6 +336,100 @@ def populate_excitement_for_recent_completions(
         stored += 1
     session.commit()
     logger.info(f"Stored excitement_index for {stored} games")
+
+
+def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
+    """Fetch a completed game's WP series, compute its shape, upsert the
+    game_shapes row. Returns True if stored. Shared by the daily populate and
+    the backfill. Leaves the row absent (returns False) on a non-final feed,
+    insufficient plays, or unparseable scores — so it's retried next run.
+
+    Commits the session on a successful store (via upsert_game_shape's per-row
+    commit, which is load-bearing for its IntegrityError retry) — callers need a
+    follow-up commit only for their own pending writes (e.g. the daily populate's
+    attempt stamps on failed games), not for the shape rows themselves."""
+    wp = fetch_live_win_probability(espn_id, timeout=timeout)
+    if wp.get("status") != GameStatus.FINAL:
+        return False
+    try:
+        home_score = int(wp["home_score"])
+        away_score = int(wp["away_score"])
+    except (KeyError, ValueError, TypeError):
+        return False
+    # Use the ACTUAL winner (final score), not the last WP sample — see
+    # compute_game_shape; ESPN can finalize before the WP feed catches up.
+    metrics = compute_game_shape(
+        wp.get("plays") or [], home_won=home_score > away_score
+    )
+    if metrics is None:
+        return False
+    home_team = wp["home_team"]
+    away_team = wp["away_team"]
+    upsert_game_shape(
+        session,
+        espn_id=espn_id,
+        season=int(date[:4]),
+        date=date,
+        home_team=home_team,
+        away_team=away_team,
+        home_abbr=abbrev_map.get(home_team, home_team),
+        away_abbr=abbrev_map.get(away_team, away_team),
+        home_score=home_score,
+        away_score=away_score,
+        winner="home" if home_score > away_score else "away",
+        excitement=metrics.excitement,
+        tension=metrics.tension,
+        comeback=metrics.comeback,
+        lead_changes=metrics.lead_changes,
+        winner_low_wp=metrics.winner_low_wp,
+        curve=metrics.curve,
+    )
+    return True
+
+
+def populate_game_shapes_for_recent_completions(
+    session,
+    limit: int | None = DAILY_EXCITEMENT_RETRY_CAP,
+    timeout: int = BACKFILL_ESPN_TIMEOUT_S,
+) -> None:
+    """For completed 2026 games with no game_shapes row, fetch PBP and store the
+    shape. Mirrors populate_excitement_for_recent_completions; transient failures
+    leave the row absent for next-run retry.
+
+    Known limitation (deliberate): unlike excitement, a stored shape gets NO
+    post-FINAL refresh — the first successful write is permanent. Mirroring the
+    excitement refresh machinery isn't worth it for a watchability archive, and
+    the main late-correction risk (a winner flip before the WP feed catches up)
+    is already neutralized by deriving winner-based metrics from the final score
+    (see _build_and_store_shape / compute_game_shape), not the last WP sample."""
+    games = get_completed_games_missing_shape(session, season_year=2026, limit=limit)
+    if not games:
+        logger.info("No completed games need game-shape backfill")
+        return
+    logger.info(f"Computing game shapes for {len(games)} completed games")
+    abbrev_map = get_team_abbrev_map(session)
+    now = datetime.now()
+    stored = 0
+    for game in games:
+        # Stamp the attempt before the network call so a failure still records
+        # that we tried — keeps the capped retry queue rotating (mirrors the
+        # excitement populate).
+        game.game_shape_last_attempt_at = now
+        try:
+            if _build_and_store_shape(
+                session, game.espn_id, game.date, abbrev_map, timeout
+            ):
+                stored += 1
+        except (ESPNAPIError, ESPNNotFoundError) as e:
+            logger.warning(
+                f"Could not fetch PBP for shape (espn_id={game.espn_id}): {e} — skipping"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to compute shape (espn_id={game.espn_id}): {e} — skipping"
+            )
+    session.commit()
+    logger.info(f"Stored game_shapes for {stored} games")
 
 
 def refresh_recent_excitement_scores(
@@ -1178,6 +1276,10 @@ def main() -> int:
                 populate_excitement_for_recent_completions(session)
             except Exception as e:
                 logger.warning(f"Excitement backfill failed (non-fatal): {e}")
+            try:
+                populate_game_shapes_for_recent_completions(session)
+            except Exception as e:
+                logger.warning(f"Game-shape backfill failed (non-fatal): {e}")
             try:
                 refresh_recent_excitement_scores(session)
             except Exception as e:

@@ -57,6 +57,10 @@ class Game(Base):
     # refined the PBP after our first final read. NULL once locked beyond
     # the window, or if no score has been stored.
     excitement_computed_at = Column(DateTime, nullable=True)
+    # Last time the daily loop tried to compute this game's win-probability
+    # shape (its game_shapes row). NULL = never attempted. Ordering retries by
+    # this prevents a permanently-failing game from starving others under the cap.
+    game_shape_last_attempt_at = Column(DateTime, nullable=True)
     broadcaster = Column(String(50), default="")
     espn_id = Column(String(20), nullable=True)
     # ESPN season type: 1=preseason, 2=regular, 3=postseason. NULL on
@@ -140,6 +144,37 @@ class SeasonConfig(Base):
     season_year = Column(Integer, primary_key=True)
     importance_max_swing = Column(Float, nullable=False)
     created_at = Column(DateTime, default=func.now())
+
+
+class GameShape(Base):
+    """Self-contained per-game win-probability shape for the Replay Value
+    archive. Keyed by espn_id (NOT FK'd to games) so it holds 2024-2026
+    uniformly — 2024/2025 games are never written to the games table (the Elo
+    replay fetches them from ESPN at runtime). Correlates to 2026 games/live
+    rows by shared espn_id."""
+
+    __tablename__ = "game_shapes"
+
+    id = Column(Integer, primary_key=True)
+    espn_id = Column(String(20), nullable=False, unique=True)
+    season = Column(Integer, nullable=False)
+    date = Column(String(10), nullable=False)  # YYYY-MM-DD
+    home_team = Column(String(64), nullable=False)
+    away_team = Column(String(64), nullable=False)
+    home_abbr = Column(String(16), nullable=False)
+    away_abbr = Column(String(16), nullable=False)
+    home_score = Column(Integer, nullable=False)
+    away_score = Column(Integer, nullable=False)
+    winner = Column(String(4), nullable=False)  # 'home' | 'away'
+    excitement = Column(Float, nullable=False)
+    tension = Column(Float, nullable=False)
+    comeback = Column(Float, nullable=False)
+    lead_changes = Column(Integer, nullable=False)
+    winner_low_wp = Column(Float, nullable=False)
+    curve = Column(Text, nullable=False)  # JSON [[t_sec, home_pct], ...]
+    computed_at = Column(DateTime, default=func.now())
+
+    __table_args__ = (Index("idx_game_shapes_season", "season"),)
 
 
 def get_database_url() -> str:
@@ -349,6 +384,7 @@ def init_db():
                 "ALTER TABLE games ADD COLUMN excitement_index FLOAT",
                 "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
                 "ALTER TABLE games ADD COLUMN excitement_computed_at DATETIME",
+                "ALTER TABLE games ADD COLUMN game_shape_last_attempt_at DATETIME",
                 "ALTER TABLE games ADD COLUMN season_type INTEGER",
                 "ALTER TABLE games ADD COLUMN time_utc VARCHAR(40)",
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_semis_prob FLOAT",
@@ -436,6 +472,12 @@ def init_db():
                 text(
                     "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
                     "excitement_computed_at TIMESTAMP"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
+                    "game_shape_last_attempt_at TIMESTAMP"
                 )
             )
             conn.execute(
