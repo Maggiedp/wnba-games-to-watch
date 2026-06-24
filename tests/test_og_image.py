@@ -408,3 +408,28 @@ def test_detail_head_has_og_image_tags(session, team_ids):
     assert (
         'name="twitter:image" content="https://wumbers.com/game/401234/og.png"' in html
     )
+
+
+def test_render_replay_card_is_memoized():
+    from src.api.og_image import render_replay_card
+
+    assert render_replay_card() is render_replay_card()
+
+
+def test_render_replay_card_returns_png():
+    from src.api.og_image import render_replay_card
+
+    assert render_replay_card()[:8] == _PNG_MAGIC
+
+
+def test_og_replay_endpoint_returns_png(client):
+    r = client.get("/og-replay.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content[:8] == _PNG_MAGIC
+
+
+def test_og_replay_endpoint_answers_head(client):
+    r = client.head("/og-replay.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"

@@ -1,6 +1,7 @@
 """FastAPI app for WNBA Games to Watch."""
 
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -28,8 +29,10 @@ from src.db.queries import (
     get_completed_rankings,
     get_daily_rankings,
     get_elo_history,
+    get_game_shapes,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
+    get_shape_seasons,
     get_team_records,
     get_teams_by_ids,
     get_upcoming_rankings,
@@ -93,6 +96,13 @@ async def rankings_page():
     from src.api.routes import render_rankings
 
     return HTMLResponse(render_rankings())
+
+
+@app.get("/replay", response_class=HTMLResponse)
+async def replay_page():
+    from src.api.routes import render_replay
+
+    return HTMLResponse(render_replay())
 
 
 @app.get("/game/{espn_id}", response_class=HTMLResponse)
@@ -170,6 +180,13 @@ def og_rankings_image():
     from src.api.og_image import render_rankings_card
 
     return _png_response(render_rankings_card(), _OG_STATIC_CACHE_S)
+
+
+@app.api_route("/og-replay.png", methods=["GET", "HEAD"])
+def og_replay_image():
+    from src.api.og_image import render_replay_card
+
+    return _png_response(render_replay_card(), _OG_STATIC_CACHE_S)
 
 
 @app.get("/api/games/today", response_model=list[GameResponse])
@@ -495,6 +512,57 @@ async def get_elo_history_endpoint(season: int = Query(default=None)):
             )
             abbrevs.setdefault(t.name, t.abbreviation or "")
         return {"season": season, "teams": out, "abbrevs": abbrevs}
+    finally:
+        session.close()
+
+
+@app.get("/api/replay")
+async def get_replay_endpoint(season: int = Query(default=None)):
+    """Game-shape archive for a season (DB-only; reads game_shapes alone — it's
+    self-contained, so no join). Returns the season's games + the list of seasons
+    that have data (for the page's season selector). When no season is requested,
+    defaults to the newest POPULATED season (not the current calendar year, which
+    is empty off-season / before a new season's backfill)."""
+    session = get_session()
+    try:
+        seasons = get_shape_seasons(session)
+        if season is None:
+            season = seasons[0] if seasons else int(today_et()[:4])
+        known_ids = get_all_known_espn_ids(session)
+        games = []
+        for s in get_game_shapes(session, season):
+            try:
+                curve = json.loads(s.curve)
+                if not isinstance(curve, list):
+                    raise ValueError("curve is not a list")
+            except (ValueError, TypeError):
+                # A single corrupt stored curve (partial backfill / manual DB
+                # repair) must degrade to a missing card, not blank the whole
+                # season. Mirrors the importance_detail shape-guard convention.
+                logger.warning(
+                    "Skipping game_shape with unparseable curve (espn_id=%s)",
+                    s.espn_id,
+                )
+                continue
+            games.append(
+                {
+                    "espn_id": s.espn_id,
+                    "date": s.date,
+                    "home_abbr": s.home_abbr,
+                    "away_abbr": s.away_abbr,
+                    "home_score": s.home_score,
+                    "away_score": s.away_score,
+                    "winner": s.winner,
+                    "excitement": round(s.excitement, 2),
+                    "tension": round(s.tension, 4),
+                    "comeback": round(s.comeback, 4),
+                    "lead_changes": s.lead_changes,
+                    "winner_low_wp": round(s.winner_low_wp, 4),
+                    "has_detail": s.espn_id in known_ids,
+                    "curve": curve,
+                }
+            )
+        return {"season": season, "seasons": seasons, "games": games}
     finally:
         session.close()
 

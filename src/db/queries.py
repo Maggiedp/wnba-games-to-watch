@@ -1104,3 +1104,27 @@ def get_completed_games_missing_shape(
     if limit is not None:
         q = q.limit(limit)
     return q.all()
+
+
+def get_game_shapes(session: Session, season: int) -> list[GameShape]:
+    """All stored game shapes for a season, newest first. DB-only reader for the
+    /replay archive — the page re-sorts client-side by the active metric, so the
+    order here is only the fallback."""
+    return (
+        session.query(GameShape)
+        .filter(GameShape.season == season)
+        .order_by(GameShape.date.desc())
+        .all()
+    )
+
+
+def get_shape_seasons(session: Session) -> list[int]:
+    """Distinct seasons present in game_shapes, newest first — powers the
+    /replay season selector so it never offers an empty season."""
+    rows = (
+        session.query(GameShape.season)
+        .distinct()
+        .order_by(GameShape.season.desc())
+        .all()
+    )
+    return [r[0] for r in rows]
