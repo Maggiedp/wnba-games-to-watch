@@ -1,6 +1,7 @@
 """FastAPI app for WNBA Games to Watch."""
 
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -28,8 +29,10 @@ from src.db.queries import (
     get_completed_rankings,
     get_daily_rankings,
     get_elo_history,
+    get_game_shapes,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
+    get_shape_seasons,
     get_team_records,
     get_teams_by_ids,
     get_upcoming_rankings,
@@ -495,6 +498,44 @@ async def get_elo_history_endpoint(season: int = Query(default=None)):
             )
             abbrevs.setdefault(t.name, t.abbreviation or "")
         return {"season": season, "teams": out, "abbrevs": abbrevs}
+    finally:
+        session.close()
+
+
+@app.get("/api/replay")
+async def get_replay_endpoint(season: int = Query(default=None)):
+    """Game-shape archive for a season (DB-only; reads game_shapes alone — it's
+    self-contained, so no join). Returns the season's games + the list of seasons
+    that have data (for the page's season selector). Default season = current."""
+    if season is None:
+        season = int(today_et()[:4])
+    session = get_session()
+    try:
+        shapes = get_game_shapes(session, season)
+        return {
+            "season": season,
+            "seasons": get_shape_seasons(session),
+            "games": [
+                {
+                    "espn_id": s.espn_id,
+                    "date": s.date,
+                    "home_team": s.home_team,
+                    "away_team": s.away_team,
+                    "home_abbr": s.home_abbr,
+                    "away_abbr": s.away_abbr,
+                    "home_score": s.home_score,
+                    "away_score": s.away_score,
+                    "winner": s.winner,
+                    "excitement": round(s.excitement, 2),
+                    "tension": round(s.tension, 4),
+                    "comeback": round(s.comeback, 4),
+                    "lead_changes": s.lead_changes,
+                    "winner_low_wp": round(s.winner_low_wp, 4),
+                    "curve": json.loads(s.curve),
+                }
+                for s in shapes
+            ],
+        }
     finally:
         session.close()
 
