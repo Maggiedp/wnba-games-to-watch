@@ -8,3 +8,9 @@ def test_replay_page_renders_with_tokens_replaced(client):
     assert "function buildShapeSvg" in html  # renderer injected
     assert 'id="replay-grid"' in html
     assert 'data-sort="comeback"' in html
+
+
+def test_homepage_footer_links_to_replay(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    assert '<a href="/replay">Replay value</a>' in r.text
