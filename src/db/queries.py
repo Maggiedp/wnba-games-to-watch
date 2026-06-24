@@ -1074,7 +1074,7 @@ def get_existing_shape_espn_ids(session: Session, espn_ids: list[str]) -> set[st
 
 def get_team_abbrev_map(session: Session) -> dict[str, str]:
     """Canonical team name -> abbreviation, for compact card display."""
-    return {t.name: t.abbreviation for t in session.query(Team).all()}
+    return {t.name: t.abbreviation for t in get_all_teams(session)}
 
 
 def get_completed_games_missing_shape(

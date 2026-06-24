@@ -342,7 +342,12 @@ def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
     """Fetch a completed game's WP series, compute its shape, upsert the
     game_shapes row. Returns True if stored. Shared by the daily populate and
     the backfill. Leaves the row absent (returns False) on a non-final feed,
-    insufficient plays, or unparseable scores — so it's retried next run."""
+    insufficient plays, or unparseable scores — so it's retried next run.
+
+    Commits the session on a successful store (via upsert_game_shape's per-row
+    commit, which is load-bearing for its IntegrityError retry) — callers need a
+    follow-up commit only for their own pending writes (e.g. the daily populate's
+    attempt stamps on failed games), not for the shape rows themselves."""
     wp = fetch_live_win_probability(espn_id, timeout=timeout)
     if wp.get("status") != GameStatus.FINAL:
         return False

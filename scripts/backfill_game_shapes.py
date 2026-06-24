@@ -55,11 +55,10 @@ def backfill_range(
             ):
                 stored += 1
                 if stored % 25 == 0:
-                    session.commit()
+                    # upsert_game_shape commits per row; this is just progress.
                     logger.info(f"  …{stored} stored")
         except Exception as ex:  # one bad game must not abort the batch
             logger.warning(f"Skipping espn_id={espn_id}: {ex}")
-    session.commit()
     return stored
 
 
