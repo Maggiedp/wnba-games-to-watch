@@ -299,6 +299,11 @@ _HOMEPAGE_HELPERS_JS = _load_template("js/homepage_helpers.js")
 # rankings Elo chart.
 _LINE_CHART_JS = _load_template("js/line_chart.js")
 
+# Single-team win-probability "fever line" for the /replay archive
+# (buildShapeSvg), single-sourced + Node-tested; injected via
+# %%SHAPE_CHART_JS%% (pure/numeric — no shared.js dependency).
+_SHAPE_CHART_JS = _load_template("js/shape_chart.js")
+
 _HOMEPAGE_HTML = (
     _load_template("homepage.html")
     .replace("%%SITE_TITLE%%", _SITE_TITLE)
@@ -324,6 +329,15 @@ _RANKINGS_HTML = (
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
     .replace("%%LINE_CHART_JS%%", _LINE_CHART_JS)
+)
+
+_REPLAY_HTML = (
+    _load_template("replay.html")
+    .replace("%%SITE_TITLE%%", _SITE_TITLE)
+    .replace("%%SITE_URL%%", _SITE_URL)
+    .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
+    .replace("%%SHARED_JS%%", _SHARED_JS)
+    .replace("%%SHAPE_CHART_JS%%", _SHAPE_CHART_JS)
 )
 
 
@@ -905,3 +919,10 @@ def render_rankings() -> str:
     """Server-rendered /rankings page. Static shell — Elo data is fetched
     client-side from /api/elo-history, so it carries no per-request data."""
     return _RANKINGS_HTML
+
+
+def render_replay() -> str:
+    """Render the /replay archive shell. Like rankings, it's STATIC — the
+    gallery is fetched client-side from /api/replay, so it carries no
+    per-request data (same import-frozen caveat as the homepage)."""
+    return _REPLAY_HTML

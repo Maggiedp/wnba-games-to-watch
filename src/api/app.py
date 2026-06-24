@@ -98,6 +98,13 @@ async def rankings_page():
     return HTMLResponse(render_rankings())
 
 
+@app.get("/replay", response_class=HTMLResponse)
+async def replay_page():
+    from src.api.routes import render_replay
+
+    return HTMLResponse(render_replay())
+
+
 @app.get("/game/{espn_id}", response_class=HTMLResponse)
 def game_detail(espn_id: str):
     from src.api.routes import render_game_detail

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Replay Value · %%SITE_TITLE%%</title>
+<meta name="description" content="%%SITE_TITLE%%: which WNBA games were worth watching, ranked by the shape of the win-probability curve.">
+
+<meta property="og:title" content="Replay Value · %%SITE_TITLE%%">
+<meta property="og:description" content="Which WNBA games were worth watching, by win-probability shape.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="%%SITE_URL%%/replay">
+<meta property="og:image" content="%%SITE_URL%%/og-replay.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="WNBA games ranked by win-probability shape">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Replay Value · %%SITE_TITLE%%">
+<meta name="twitter:description" content="Which WNBA games were worth watching, by win-probability shape.">
+<meta name="twitter:image" content="%%SITE_URL%%/og-replay.png">
+
+%%SHARED_HEAD%%
+            .wrap { max-width: 920px; width: 100%; margin: 0 auto; padding: 24px 16px 64px; }
+            h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }
+            .sub { color: var(--text-muted); margin: 0 0 24px; }
+            a.back { color: var(--orange-deep); text-decoration: none; font-size: .9rem; }
+            .cross { color: var(--text-muted); font-size: .9rem; margin: 28px 0 0; }
+            .cross a { color: var(--orange-deep); }
+
+            .controls { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: center; margin: 0 0 24px; }
+            .sort-pills { display: inline-flex; gap: 8px; }
+            .sort-pill { padding: 5px 14px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: .85rem; transition: background .12s ease, color .12s ease, border-color .12s ease; }
+            .sort-pill:hover { border-color: var(--orange); color: var(--orange-deep); }
+            .sort-pill.active { background: var(--orange); border-color: var(--orange); color: #fff; }
+            .season-field { display: inline-flex; align-items: center; gap: 8px; font-size: .85rem; color: var(--text-muted); margin-left: auto; }
+            .season-field select { font: inherit; font-size: .85rem; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; }
+
+            .shape-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+            .shape-card { display: block; text-decoration: none; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; transition: border-color .12s ease, box-shadow .12s ease; }
+            .shape-card:hover { border-color: var(--orange); box-shadow: 0 2px 14px rgba(13,27,42,.06); }
+            .shape-card.lead { border-color: var(--orange); margin-bottom: 16px; padding: 22px; }
+            .shape-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: .9rem; }
+            .shape-star { color: var(--orange); }
+            .shape-score { font-family: var(--display); font-weight: 600; color: var(--navy); }
+            .shape-score .win { color: var(--orange-deep); }
+            .shape-date { color: var(--text-subtle); font-size: .8rem; margin-left: auto; }
+            .shape-chart { margin: 4px 0 10px; }
+            .shape-metric { display: flex; align-items: baseline; gap: 8px; }
+            .shape-metric-val { font-family: var(--display); font-weight: 700; font-size: 1.5rem; color: var(--navy); font-variant-numeric: tabular-nums; }
+            .shape-card.lead .shape-metric-val { font-size: 2.1rem; color: var(--orange); }
+            .shape-metric-lbl { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); }
+            .shape-caption { margin-top: 6px; color: var(--text-muted); font-size: .85rem; }
+
+            .shape-svg { width: 100%; height: auto; display: block; }
+            .shape-mid { stroke: #c8c2b8; stroke-width: 1; stroke-dasharray: 3,3; }
+            .shape-line { stroke-width: 1.6; stroke-linejoin: round; }
+            .shape-doubt { fill: rgba(255,107,0,.09); }
+            .shape-nadir { fill: var(--orange); }
+
+            @media (max-width: 640px) { .shape-grid { grid-template-columns: 1fr; } }
+        </style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">&larr; Back to games</a>
+  <h1>Replay Value</h1>
+  <p class="sub">Which WNBA games were worth watching — ranked by the shape of the win-probability curve.</p>
+
+  <div class="controls">
+    <div class="sort-pills" id="replay-sorts" role="group" aria-label="Sort by">
+      <button type="button" class="sort-pill" data-sort="excitement" aria-pressed="false">Excitement</button>
+      <button type="button" class="sort-pill" data-sort="tension" aria-pressed="false">Tension</button>
+      <button type="button" class="sort-pill" data-sort="comeback" aria-pressed="false">Comeback</button>
+    </div>
+    <label class="season-field">Season
+      <select id="replay-season"></select>
+    </label>
+  </div>
+
+  <div id="replay-lead"></div>
+  <div class="shape-grid" id="replay-grid"><p class="empty">Loading…</p></div>
+
+  <p class="cross">See <a href="/rankings">the power rankings</a> or <a href="/transparency">how the model is calibrated</a>.</p>
+</div>
+
+<script>
+%%SHARED_JS%%
+%%SHAPE_CHART_JS%%
+(function () {
+  const leadMount = document.getElementById('replay-lead');
+  const grid = document.getElementById('replay-grid');
+  const seasonSel = document.getElementById('replay-season');
+  const pillWrap = document.getElementById('replay-sorts');
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  // scale: spec section 3 — excitement raw, tension x10, comeback x20 (all ~0-10).
+  const METRICS = {
+    excitement: { label: 'Excitement', scale: 1 },
+    tension:    { label: 'Tension',    scale: 10 },
+    comeback:   { label: 'Comeback',   scale: 20 },
+  };
+  let games = [];
+  let sortKey = 'excitement';
+
+  const metricValue = (g, key) => g[key] * METRICS[key].scale;
+  const fmtMetric = (g, key) => metricValue(g, key).toFixed(1);
+
+  function fmtDate(iso) {
+    const [y, m, d] = iso.split('-').map(Number);
+    return `${MONTHS[m - 1]} ${d}, ${y}`;
+  }
+
+  function ledPct(g) {
+    const homeWon = g.winner === 'home';
+    let n = 0;
+    for (const pt of g.curve) { const qv = homeWon ? pt[1] : 1 - pt[1]; if (qv > 0.5) n++; }
+    return g.curve.length ? Math.round(100 * n / g.curve.length) : 0;
+  }
+
+  function caption(g) {
+    const parts = [`${g.lead_changes} lead change${g.lead_changes === 1 ? '' : 's'}`];
+    parts.push(g.comeback > 0
+      ? `winner trailed to ${Math.round(g.winner_low_wp * 100)}%`
+      : `led ${ledPct(g)}% of the way`);
+    return parts.join(' · ');
+  }
+
+  function scoreLine(g) {
+    const awayWon = g.winner === 'away';
+    const away = `<span class="${awayWon ? 'win' : ''}">${escapeHtml(g.away_abbr)} ${g.away_score}</span>`;
+    const home = `<span class="${awayWon ? '' : 'win'}">${escapeHtml(g.home_abbr)} ${g.home_score}</span>`;
+    return `${away} &middot; ${home}`;
+  }
+
+  function cardHtml(g, lead) {
+    const m = METRICS[sortKey];
+    const svg = buildShapeSvg(g.curve, g.winner, {
+      accent: lead ? 'var(--orange)' : 'var(--navy-3)', emphasis: sortKey,
+      width: lead ? 640 : 320, height: lead ? 150 : 90 });
+    const star = lead ? '<span class="shape-star" aria-hidden="true">✸</span>' : '';
+    return `<a class="shape-card${lead ? ' lead' : ''}" href="/game/${encodeURIComponent(g.espn_id)}">`
+      + `<div class="shape-head">${star}<span class="shape-score">${scoreLine(g)}</span>`
+      + `<span class="shape-date">${fmtDate(g.date)}</span></div>`
+      + `<div class="shape-chart">${svg}</div>`
+      + `<div class="shape-metric"><span class="shape-metric-val">${fmtMetric(g, sortKey)}</span>`
+      + `<span class="shape-metric-lbl">${m.label}</span></div>`
+      + `<div class="shape-caption">${caption(g)}</div></a>`;
+  }
+
+  function render() {
+    if (!games.length) {
+      leadMount.innerHTML = '';
+      grid.innerHTML = '<p class="empty">No games yet for this season.</p>';
+      return;
+    }
+    const sorted = [...games].sort((a, b) => metricValue(b, sortKey) - metricValue(a, sortKey));
+    leadMount.innerHTML = cardHtml(sorted[0], true);
+    grid.innerHTML = sorted.slice(1).map(g => cardHtml(g, false)).join('');
+  }
+
+  function setSort(key) {
+    sortKey = key;
+    pillWrap.querySelectorAll('[data-sort]').forEach(b => {
+      const on = b.dataset.sort === key;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    render();
+  }
+
+  async function load(season) {
+    leadMount.innerHTML = '';
+    grid.innerHTML = '<p class="empty">Loading…</p>';
+    try {
+      const res = await fetch('/api/replay' + (season ? '?season=' + season : ''));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      games = data.games || [];
+      if (seasonSel.options.length === 0) {
+        for (const s of (data.seasons || [])) {
+          const opt = document.createElement('option');
+          opt.value = s; opt.textContent = s;
+          seasonSel.appendChild(opt);
+        }
+        seasonSel.value = data.season;
+      }
+      render();
+    } catch (e) {
+      leadMount.innerHTML = '';
+      grid.innerHTML = '<p class="empty">Could not load the replay archive.</p>';
+    }
+  }
+
+  pillWrap.querySelectorAll('[data-sort]').forEach(b =>
+    b.addEventListener('click', () => setSort(b.dataset.sort)));
+  seasonSel.addEventListener('change', () => load(seasonSel.value));
+  setSort('excitement');
+  load();
+})();
+</script>
+</body>
+</html>
