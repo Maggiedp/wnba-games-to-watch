@@ -548,8 +548,6 @@ async def get_replay_endpoint(season: int = Query(default=None)):
                 {
                     "espn_id": s.espn_id,
                     "date": s.date,
-                    "home_team": s.home_team,
-                    "away_team": s.away_team,
                     "home_abbr": s.home_abbr,
                     "away_abbr": s.away_abbr,
                     "home_score": s.home_score,
