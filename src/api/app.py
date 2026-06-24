@@ -529,11 +529,22 @@ async def get_replay_endpoint(season: int = Query(default=None)):
         if season is None:
             season = seasons[0] if seasons else int(today_et()[:4])
         known_ids = get_all_known_espn_ids(session)
-        shapes = get_game_shapes(session, season)
-        return {
-            "season": season,
-            "seasons": seasons,
-            "games": [
+        games = []
+        for s in get_game_shapes(session, season):
+            try:
+                curve = json.loads(s.curve)
+                if not isinstance(curve, list):
+                    raise ValueError("curve is not a list")
+            except (ValueError, TypeError):
+                # A single corrupt stored curve (partial backfill / manual DB
+                # repair) must degrade to a missing card, not blank the whole
+                # season. Mirrors the importance_detail shape-guard convention.
+                logger.warning(
+                    "Skipping game_shape with unparseable curve (espn_id=%s)",
+                    s.espn_id,
+                )
+                continue
+            games.append(
                 {
                     "espn_id": s.espn_id,
                     "date": s.date,
@@ -550,11 +561,10 @@ async def get_replay_endpoint(season: int = Query(default=None)):
                     "lead_changes": s.lead_changes,
                     "winner_low_wp": round(s.winner_low_wp, 4),
                     "has_detail": s.espn_id in known_ids,
-                    "curve": json.loads(s.curve),
+                    "curve": curve,
                 }
-                for s in shapes
-            ],
-        }
+            )
+        return {"season": season, "seasons": seasons, "games": games}
     finally:
         session.close()
 

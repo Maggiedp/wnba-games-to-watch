@@ -79,6 +79,23 @@ def test_replay_defaults_to_newest_populated_season(env, client):
     assert len(data["games"]) == 1
 
 
+def test_replay_skips_unparseable_curve(env, client):
+    # A single corrupt stored curve must degrade to a missing card, not 500 the
+    # whole season (curve is opaque NOT-NULL text; a partial backfill / manual
+    # repair could leave one row malformed).
+    _seed(env, "good", 2026, "2026-06-01")
+    _seed(env, "bad", 2026, "2026-06-02")
+    session = env.get_session()
+    session.query(env.GameShape).filter_by(
+        espn_id="bad"
+    ).one().curve = "{not valid json"
+    session.commit()
+    session.close()
+    r = client.get("/api/replay?season=2026")
+    assert r.status_code == 200
+    assert [g["espn_id"] for g in r.json()["games"]] == ["good"]
+
+
 def test_replay_has_detail_true_only_when_game_in_table(env, client):
     from src.db.queries import upsert_game, upsert_team
 
