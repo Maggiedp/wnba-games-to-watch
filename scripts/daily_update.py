@@ -392,8 +392,13 @@ def populate_game_shapes_for_recent_completions(
         return
     logger.info(f"Computing game shapes for {len(games)} completed games")
     abbrev_map = get_team_abbrev_map(session)
+    now = datetime.now()
     stored = 0
     for game in games:
+        # Stamp the attempt before the network call so a failure still records
+        # that we tried — keeps the capped retry queue rotating (mirrors the
+        # excitement populate).
+        game.game_shape_last_attempt_at = now
         try:
             if _build_and_store_shape(
                 session, game.espn_id, game.date, abbrev_map, timeout

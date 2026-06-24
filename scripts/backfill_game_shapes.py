@@ -35,9 +35,12 @@ def _is_completed(event: dict) -> bool:
     return event.get("status") == GameStatus.FINAL or bool(event.get("winner_team"))
 
 
-def backfill_range(session, start: date, end: date) -> int:
-    """Backfill one date range. Returns the count newly stored."""
-    events = fetch_games_for_range(start, end)
+def backfill_range(
+    session, start: date, end: date, failed_windows: list[str] | None = None
+) -> int:
+    """Backfill one date range. Returns the count newly stored. Skipped source
+    windows (transient ESPN failures) are appended to `failed_windows`."""
+    events = fetch_games_for_range(start, end, failed_windows=failed_windows)
     completed = [e for e in events if e.get("event_id") and _is_completed(e)]
     already = get_existing_shape_espn_ids(session, [e["event_id"] for e in completed])
     abbrev_map = get_team_abbrev_map(session)
@@ -67,9 +70,17 @@ def main() -> int:
         session = get_session()
         try:
             total = 0
+            failed_windows: list[str] = []
             for season, start, end in SEASON_RANGES:
                 logger.info(f"Season {season}: {start}..{end}")
-                total += backfill_range(session, start, end)
+                total += backfill_range(session, start, end, failed_windows)
+            if failed_windows:
+                logger.error(
+                    f"INCOMPLETE: {len(failed_windows)} source window(s) failed to "
+                    f"fetch and were skipped: {failed_windows}. Stored {total} so far; "
+                    "re-run to fill the gaps (idempotent)."
+                )
+                return 1
             logger.info(f"=== Backfill complete: {total} stored ===")
             return 0
         finally:

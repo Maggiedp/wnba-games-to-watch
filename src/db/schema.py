@@ -57,6 +57,10 @@ class Game(Base):
     # refined the PBP after our first final read. NULL once locked beyond
     # the window, or if no score has been stored.
     excitement_computed_at = Column(DateTime, nullable=True)
+    # Last time the daily loop tried to compute this game's win-probability
+    # shape (its game_shapes row). NULL = never attempted. Ordering retries by
+    # this prevents a permanently-failing game from starving others under the cap.
+    game_shape_last_attempt_at = Column(DateTime, nullable=True)
     broadcaster = Column(String(50), default="")
     espn_id = Column(String(20), nullable=True)
     # ESPN season type: 1=preseason, 2=regular, 3=postseason. NULL on
@@ -380,6 +384,7 @@ def init_db():
                 "ALTER TABLE games ADD COLUMN excitement_index FLOAT",
                 "ALTER TABLE games ADD COLUMN excitement_last_attempt_at DATETIME",
                 "ALTER TABLE games ADD COLUMN excitement_computed_at DATETIME",
+                "ALTER TABLE games ADD COLUMN game_shape_last_attempt_at DATETIME",
                 "ALTER TABLE games ADD COLUMN season_type INTEGER",
                 "ALTER TABLE games ADD COLUMN time_utc VARCHAR(40)",
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_semis_prob FLOAT",
@@ -467,6 +472,12 @@ def init_db():
                 text(
                     "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
                     "excitement_computed_at TIMESTAMP"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
+                    "game_shape_last_attempt_at TIMESTAMP"
                 )
             )
             conn.execute(

@@ -1083,11 +1083,10 @@ def get_completed_games_missing_shape(
     """Completed `season_year` games (in the games table) with an espn_id but no
     game_shapes row yet - the daily-update candidate set.
 
-    Oldest first: a just-completed game whose ESPN WP feed isn't live yet fails
-    its shape fetch, and newest-first ordering would let a cluster of such recent
-    failures monopolize the capped retry queue and starve older missing rows (the
-    starvation `get_completed_games_missing_excitement` guards against via attempt
-    tracking). Oldest-first sends transient-failing recent games to the tail."""
+    Ordered least-recently-attempted first (NULL `game_shape_last_attempt_at` =
+    never attempted, surfaced first), then by attempt time, then date — the same
+    rotation `get_completed_games_missing_excitement` uses, so a permanently-
+    failing game rotates to the back instead of monopolizing the capped queue."""
     existing = session.query(GameShape.espn_id)
     q = (
         session.query(Game)
@@ -1096,7 +1095,11 @@ def get_completed_games_missing_shape(
         .filter(Game.espn_id.isnot(None))
         .filter(Game.espn_id.notin_(existing))
         .filter(_NOT_PRESEASON)
-        .order_by(Game.date.asc())
+        .order_by(
+            Game.game_shape_last_attempt_at.isnot(None),
+            Game.game_shape_last_attempt_at.asc(),
+            Game.date.desc(),
+        )
     )
     if limit is not None:
         q = q.limit(limit)

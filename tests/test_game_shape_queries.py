@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from src.db.queries import (
     get_completed_games_missing_shape,
     get_existing_shape_espn_ids,
@@ -123,7 +125,7 @@ def test_get_completed_games_missing_shape_excludes_shaped(env):
     session.close()
 
 
-def test_get_completed_games_missing_shape_orders_oldest_first(env):
+def test_get_completed_games_missing_shape_rotates_by_attempt(env):
     session = env.get_session()
     a = upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
     b = upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
@@ -139,7 +141,7 @@ def test_get_completed_games_missing_shape_orders_oldest_first(env):
         winner_id=a.id,
         season_type=2,
     )
-    upsert_game(
+    newer = upsert_game(
         session,
         team_a_id=a.id,
         team_b_id=b.id,
@@ -151,7 +153,14 @@ def test_get_completed_games_missing_shape_orders_oldest_first(env):
         season_type=2,
     )
     session.commit()
-    # oldest-first so transient-failing recent games can't starve older rows
+    # Both never attempted (NULL) -> newest date first.
+    assert [g.espn_id for g in get_completed_games_missing_shape(session)] == [
+        "newer",
+        "older",
+    ]
+    # Stamp the newer game as attempted -> it rotates behind the untouched older one.
+    newer.game_shape_last_attempt_at = datetime(2026, 8, 16)
+    session.commit()
     assert [g.espn_id for g in get_completed_games_missing_shape(session)] == [
         "older",
         "newer",

@@ -27,7 +27,9 @@ def test_backfill_stores_completed_and_skips_existing(env, monkeypatch):
             "winner_team": "Las Vegas Aces",
         },  # no event_id -> skipped
     ]
-    monkeypatch.setattr(bf, "fetch_games_for_range", lambda s, e: events)
+    monkeypatch.setattr(
+        bf, "fetch_games_for_range", lambda s, e, failed_windows=None: events
+    )
 
     def fake_wp(espn_id, timeout=10):
         return {
@@ -54,3 +56,19 @@ def test_backfill_stores_completed_and_skips_existing(env, monkeypatch):
     # re-running stores nothing new (idempotent skip)
     assert bf.backfill_range(session, date(2024, 5, 1), date(2024, 10, 31)) == 0
     session.close()
+
+
+def test_backfill_main_fails_closed_on_skipped_window(env, monkeypatch):
+    import scripts.backfill_game_shapes as bf
+
+    def fake_range(start, end, failed_windows=None):
+        # simulate a transient ESPN outage that skips this source window
+        if failed_windows is not None:
+            failed_windows.append(f"{start:%Y%m%d}-{end:%Y%m%d}")
+        return []
+
+    monkeypatch.setattr(bf, "fetch_games_for_range", fake_range)
+
+    # A skipped source window -> main() reports incomplete and exits non-zero
+    # instead of logging "complete" over a partial archive.
+    assert bf.main() == 1

@@ -145,10 +145,16 @@ def fetch_bpi_ratings() -> dict[str, float]:
     return ratings
 
 
-def fetch_games_for_range(start: date, end: date) -> list[dict]:
+def fetch_games_for_range(
+    start: date, end: date, failed_windows: list[str] | None = None
+) -> list[dict]:
     """Return all parsed WNBA games between start and end dates (inclusive).
 
-    Uses monthly batch requests. Filters out non-WNBA opponents.
+    Uses monthly batch requests. Filters out non-WNBA opponents. A failed
+    monthly fetch is logged and skipped (the daily Elo path must degrade, not
+    crash); pass `failed_windows` to have those skipped `YYYYMMDD-YYYYMMDD`
+    windows recorded, so a caller needing completeness (the one-shot backfill)
+    can detect the gap and fail closed instead of reporting a partial run.
     """
     wnba_teams = set(fetch_team_id_map().values())
     all_games: list[dict] = []
@@ -169,6 +175,8 @@ def fetch_games_for_range(start: date, end: date) -> list[dict]:
             data = _get(f"{SITE_API}/scoreboard", dates=date_param)
         except ESPNAPIError as e:
             logger.warning(f"Failed to fetch scoreboard for {date_param}: {e}")
+            if failed_windows is not None:
+                failed_windows.append(date_param)
             cursor = next_month
             continue
 
