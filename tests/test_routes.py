@@ -1366,11 +1366,13 @@ def test_playoff_odds_endpoint_omits_record_for_historical_date(env, client):
     assert rows[0]["losses"] is None
 
 
-def test_detail_shape_section_comeback_game():
-    from src.api.routes import _detail_shape_section
+# Valid baseline game_shapes row for the _detail_shape_section unit tests; each
+# test overrides only the field under test (cf. _seed_shape in
+# test_game_shape_queries.py for the analogous DB-write builder).
+def _shape(**overrides):
     from src.db.schema import GameShape
 
-    shape = GameShape(
+    fields = dict(
         espn_id="401",
         season=2026,
         date="2026-08-15",
@@ -1388,7 +1390,14 @@ def test_detail_shape_section_comeback_game():
         winner_low_wp=0.33,
         curve="[[0.0, 0.5], [1200.0, 0.2], [2400.0, 0.9]]",
     )
-    html = _detail_shape_section(shape)
+    fields.update(overrides)
+    return GameShape(**fields)
+
+
+def test_detail_shape_section_comeback_game():
+    from src.api.routes import _detail_shape_section
+
+    html = _detail_shape_section(_shape())
     assert "Game shape</h2>" in html
     assert "9.4" in html  # excitement (raw)
     assert "8.7" in html  # tension * 10
@@ -1402,27 +1411,15 @@ def test_detail_shape_section_comeback_game():
 
 def test_detail_shape_section_blowout_uses_led_caption():
     from src.api.routes import _detail_shape_section
-    from src.db.schema import GameShape
 
-    shape = GameShape(
-        espn_id="402",
-        season=2026,
-        date="2026-08-15",
-        home_team="Las Vegas Aces",
-        away_team="New York Liberty",
-        home_abbr="LV",
-        away_abbr="NY",
-        home_score=100,
-        away_score=70,
-        winner="home",
-        excitement=2.0,
-        tension=0.1,
-        comeback=0.0,
-        lead_changes=0,
-        winner_low_wp=0.6,
-        curve="[[0.0, 0.6], [1200.0, 0.8], [2400.0, 0.99]]",
+    # comeback == 0 + a wire-to-wire winner -> "led X%" caption, tension emphasis.
+    html = _detail_shape_section(
+        _shape(
+            comeback=0.0,
+            lead_changes=0,
+            curve="[[0.0, 0.6], [1200.0, 0.8], [2400.0, 0.99]]",
+        )
     )
-    html = _detail_shape_section(shape)
     assert "led 100% of the way" in html  # winner > .5 at all 3 samples
     assert "0 lead changes" in html
     assert 'data-emphasis="tension"' in html
@@ -1436,162 +1433,51 @@ def test_detail_shape_section_none_returns_empty():
 
 def test_detail_shape_section_unparseable_curve_returns_empty():
     from src.api.routes import _detail_shape_section
-    from src.db.schema import GameShape
 
-    shape = GameShape(
-        espn_id="403",
-        season=2026,
-        date="2026-08-15",
-        home_team="A",
-        away_team="B",
-        home_abbr="A",
-        away_abbr="B",
-        home_score=80,
-        away_score=70,
-        winner="home",
-        excitement=3.0,
-        tension=0.2,
-        comeback=0.0,
-        lead_changes=1,
-        winner_low_wp=0.5,
-        curve="not json",
-    )
-    assert _detail_shape_section(shape) == ""
+    assert _detail_shape_section(_shape(curve="not json")) == ""
 
 
 def test_detail_shape_section_invalid_shape_curve_returns_empty():
     from src.api.routes import _detail_shape_section
-    from src.db.schema import GameShape
 
     # JSON-parseable but not [[num, num], ...] (a dict). Must not crash on pt[1]
     # in the led branch; the whole section is omitted.
-    shape = GameShape(
-        espn_id="404",
-        season=2026,
-        date="2026-08-15",
-        home_team="A",
-        away_team="B",
-        home_abbr="A",
-        away_abbr="B",
-        home_score=80,
-        away_score=70,
-        winner="home",
-        excitement=3.0,
-        tension=0.2,
-        comeback=0.0,
-        lead_changes=1,
-        winner_low_wp=0.6,
-        curve='{"a": 1}',
-    )
-    assert _detail_shape_section(shape) == ""
+    assert _detail_shape_section(_shape(curve='{"a": 1}')) == ""
 
 
 def test_detail_shape_section_curve_with_quote_string_is_dropped():
     from src.api.routes import _detail_shape_section
-    from src.db.schema import GameShape
 
     # Well-shaped 2-tuples but a non-numeric, quote-bearing first element that
     # would otherwise break out of the single-quoted data-curve attribute.
-    # comeback > 0 skips the curve-iterating branch, so only validation stops it.
-    shape = GameShape(
-        espn_id="405",
-        season=2026,
-        date="2026-08-15",
-        home_team="A",
-        away_team="B",
-        home_abbr="A",
-        away_abbr="B",
-        home_score=80,
-        away_score=70,
-        winner="home",
-        excitement=3.0,
-        tension=0.2,
-        comeback=0.3,
-        lead_changes=1,
-        winner_low_wp=0.2,
-        curve='[["a\'onmouseover=alert(1)", 0.5], [1.0, 0.9]]',
+    # comeback > 0 (default) skips the curve-iterating branch, so only validation
+    # stops it.
+    html = _detail_shape_section(
+        _shape(curve='[["a\'onmouseover=alert(1)", 0.5], [1.0, 0.9]]')
     )
-    html = _detail_shape_section(shape)
     assert html == ""
     assert "onmouseover" not in html
 
 
 def test_detail_shape_section_nonfinite_scalar_returns_empty():
     from src.api.routes import _detail_shape_section
-    from src.db.schema import GameShape
 
     # winner_low_wp = NaN would crash _pct -> int(NaN) in the comeback branch.
-    shape = GameShape(
-        espn_id="406",
-        season=2026,
-        date="2026-08-15",
-        home_team="A",
-        away_team="B",
-        home_abbr="A",
-        away_abbr="B",
-        home_score=80,
-        away_score=70,
-        winner="home",
-        excitement=3.0,
-        tension=0.2,
-        comeback=0.3,
-        lead_changes=1,
-        winner_low_wp=float("nan"),
-        curve="[[0.0, 0.5], [1.0, 0.9]]",
-    )
-    assert _detail_shape_section(shape) == ""
+    assert _detail_shape_section(_shape(winner_low_wp=float("nan"))) == ""
 
 
 def test_detail_shape_section_null_scalar_returns_empty():
     from src.api.routes import _detail_shape_section
-    from src.db.schema import GameShape
 
     # excitement = None would crash the f"{...:.1f}" format.
-    shape = GameShape(
-        espn_id="407",
-        season=2026,
-        date="2026-08-15",
-        home_team="A",
-        away_team="B",
-        home_abbr="A",
-        away_abbr="B",
-        home_score=80,
-        away_score=70,
-        winner="home",
-        excitement=None,
-        tension=0.2,
-        comeback=0.0,
-        lead_changes=1,
-        winner_low_wp=0.6,
-        curve="[[0.0, 0.6], [1.0, 0.9]]",
-    )
-    assert _detail_shape_section(shape) == ""
+    assert _detail_shape_section(_shape(excitement=None)) == ""
 
 
 def test_detail_shape_section_nan_in_curve_returns_empty():
     from src.api.routes import _detail_shape_section
-    from src.db.schema import GameShape
 
     # json.loads accepts NaN; it must be rejected so data-curve stays valid JSON.
-    shape = GameShape(
-        espn_id="408",
-        season=2026,
-        date="2026-08-15",
-        home_team="A",
-        away_team="B",
-        home_abbr="A",
-        away_abbr="B",
-        home_score=80,
-        away_score=70,
-        winner="home",
-        excitement=3.0,
-        tension=0.2,
-        comeback=0.3,
-        lead_changes=1,
-        winner_low_wp=0.2,
-        curve="[[0.0, NaN], [1.0, 0.9]]",
-    )
-    assert _detail_shape_section(shape) == ""
+    assert _detail_shape_section(_shape(curve="[[0.0, NaN], [1.0, 0.9]]")) == ""
 
 
 def test_render_game_detail_includes_shape_section_when_present(session, team_ids):
