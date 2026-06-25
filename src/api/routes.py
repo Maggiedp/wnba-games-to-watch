@@ -896,6 +896,12 @@ def _detail_shape_section(shape) -> str:
     # None > 0, format(None), pt[1]) or emit invalid JSON into data-curve.
     # Validate every DB value consumed below and degrade (omit the section) like
     # /api/replay guards its curve rows; never trust json.loads success alone.
+    # Scope is deliberately type/finite, NOT domain-range (probs in [0,1],
+    # lead_changes >= 0): out-of-range-but-finite values can't crash or break out
+    # of HTML — at worst a cosmetic caption/SVG — and are unreachable from
+    # compute_game_shape (all derived from sanitized home_pct in [0,1]). Range
+    # checks here would guard only hand-edited, physically-impossible rows
+    # (adversarial-review round 3 — accepted won't-fix).
     def _is_finite(x: object) -> bool:
         return (
             isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
