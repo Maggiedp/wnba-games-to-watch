@@ -1128,3 +1128,9 @@ def get_shape_seasons(session: Session) -> list[int]:
         .all()
     )
     return [r[0] for r in rows]
+
+
+def get_shape_by_espn_id(session: Session, espn_id: str) -> GameShape | None:
+    """The stored game shape for one game, or None. DB-only reader for the
+    detail-page 'Game shape' panel; looked up by espn_id (the table's key)."""
+    return session.query(GameShape).filter(GameShape.espn_id == espn_id).first()

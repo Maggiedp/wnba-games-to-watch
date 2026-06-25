@@ -17,6 +17,7 @@ from src.db.queries import (
     get_game_fields,
     get_head_to_head,
     get_playoff_probabilities,
+    get_shape_by_espn_id,
     get_teams_by_ids,
 )
 from src.db.schema import DailyRanking, Game
@@ -271,7 +272,13 @@ _SHARED_HEAD = """\
             .trend-line.hi { stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }
             .trend-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
             .trend-label { fill: var(--text-subtle); font-size: 9.5px; font-variant-numeric: tabular-nums; cursor: pointer; }
-            .trend-label.hi { fill: var(--orange); font-weight: 600; }\
+            .trend-label.hi { fill: var(--orange); font-weight: 600; }
+            /* Game-shape fever line (buildShapeSvg) — shared by /replay + detail */
+            .shape-svg { width: 100%; height: auto; display: block; }
+            .shape-mid { stroke: #c8c2b8; stroke-width: 1; stroke-dasharray: 3,3; }
+            .shape-line { stroke-width: 1.6; stroke-linejoin: round; }
+            .shape-doubt { fill: rgba(255,107,0,.09); }
+            .shape-nadir { fill: var(--orange); }\
 """
 
 # SVG win-probability line-chart builder + live header for the game detail
@@ -370,7 +377,8 @@ def render_game_detail(session: Session, espn_id: str) -> str | None:
         session, game.team_a_id, game.team_b_id, season_year=season_year
     )
 
-    return _render_game_detail_html(game, team_a, team_b, ranking, h2h)
+    shape = get_shape_by_espn_id(session, espn_id)
+    return _render_game_detail_html(game, team_a, team_b, ranking, h2h, shape)
 
 
 _DETAIL_STYLE = """
@@ -639,6 +647,11 @@ _DETAIL_STYLE = """
                 display: block;
                 overflow: visible;
             }
+            .detail-shape-chart { margin: 6px 0 12px; max-width: 360px; }
+            .detail-shape-metrics { display: flex; flex-wrap: wrap; gap: 14px 28px; }
+            .detail-shape-metrics .v { font-family: var(--display); font-weight: 700; font-size: 1.4rem; color: var(--navy); font-variant-numeric: tabular-nums; }
+            .detail-shape-metrics .l { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-left: 6px; }
+            .detail-shape-caption { margin-top: 8px; color: var(--text-muted); font-size: .88rem; }
 """
 
 
@@ -860,7 +873,111 @@ def _detail_h2h_section(game, team_a, team_b, h2h) -> str:
     return "".join(rows)
 
 
-def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
+def _detail_shape_section(shape) -> str:
+    """The 'Game shape' panel for the detail page: three metrics + a caption +
+    a mount for the winner-oriented fever line (drawn client-side by
+    buildShapeSvg from the data-* attributes). Returns '' when there's no
+    stored shape (live / not-yet-computed game) or the stored curve is
+    unparseable, so the section is omitted entirely — the same 'appears after
+    the daily run' behavior as the importance block. Scaling (excitement x1,
+    tension x10, comeback x20) and caption wording mirror the /replay gallery."""
+    if shape is None:
+        return ""
+    try:
+        curve = json.loads(shape.curve)
+    except (ValueError, TypeError):
+        logger.warning("game_shapes curve unparseable for espn_id=%s", shape.espn_id)
+        return ""
+
+    # Stored game_shapes is numeric-by-construction, but a corrupt row (backfill
+    # bug, manual DB repair, schema drift) can be JSON-parseable yet unusable —
+    # json.loads accepts NaN/Infinity, a scalar can be null/string, or the curve
+    # can be wrong-shaped. Any of those would crash the render (int(NaN),
+    # None > 0, format(None), pt[1]) or emit invalid JSON into data-curve.
+    # Validate every DB value consumed below and degrade (omit the section) like
+    # /api/replay guards its curve rows; never trust json.loads success alone.
+    # Scope is deliberately type/finite, NOT domain-range (probs in [0,1],
+    # lead_changes >= 0): out-of-range-but-finite values can't crash or break out
+    # of HTML — at worst a cosmetic caption/SVG — and are unreachable from
+    # compute_game_shape (all derived from sanitized home_pct in [0,1]). Range
+    # checks here would guard only hand-edited, physically-impossible rows
+    # (adversarial-review round 3 — accepted won't-fix).
+    def _is_finite(x: object) -> bool:
+        return (
+            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+        )
+
+    if (
+        shape.winner not in ("home", "away")
+        or not isinstance(shape.lead_changes, int)
+        or isinstance(shape.lead_changes, bool)
+        or not _is_finite(shape.excitement)
+        or not _is_finite(shape.tension)
+        or not _is_finite(shape.comeback)
+        or not _is_finite(shape.winner_low_wp)
+        or not (
+            isinstance(curve, list)
+            and len(curve) >= 2
+            and all(
+                isinstance(pt, list)
+                and len(pt) == 2
+                and _is_finite(pt[0])
+                and _is_finite(pt[1])
+                for pt in curve
+            )
+        )
+    ):
+        logger.warning(
+            "game_shapes row malformed for espn_id=%s; omitting shape panel",
+            shape.espn_id,
+        )
+        return ""
+
+    # Match JS Math.round (half-up); Python's round() is banker's rounding and
+    # would disagree with /replay at exact .5 boundaries.
+    def _pct(x: float) -> int:
+        return int(x * 100 + 0.5)
+
+    n = shape.lead_changes
+    lead_txt = f"{n} lead change" + ("" if n == 1 else "s")
+    if shape.comeback > 0:
+        tail = f"winner trailed to {_pct(shape.winner_low_wp)}%"
+        emphasis = "comeback"
+    else:
+        home_won = shape.winner == "home"
+        favored = sum(1 for pt in curve if (pt[1] if home_won else 1 - pt[1]) > 0.5)
+        led = int(100 * favored / len(curve) + 0.5)
+        tail = f"led {led}% of the way"
+        emphasis = "tension"
+
+    # Values are validated above; DB-derived data that lands in HTML is still
+    # escaped (the detail page's convention — see _detail_h2h_section). For valid
+    # numeric curves escape_html is a no-op; if validation ever regresses it
+    # neutralizes attribute-breakout chars, and the browser decodes the entities
+    # back before JSON.parse reads data-curve.
+    curve_attr = escape_html(json.dumps(curve))
+    winner_attr = escape_html(shape.winner)
+    metrics = (
+        f'<span><span class="v">{shape.excitement:.1f}</span>'
+        '<span class="l">Excitement</span></span>'
+        f'<span><span class="v">{shape.tension * 10:.1f}</span>'
+        '<span class="l">Tension</span></span>'
+        f'<span><span class="v">{shape.comeback * 20:.1f}</span>'
+        '<span class="l">Comeback</span></span>'
+    )
+    return (
+        "<section>"
+        '<h2 class="section-title">Game shape</h2>'
+        '<div id="shape-mini" class="detail-shape-chart" '
+        f"data-curve='{curve_attr}' data-winner=\"{winner_attr}\" "
+        f'data-emphasis="{emphasis}"></div>'
+        f'<div class="detail-shape-metrics">{metrics}</div>'
+        f'<p class="detail-shape-caption">{lead_txt} &middot; {tail}</p>'
+        "</section>"
+    )
+
+
+def _render_game_detail_html(game, team_a, team_b, ranking, h2h, shape) -> str:
     name_a = team_a.name
     name_b = team_b.name
     title = f"{name_a} vs {name_b} — {_SITE_TITLE}"
@@ -896,9 +1013,11 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
         wp_section=_detail_win_prob_section(ranking, team_a, team_b),
         breakdown_section=_detail_breakdown_section(ranking, team_a, team_b),
         h2h_section=_detail_h2h_section(game, team_a, team_b, h2h),
+        shape_section=_detail_shape_section(shape),
         shared_head=_SHARED_HEAD,
         detail_style=_DETAIL_STYLE,
         wp_chart_js=_WP_CHART_JS,
+        shape_chart_js=_SHAPE_CHART_JS,
         shared_js=_SHARED_JS,
     )
 

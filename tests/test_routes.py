@@ -10,6 +10,7 @@ from src.db.queries import (
     get_team_by_id,
     upsert_daily_ranking,
     upsert_game,
+    upsert_game_shape,
     upsert_playoff_probability,
     upsert_team,
 )
@@ -1363,3 +1364,268 @@ def test_playoff_odds_endpoint_omits_record_for_historical_date(env, client):
     rows = client.get("/api/playoff-odds?date=2026-05-15").json()
     assert rows[0]["wins"] is None
     assert rows[0]["losses"] is None
+
+
+# Valid baseline game_shapes row for the _detail_shape_section unit tests; each
+# test overrides only the field under test (cf. _seed_shape in
+# test_game_shape_queries.py for the analogous DB-write builder).
+def _shape(**overrides):
+    from src.db.schema import GameShape
+
+    fields = dict(
+        espn_id="401",
+        season=2026,
+        date="2026-08-15",
+        home_team="Las Vegas Aces",
+        away_team="New York Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.4,
+        tension=0.87,
+        comeback=0.31,
+        lead_changes=9,
+        winner_low_wp=0.33,
+        curve="[[0.0, 0.5], [1200.0, 0.2], [2400.0, 0.9]]",
+    )
+    fields.update(overrides)
+    return GameShape(**fields)
+
+
+def test_detail_shape_section_comeback_game():
+    from src.api.routes import _detail_shape_section
+
+    html = _detail_shape_section(_shape())
+    assert "Game shape</h2>" in html
+    assert "9.4" in html  # excitement (raw)
+    assert "8.7" in html  # tension * 10
+    assert "6.2" in html  # comeback * 20
+    assert "winner trailed to 33%" in html
+    assert "9 lead changes" in html
+    assert 'data-winner="home"' in html
+    assert 'data-emphasis="comeback"' in html
+    assert "data-curve=" in html
+
+
+def test_detail_shape_section_blowout_uses_led_caption():
+    from src.api.routes import _detail_shape_section
+
+    # comeback == 0 + a wire-to-wire winner -> "led X%" caption, tension emphasis.
+    html = _detail_shape_section(
+        _shape(
+            comeback=0.0,
+            lead_changes=0,
+            curve="[[0.0, 0.6], [1200.0, 0.8], [2400.0, 0.99]]",
+        )
+    )
+    assert "led 100% of the way" in html  # winner > .5 at all 3 samples
+    assert "0 lead changes" in html
+    assert 'data-emphasis="tension"' in html
+
+
+def test_detail_shape_section_none_returns_empty():
+    from src.api.routes import _detail_shape_section
+
+    assert _detail_shape_section(None) == ""
+
+
+def test_detail_shape_section_unparseable_curve_returns_empty():
+    from src.api.routes import _detail_shape_section
+
+    assert _detail_shape_section(_shape(curve="not json")) == ""
+
+
+def test_detail_shape_section_invalid_shape_curve_returns_empty():
+    from src.api.routes import _detail_shape_section
+
+    # JSON-parseable but not [[num, num], ...] (a dict). Must not crash on pt[1]
+    # in the led branch; the whole section is omitted.
+    assert _detail_shape_section(_shape(curve='{"a": 1}')) == ""
+
+
+def test_detail_shape_section_curve_with_quote_string_is_dropped():
+    from src.api.routes import _detail_shape_section
+
+    # Well-shaped 2-tuples but a non-numeric, quote-bearing first element that
+    # would otherwise break out of the single-quoted data-curve attribute.
+    # comeback > 0 (default) skips the curve-iterating branch, so only validation
+    # stops it.
+    html = _detail_shape_section(
+        _shape(curve='[["a\'onmouseover=alert(1)", 0.5], [1.0, 0.9]]')
+    )
+    assert html == ""
+    assert "onmouseover" not in html
+
+
+def test_detail_shape_section_nonfinite_scalar_returns_empty():
+    from src.api.routes import _detail_shape_section
+
+    # winner_low_wp = NaN would crash _pct -> int(NaN) in the comeback branch.
+    assert _detail_shape_section(_shape(winner_low_wp=float("nan"))) == ""
+
+
+def test_detail_shape_section_null_scalar_returns_empty():
+    from src.api.routes import _detail_shape_section
+
+    # excitement = None would crash the f"{...:.1f}" format.
+    assert _detail_shape_section(_shape(excitement=None)) == ""
+
+
+def test_detail_shape_section_nan_in_curve_returns_empty():
+    from src.api.routes import _detail_shape_section
+
+    # json.loads accepts NaN; it must be rejected so data-curve stays valid JSON.
+    assert _detail_shape_section(_shape(curve="[[0.0, NaN], [1.0, 0.9]]")) == ""
+
+
+def test_render_game_detail_includes_shape_section_when_present(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_game_shape(
+        session,
+        espn_id="401736210",
+        season=2026,
+        date=date,
+        home_team="Team A",
+        away_team="Team B",
+        home_abbr="TMA",
+        away_abbr="TMB",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.4,
+        tension=0.87,
+        comeback=0.31,
+        lead_changes=9,
+        winner_low_wp=0.33,
+        curve=[[0.0, 0.5], [2400.0, 0.9]],
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+    assert "Game shape</h2>" in html
+    assert "winner trailed to 33%" in html
+    assert 'id="shape-mini"' in html
+    assert "data-curve=" in html
+    assert "buildShapeSvg" in html  # renderer injected into the page
+
+
+def test_render_game_detail_omits_shape_section_when_absent(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+    assert html is not None
+    assert "Game shape</h2>" not in html
+    assert 'id="shape-mini"' not in html
+
+
+def test_shape_svg_css_is_shared_across_replay_and_detail(session, team_ids):
+    from src.api.routes import render_replay
+
+    # /replay still carries the renderer's SVG CSS (now via _SHARED_HEAD).
+    assert ".shape-nadir" in render_replay()
+
+    # The detail page also carries it (it injects _SHARED_HEAD too).
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_game_shape(
+        session,
+        espn_id="401736210",
+        season=2026,
+        date=date,
+        home_team="Team A",
+        away_team="Team B",
+        home_abbr="TMA",
+        away_abbr="TMB",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.4,
+        tension=0.87,
+        comeback=0.31,
+        lead_changes=9,
+        winner_low_wp=0.33,
+        curve=[[0.0, 0.5], [2400.0, 0.9]],
+    )
+    session.commit()
+    assert ".shape-nadir" in render_game_detail(session, "401736210")
+
+
+def test_game_detail_route_serves_shape_section(env, client):
+    session = env.get_session()
+    a = upsert_team(
+        session, name="Las Vegas Aces", abbreviation="LV", logo_url="", bpi_rating=0.0
+    )
+    b = upsert_team(
+        session, name="New York Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0
+    )
+    session.commit()
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a.id,
+        team_b_id=b.id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_game_shape(
+        session,
+        espn_id="401736210",
+        season=2026,
+        date=date,
+        home_team="Las Vegas Aces",
+        away_team="New York Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.4,
+        tension=0.87,
+        comeback=0.31,
+        lead_changes=9,
+        winner_low_wp=0.33,
+        curve=[[0.0, 0.5], [2400.0, 0.9]],
+    )
+    session.commit()
+    session.close()
+
+    resp = client.get("/game/401736210")
+    assert resp.status_code == 200
+    assert "Game shape</h2>" in resp.text
+    assert "winner trailed to 33%" in resp.text
+    assert 'id="shape-mini"' in resp.text
+    assert "buildShapeSvg" in resp.text  # renderer reached the served page
