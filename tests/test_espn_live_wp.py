@@ -161,6 +161,24 @@ def test_fetch_live_win_probability_drops_unmatched_and_sorts_the_rest():
     assert [p["seq"] for p in result["plays"]] == [0, 1]
 
 
+def test_fetch_live_win_probability_drops_matched_play_missing_period_or_clock():
+    # A matched playId whose play entry lacks a period/clock has no trustworthy
+    # game-time, so it must be dropped (not kept with a fabricated 1/"" default
+    # the sort would then trust) — same treatment as an unmatched playId.
+    plays = [
+        {"id": "a", "period": {"number": 1}, "clock": {"displayValue": "10:00"}},
+        {"id": "b"},  # matched id but no period/clock fields
+    ]
+    wp = [
+        {"playId": "a", "homeWinPercentage": 0.55},
+        {"playId": "b", "homeWinPercentage": 0.60},
+    ]
+    summary = _make_summary(plays=plays, wp=wp)
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    assert [p["home_pct"] for p in result["plays"]] == [0.55]  # b dropped
+
+
 def _summary_with_wp(pcts):
     """Build a summary whose winprobability entries carry the given
     raw `homeWinPercentage` values (any type), one play per value."""

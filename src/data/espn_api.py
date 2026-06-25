@@ -351,13 +351,17 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
     home_score = home_competitor.get("score", "")
     away_score = away_competitor.get("score", "")
 
-    play_lookup: dict[str, dict] = {
-        str(p.get("id", "")): {
-            "period": p.get("period", {}).get("number", 1),
-            "clock": p.get("clock", {}).get("displayValue", ""),
-        }
-        for p in data.get("plays", [])
-    }
+    # Index only plays that carry a real period + clock. A play missing either
+    # has no trustworthy game-time, so its WP sample is dropped below (same path
+    # as an unmatched playId) rather than kept with a fabricated default that the
+    # time sort + time-weighted metrics would then trust.
+    play_lookup: dict[str, dict] = {}
+    for p in data.get("plays", []):
+        pid = str(p.get("id", ""))
+        period = p.get("period", {}).get("number")
+        clock = p.get("clock", {}).get("displayValue", "")
+        if pid and isinstance(period, int) and clock:
+            play_lookup[pid] = {"period": period, "clock": clock}
 
     # Sanitize homeWinPercentage at the boundary so every downstream consumer
     # (excitement scorer, WP chart, homepage WP text) inherits clean data.
@@ -369,7 +373,7 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
     # len(plays) >= 2 guard correctly leaves insufficient feeds NULL for
     # retry rather than archiving a fabricated score (Codex review).
     plays = []
-    dropped_unmatched = 0
+    dropped_untimed = 0
     for entry in data.get("winprobability", []):
         pct = _valid_home_pct(entry.get("homeWinPercentage"))
         if pct is None:
@@ -377,13 +381,14 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
         play_id = str(entry.get("playId", ""))
         info = play_lookup.get(play_id)
         if info is None:
-            # Unmatched playId (ESPN schema drift): no resolvable game clock, so
-            # the sample can't be placed on the time axis the curve + excitement
-            # / tension / lead-change metrics all assume. Drop it (like an
-            # invalid home_pct above) rather than fabricate a clock that would
-            # mis-sort and mis-weight it. Rare; a mostly-unmatched feed falls
-            # below the len>=2 guard and is left NULL-for-retry.
-            dropped_unmatched += 1
+            # No trustworthy game-time for this sample — its playId is unmatched
+            # OR the matched play was missing a period/clock (so it's absent from
+            # play_lookup). Either way it can't be placed on the time axis the
+            # curve + excitement / tension / lead-change metrics all assume, so
+            # drop it (like an invalid home_pct above) rather than fabricate a
+            # clock the sort would then trust. Rare; a feed where most samples
+            # are untimed falls below the len>=2 guard and is left NULL-for-retry.
+            dropped_untimed += 1
             continue
         plays.append(
             {
@@ -393,17 +398,17 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
                 "home_pct": pct,
             }
         )
-    if dropped_unmatched:
+    if dropped_untimed:
         logger.warning(
-            "Dropped %d WP sample(s) with unmatched playId for event=%s",
-            dropped_unmatched,
+            "Dropped %d WP sample(s) with no resolvable game-time for event=%s",
+            dropped_untimed,
             espn_id,
         )
 
     # ESPN's winprobability array isn't strictly game-time ordered — a handful
     # of plays per game land out of sequence. The curve plots x by elapsed game
     # time and the excitement / lead-change metrics assume time order, so sort
-    # here. Every kept sample now has a real clock (unmatched ones dropped
+    # here. Every kept sample now has a real period+clock (untimed ones dropped
     # above), so the sort is always sound. Stable sort preserves equal-time
     # order; resequence seq over the result.
     plays.sort(key=elapsed_seconds)
