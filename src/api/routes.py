@@ -890,20 +890,35 @@ def _detail_shape_section(shape) -> str:
         return ""
 
     # Stored game_shapes is numeric-by-construction, but a corrupt row (backfill
-    # bug, manual DB repair, schema drift) can be JSON-parseable yet wrong-shaped
-    # — which would crash the ledPct loop below on pt[1], or, if a string element
-    # carried a quote, break out of the data-curve attribute. Never trust
-    # json.loads success alone: validate to the stored contract and degrade
-    # (omit the section), the same way /api/replay guards its curve rows.
-    def _is_num(x: object) -> bool:
-        return isinstance(x, (int, float)) and not isinstance(x, bool)
+    # bug, manual DB repair, schema drift) can be JSON-parseable yet unusable —
+    # json.loads accepts NaN/Infinity, a scalar can be null/string, or the curve
+    # can be wrong-shaped. Any of those would crash the render (int(NaN),
+    # None > 0, format(None), pt[1]) or emit invalid JSON into data-curve.
+    # Validate every DB value consumed below and degrade (omit the section) like
+    # /api/replay guards its curve rows; never trust json.loads success alone.
+    def _is_finite(x: object) -> bool:
+        return (
+            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+        )
 
-    if shape.winner not in ("home", "away") or not (
-        isinstance(curve, list)
-        and len(curve) >= 2
-        and all(
-            isinstance(pt, list) and len(pt) == 2 and _is_num(pt[0]) and _is_num(pt[1])
-            for pt in curve
+    if (
+        shape.winner not in ("home", "away")
+        or not isinstance(shape.lead_changes, int)
+        or isinstance(shape.lead_changes, bool)
+        or not _is_finite(shape.excitement)
+        or not _is_finite(shape.tension)
+        or not _is_finite(shape.comeback)
+        or not _is_finite(shape.winner_low_wp)
+        or not (
+            isinstance(curve, list)
+            and len(curve) >= 2
+            and all(
+                isinstance(pt, list)
+                and len(pt) == 2
+                and _is_finite(pt[0])
+                and _is_finite(pt[1])
+                for pt in curve
+            )
         )
     ):
         logger.warning(

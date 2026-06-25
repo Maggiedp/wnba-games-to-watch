@@ -1516,6 +1516,84 @@ def test_detail_shape_section_curve_with_quote_string_is_dropped():
     assert "onmouseover" not in html
 
 
+def test_detail_shape_section_nonfinite_scalar_returns_empty():
+    from src.api.routes import _detail_shape_section
+    from src.db.schema import GameShape
+
+    # winner_low_wp = NaN would crash _pct -> int(NaN) in the comeback branch.
+    shape = GameShape(
+        espn_id="406",
+        season=2026,
+        date="2026-08-15",
+        home_team="A",
+        away_team="B",
+        home_abbr="A",
+        away_abbr="B",
+        home_score=80,
+        away_score=70,
+        winner="home",
+        excitement=3.0,
+        tension=0.2,
+        comeback=0.3,
+        lead_changes=1,
+        winner_low_wp=float("nan"),
+        curve="[[0.0, 0.5], [1.0, 0.9]]",
+    )
+    assert _detail_shape_section(shape) == ""
+
+
+def test_detail_shape_section_null_scalar_returns_empty():
+    from src.api.routes import _detail_shape_section
+    from src.db.schema import GameShape
+
+    # excitement = None would crash the f"{...:.1f}" format.
+    shape = GameShape(
+        espn_id="407",
+        season=2026,
+        date="2026-08-15",
+        home_team="A",
+        away_team="B",
+        home_abbr="A",
+        away_abbr="B",
+        home_score=80,
+        away_score=70,
+        winner="home",
+        excitement=None,
+        tension=0.2,
+        comeback=0.0,
+        lead_changes=1,
+        winner_low_wp=0.6,
+        curve="[[0.0, 0.6], [1.0, 0.9]]",
+    )
+    assert _detail_shape_section(shape) == ""
+
+
+def test_detail_shape_section_nan_in_curve_returns_empty():
+    from src.api.routes import _detail_shape_section
+    from src.db.schema import GameShape
+
+    # json.loads accepts NaN; it must be rejected so data-curve stays valid JSON.
+    shape = GameShape(
+        espn_id="408",
+        season=2026,
+        date="2026-08-15",
+        home_team="A",
+        away_team="B",
+        home_abbr="A",
+        away_abbr="B",
+        home_score=80,
+        away_score=70,
+        winner="home",
+        excitement=3.0,
+        tension=0.2,
+        comeback=0.3,
+        lead_changes=1,
+        winner_low_wp=0.2,
+        curve="[[0.0, NaN], [1.0, 0.9]]",
+    )
+    assert _detail_shape_section(shape) == ""
+
+
 def test_render_game_detail_includes_shape_section_when_present(session, team_ids):
     a_id, b_id = team_ids
     date = today_et()
