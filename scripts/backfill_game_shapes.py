@@ -56,11 +56,9 @@ def backfill_range(
     an ingest fix changes the computed curve/metrics); the default skips them."""
     events = fetch_games_for_range(start, end, failed_windows=failed_windows)
     completed = [e for e in events if e.get("event_id") and _is_completed(e)]
-    already = (
-        set()
-        if recompute
-        else get_existing_shape_espn_ids(session, [e["event_id"] for e in completed])
-    )
+    existing = get_existing_shape_espn_ids(session, [e["event_id"] for e in completed])
+    # recompute reprocesses everything; fill-missing skips already-stored games.
+    already = set() if recompute else existing
     abbrev_map = get_team_abbrev_map(session)
     stored = 0
     for e in completed:
@@ -68,17 +66,26 @@ def backfill_range(
         if espn_id in already:
             continue
         try:
-            if _build_and_store_shape(
+            stored_ok = _build_and_store_shape(
                 session, espn_id, e["date"], abbrev_map, timeout=10
-            ):
-                stored += 1
-                if stored % 25 == 0:
-                    # upsert_game_shape commits per row; this is just progress.
-                    logger.info(f"  …{stored} stored")
+            )
         except Exception as ex:  # one bad game must not abort the batch
             logger.warning(f"Skipping espn_id={espn_id}: {ex}")
-            if failed_games is not None:
-                failed_games.append(espn_id)
+            stored_ok = False
+        if stored_ok:
+            stored += 1
+            if stored % 25 == 0:
+                # upsert_game_shape commits per row; this is just progress.
+                logger.info(f"  …{stored} stored")
+        elif recompute and espn_id in existing and failed_games is not None:
+            # Recompute couldn't refresh a game that ALREADY has a stored row —
+            # whether it raised or _build_and_store_shape returned False (non-
+            # final / insufficient / unparseable feed). The stale pre-fix row
+            # therefore persists, so record it to fail closed. (A completed game
+            # with no existing row that can't be shaped is a benign miss, not a
+            # stale-data integrity problem, so it doesn't gate the exit code.)
+            logger.warning(f"Recompute miss (stale row kept): espn_id={espn_id}")
+            failed_games.append(espn_id)
     return stored
 
 
@@ -111,19 +118,15 @@ def main() -> int:
                 )
                 return 1
             if failed_games:
-                # Per-game rebuild misses. In --recompute mode those rows keep
-                # stale pre-fix data, so fail closed (re-run to converge). In
-                # fill-missing mode they're simply not stored yet and self-heal
-                # on the next run, so surface but don't fail.
-                (logger.error if recompute else logger.warning)(
-                    f"{len(failed_games)} game(s) could not be rebuilt: {failed_games}"
+                # Populated only in --recompute mode: existing rows that couldn't
+                # be refreshed, so their stale pre-fix data persists. Fail closed
+                # so the operator re-runs until the archive fully converges.
+                logger.error(
+                    f"Recompute INCOMPLETE: {len(failed_games)} stored game(s) "
+                    f"could not be refreshed (stale rows kept): {failed_games}. "
+                    "Re-run to retry."
                 )
-                if recompute:
-                    logger.error(
-                        "Recompute INCOMPLETE — those rows keep stale pre-fix "
-                        "data; re-run to retry."
-                    )
-                    return 1
+                return 1
             logger.info(f"=== Backfill complete: {total} stored ===")
             return 0
         finally:

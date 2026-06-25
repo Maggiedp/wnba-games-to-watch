@@ -1,7 +1,7 @@
 from datetime import date
 
 from src.constants import GameStatus
-from src.db.queries import upsert_team
+from src.db.queries import upsert_game_shape, upsert_team
 
 
 def test_backfill_stores_completed_and_skips_existing(env, monkeypatch):
@@ -131,10 +131,31 @@ def test_backfill_recompute_reprocesses_existing(env, monkeypatch):
     session.close()
 
 
-def test_backfill_range_records_per_game_failures(env, monkeypatch):
+def test_backfill_recompute_records_existing_row_misses_only(env, monkeypatch):
     session = env.get_session()
     upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
     upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    # STALE already has a stored shape -> if recompute can't refresh it, the
+    # stale pre-fix row persists (a real miss to surface).
+    upsert_game_shape(
+        session,
+        espn_id="STALE",
+        season=2024,
+        date="2024-08-15",
+        home_team="Las Vegas Aces",
+        away_team="New York Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.0,
+        tension=0.8,
+        comeback=0.3,
+        lead_changes=5,
+        winner_low_wp=0.3,
+        curve=[[0.0, 0.5], [1.0, 0.9]],
+    )
     session.commit()
 
     import scripts.backfill_game_shapes as bf
@@ -148,7 +169,13 @@ def test_backfill_range_records_per_game_failures(env, monkeypatch):
             "winner_team": "Las Vegas Aces",
         },
         {
-            "event_id": "BAD",
+            "event_id": "STALE",
+            "date": "2024-08-15",
+            "status": GameStatus.FINAL,
+            "winner_team": "Las Vegas Aces",
+        },
+        {
+            "event_id": "NEW_BAD",
             "date": "2024-08-15",
             "status": GameStatus.FINAL,
             "winner_team": "Las Vegas Aces",
@@ -159,18 +186,27 @@ def test_backfill_range_records_per_game_failures(env, monkeypatch):
     )
 
     def fake_wp(espn_id, timeout=10):
-        if espn_id == "BAD":
-            raise RuntimeError("ESPN summary drift")
+        if espn_id == "GOOD":
+            return {
+                "status": GameStatus.FINAL,
+                "home_team": "Las Vegas Aces",
+                "away_team": "New York Liberty",
+                "home_score": "80",
+                "away_score": "70",
+                "plays": [
+                    {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                    {"period": 4, "clock": "0:00", "home_pct": 0.9},
+                ],
+            }
+        # STALE + NEW_BAD: a non-final feed -> _build_and_store_shape returns
+        # False (no exception), exercising the False-return miss path.
         return {
-            "status": GameStatus.FINAL,
+            "status": "STATUS_IN_PROGRESS",
             "home_team": "Las Vegas Aces",
             "away_team": "New York Liberty",
-            "home_score": "80",
-            "away_score": "70",
-            "plays": [
-                {"period": 1, "clock": "10:00", "home_pct": 0.5},
-                {"period": 4, "clock": "0:00", "home_pct": 0.9},
-            ],
+            "home_score": "",
+            "away_score": "",
+            "plays": [],
         }
 
     monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
@@ -183,8 +219,10 @@ def test_backfill_range_records_per_game_failures(env, monkeypatch):
         recompute=True,
         failed_games=failed_games,
     )
-    assert stored == 1  # GOOD stored
-    assert failed_games == ["BAD"]  # BAD recorded, not silently swallowed
+    assert stored == 1  # only GOOD rebuilt
+    # STALE (existing row, False return) is a stale-row miss; NEW_BAD (no
+    # existing row, also False) is a benign miss -> NOT recorded.
+    assert failed_games == ["STALE"]
     session.close()
 
 
@@ -192,6 +230,26 @@ def test_backfill_main_recompute_fails_closed_on_per_game_error(env, monkeypatch
     session = env.get_session()
     upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
     upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    # STALE has a stored row, so a failed recompute leaves stale data behind.
+    upsert_game_shape(
+        session,
+        espn_id="STALE",
+        season=2024,
+        date="2024-08-15",
+        home_team="Las Vegas Aces",
+        away_team="New York Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.0,
+        tension=0.8,
+        comeback=0.3,
+        lead_changes=5,
+        winner_low_wp=0.3,
+        curve=[[0.0, 0.5], [1.0, 0.9]],
+    )
     session.commit()
     session.close()
 
@@ -200,7 +258,7 @@ def test_backfill_main_recompute_fails_closed_on_per_game_error(env, monkeypatch
 
     events = [
         {
-            "event_id": "BAD",
+            "event_id": "STALE",
             "date": "2024-08-15",
             "status": GameStatus.FINAL,
             "winner_team": "Las Vegas Aces",
@@ -216,6 +274,6 @@ def test_backfill_main_recompute_fails_closed_on_per_game_error(env, monkeypatch
     monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
     monkeypatch.setattr(bf.sys, "argv", ["backfill_game_shapes", "--recompute"])
 
-    # recompute + a per-game rebuild failure must exit non-zero, not a silent
-    # exit 0 that leaves the row holding stale pre-fix data.
+    # recompute can't refresh STALE's existing row -> must exit non-zero, not a
+    # silent exit 0 that leaves the row holding stale pre-fix data.
     assert bf.main() == 1
