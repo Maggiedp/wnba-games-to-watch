@@ -5,8 +5,12 @@ Elo replay uses, so it covers 2024+), computes each shape via the shared
 _build_and_store_shape helper, upserts by espn_id. Idempotent — skips espn_ids
 already stored. Safe to re-run.
 
+Pass --recompute to re-derive + overwrite shapes already stored (use after an
+ingest change alters the computed curve/metrics, e.g. the play-ordering fix).
+
 Usage:
-    python -m scripts.backfill_game_shapes
+    python -m scripts.backfill_game_shapes              # fill missing only
+    python -m scripts.backfill_game_shapes --recompute  # re-derive + overwrite all
 """
 
 import logging
@@ -36,13 +40,24 @@ def _is_completed(event: dict) -> bool:
 
 
 def backfill_range(
-    session, start: date, end: date, failed_windows: list[str] | None = None
+    session,
+    start: date,
+    end: date,
+    failed_windows: list[str] | None = None,
+    recompute: bool = False,
 ) -> int:
-    """Backfill one date range. Returns the count newly stored. Skipped source
-    windows (transient ESPN failures) are appended to `failed_windows`."""
+    """Backfill one date range. Returns the count stored. Skipped source
+    windows (transient ESPN failures) are appended to `failed_windows`.
+
+    `recompute=True` re-derives + overwrites shapes already stored (used after
+    an ingest fix changes the computed curve/metrics); the default skips them."""
     events = fetch_games_for_range(start, end, failed_windows=failed_windows)
     completed = [e for e in events if e.get("event_id") and _is_completed(e)]
-    already = get_existing_shape_espn_ids(session, [e["event_id"] for e in completed])
+    already = (
+        set()
+        if recompute
+        else get_existing_shape_espn_ids(session, [e["event_id"] for e in completed])
+    )
     abbrev_map = get_team_abbrev_map(session)
     stored = 0
     for e in completed:
@@ -63,7 +78,9 @@ def backfill_range(
 
 
 def main() -> int:
-    logger.info("=== Backfilling game_shapes (2024-2026) ===")
+    recompute = "--recompute" in sys.argv[1:]
+    mode = "RECOMPUTE (overwrite existing)" if recompute else "fill missing"
+    logger.info(f"=== Backfilling game_shapes (2024-2026) — {mode} ===")
     try:
         init_db()
         session = get_session()
@@ -72,7 +89,9 @@ def main() -> int:
             failed_windows: list[str] = []
             for season, start, end in SEASON_RANGES:
                 logger.info(f"Season {season}: {start}..{end}")
-                total += backfill_range(session, start, end, failed_windows)
+                total += backfill_range(
+                    session, start, end, failed_windows, recompute=recompute
+                )
             if failed_windows:
                 logger.error(
                     f"INCOMPLETE: {len(failed_windows)} source window(s) failed to "

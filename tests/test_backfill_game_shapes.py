@@ -72,3 +72,60 @@ def test_backfill_main_fails_closed_on_skipped_window(env, monkeypatch):
     # A skipped source window -> main() reports incomplete and exits non-zero
     # instead of logging "complete" over a partial archive.
     assert bf.main() == 1
+
+
+def test_backfill_recompute_reprocesses_existing(env, monkeypatch):
+    session = env.get_session()
+    upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
+    upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    session.commit()
+
+    import scripts.backfill_game_shapes as bf
+    import scripts.daily_update as du
+
+    events = [
+        {
+            "event_id": "24A",
+            "date": "2024-08-15",
+            "status": GameStatus.FINAL,
+            "winner_team": "Las Vegas Aces",
+        }
+    ]
+    monkeypatch.setattr(
+        bf, "fetch_games_for_range", lambda s, e, failed_windows=None: events
+    )
+
+    calls = {"n": 0}
+
+    def fake_wp(espn_id, timeout=10):
+        calls["n"] += 1
+        pct = 0.9 if calls["n"] == 1 else 0.95  # 2nd derive yields a new value
+        return {
+            "status": GameStatus.FINAL,
+            "home_team": "Las Vegas Aces",
+            "away_team": "New York Liberty",
+            "home_score": "80",
+            "away_score": "70",
+            "plays": [
+                {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                {"period": 4, "clock": "0:00", "home_pct": pct},
+            ],
+        }
+
+    monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
+
+    assert bf.backfill_range(session, date(2024, 5, 1), date(2024, 10, 31)) == 1
+    first = session.query(env.GameShape).filter_by(espn_id="24A").one().excitement
+
+    # default re-run skips the already-stored row (idempotent)
+    assert bf.backfill_range(session, date(2024, 5, 1), date(2024, 10, 31)) == 0
+
+    # recompute=True reprocesses + overwrites it in place (not a duplicate)
+    assert (
+        bf.backfill_range(session, date(2024, 5, 1), date(2024, 10, 31), recompute=True)
+        == 1
+    )
+    assert session.query(env.GameShape).filter_by(espn_id="24A").count() == 1
+    second = session.query(env.GameShape).filter_by(espn_id="24A").one().excitement
+    assert second != first  # the re-derived feed produced a new stored value
+    session.close()
