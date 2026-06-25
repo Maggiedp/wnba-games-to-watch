@@ -103,6 +103,39 @@ def test_fetch_live_win_probability_falls_back_when_play_id_missing():
     assert result["plays"][0]["home_pct"] == 0.4
 
 
+def test_fetch_live_win_probability_sorts_plays_by_game_time():
+    """ESPN lists a few winprobability entries out of game-time order; the
+    fever-line curve plots x by elapsed time (and excitement/lead-change
+    metrics assume time order), so fetch must return plays time-sorted. Ties
+    (same clock) keep their original relative order (stable)."""
+    from src.scoring.excitement import elapsed_seconds
+
+    plays = [
+        {"id": "a", "period": {"number": 1}, "clock": {"displayValue": "10:00"}},
+        {"id": "b", "period": {"number": 1}, "clock": {"displayValue": "2:00"}},
+        {"id": "c", "period": {"number": 1}, "clock": {"displayValue": "5:00"}},
+        {"id": "d", "period": {"number": 1}, "clock": {"displayValue": "2:00"}},
+    ]
+    # winprobability lists b (2:00, late) before c (5:00, earlier) -> out of
+    # order; d ties b at 2:00 and must stay after it (stable).
+    wp = [
+        {"playId": "a", "homeWinPercentage": 0.50},
+        {"playId": "b", "homeWinPercentage": 0.70},
+        {"playId": "c", "homeWinPercentage": 0.60},
+        {"playId": "d", "homeWinPercentage": 0.72},
+    ]
+    summary = _make_summary(plays=plays, wp=wp)
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    got = result["plays"]
+    # game-time order: 10:00 (0s), 5:00 (300s), 2:00/b (480s), 2:00/d (480s)
+    assert [p["clock"] for p in got] == ["10:00", "5:00", "2:00", "2:00"]
+    assert [p["home_pct"] for p in got] == [0.50, 0.60, 0.70, 0.72]
+    el = [elapsed_seconds(p) for p in got]
+    assert el == sorted(el)  # non-decreasing
+    assert [p["seq"] for p in got] == [0, 1, 2, 3]  # resequenced over final order
+
+
 def _summary_with_wp(pcts):
     """Build a summary whose winprobability entries carry the given
     raw `homeWinPercentage` values (any type), one play per value."""

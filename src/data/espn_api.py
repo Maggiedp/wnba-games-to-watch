@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from src.scoring.excitement import elapsed_seconds
+
 logger = logging.getLogger(__name__)
 
 # ESPN uses inconsistent capitalizations for some team names across endpoints.
@@ -381,6 +383,15 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
                 "home_pct": pct,
             }
         )
+
+    # ESPN's winprobability array isn't strictly game-time ordered — a handful
+    # of plays per game land out of sequence. The fever-line curve plots x by
+    # elapsed game time, and the excitement / lead-change metrics assume time
+    # order, so sort at the boundary. Stable sort keeps equal-time plays (same
+    # clock) in their original relative order; resequence seq over the result.
+    plays.sort(key=elapsed_seconds)
+    for i, play in enumerate(plays):
+        play["seq"] = i
 
     return {
         "espn_id": espn_id,
