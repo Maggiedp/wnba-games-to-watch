@@ -369,7 +369,7 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
     # len(plays) >= 2 guard correctly leaves insufficient feeds NULL for
     # retry rather than archiving a fabricated score (Codex review).
     plays = []
-    all_matched = True
+    dropped_unmatched = 0
     for entry in data.get("winprobability", []):
         pct = _valid_home_pct(entry.get("homeWinPercentage"))
         if pct is None:
@@ -377,11 +377,14 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
         play_id = str(entry.get("playId", ""))
         info = play_lookup.get(play_id)
         if info is None:
-            # Unmatched playId (ESPN schema drift): no real clock. Keep the
-            # sample with a fabricated period/clock for the WP chart's
-            # index-based render, but flag it so it can't drive the time sort.
-            all_matched = False
-            info = {"period": 1, "clock": ""}
+            # Unmatched playId (ESPN schema drift): no resolvable game clock, so
+            # the sample can't be placed on the time axis the curve + excitement
+            # / tension / lead-change metrics all assume. Drop it (like an
+            # invalid home_pct above) rather than fabricate a clock that would
+            # mis-sort and mis-weight it. Rare; a mostly-unmatched feed falls
+            # below the len>=2 guard and is left NULL-for-retry.
+            dropped_unmatched += 1
+            continue
         plays.append(
             {
                 "seq": len(plays),
@@ -390,20 +393,22 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
                 "home_pct": pct,
             }
         )
+    if dropped_unmatched:
+        logger.warning(
+            "Dropped %d WP sample(s) with unmatched playId for event=%s",
+            dropped_unmatched,
+            espn_id,
+        )
 
     # ESPN's winprobability array isn't strictly game-time ordered — a handful
-    # of plays per game land out of sequence. The fever-line curve plots x by
-    # elapsed game time, and the excitement / lead-change metrics assume time
-    # order, so sort at the boundary. Stable sort keeps equal-time plays (same
-    # clock) in their original relative order; resequence seq over the result.
-    # Sort ONLY when every sample resolved to a real play — an unmatched playId
-    # has a fabricated clock, so letting it drive the sort would silently
-    # relocate it; rare schema-drift feeds keep their original feed order
-    # (no worse than before this sort existed).
-    if all_matched:
-        plays.sort(key=elapsed_seconds)
-        for i, play in enumerate(plays):
-            play["seq"] = i
+    # of plays per game land out of sequence. The curve plots x by elapsed game
+    # time and the excitement / lead-change metrics assume time order, so sort
+    # here. Every kept sample now has a real clock (unmatched ones dropped
+    # above), so the sort is always sound. Stable sort preserves equal-time
+    # order; resequence seq over the result.
+    plays.sort(key=elapsed_seconds)
+    for i, play in enumerate(plays):
+        play["seq"] = i
 
     return {
         "espn_id": espn_id,
