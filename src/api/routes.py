@@ -860,6 +860,63 @@ def _detail_h2h_section(game, team_a, team_b, h2h) -> str:
     return "".join(rows)
 
 
+def _detail_shape_section(shape) -> str:
+    """The 'Game shape' panel for the detail page: three metrics + a caption +
+    a mount for the winner-oriented fever line (drawn client-side by
+    buildShapeSvg from the data-* attributes). Returns '' when there's no
+    stored shape (live / not-yet-computed game) or the stored curve is
+    unparseable, so the section is omitted entirely — the same 'appears after
+    the daily run' behavior as the importance block. Scaling (excitement x1,
+    tension x10, comeback x20) and caption wording mirror the /replay gallery."""
+    if shape is None:
+        return ""
+    try:
+        curve = json.loads(shape.curve)
+    except (ValueError, TypeError):
+        logger.warning("game_shapes curve unparseable for espn_id=%s", shape.espn_id)
+        return ""
+
+    # Match JS Math.round (half-up); Python's round() is banker's rounding and
+    # would disagree with /replay at exact .5 boundaries.
+    def _pct(x: float) -> int:
+        return int(x * 100 + 0.5)
+
+    n = shape.lead_changes
+    lead_txt = f"{n} lead change" + ("" if n == 1 else "s")
+    if shape.comeback > 0:
+        tail = f"winner trailed to {_pct(shape.winner_low_wp)}%"
+        emphasis = "comeback"
+    else:
+        home_won = shape.winner == "home"
+        favored = sum(1 for pt in curve if (pt[1] if home_won else 1 - pt[1]) > 0.5)
+        led = int(100 * favored / len(curve) + 0.5) if curve else 0
+        tail = f"led {led}% of the way"
+        emphasis = "tension"
+
+    # Numeric-only JSON (floats): safe inside a single-quoted attribute with no
+    # escaping (no quotes/angle-brackets/ampersands), matching shape_chart.js's
+    # pure/numeric contract. winner/emphasis are our own controlled literals.
+    curve_attr = json.dumps(curve)
+    metrics = (
+        f'<span><span class="v">{shape.excitement:.1f}</span>'
+        '<span class="l">Excitement</span></span>'
+        f'<span><span class="v">{shape.tension * 10:.1f}</span>'
+        '<span class="l">Tension</span></span>'
+        f'<span><span class="v">{shape.comeback * 20:.1f}</span>'
+        '<span class="l">Comeback</span></span>'
+    )
+    return (
+        "<section>"
+        '<h2 class="section-title">Game shape</h2>'
+        '<div id="shape-mini" class="detail-shape-chart" '
+        f"data-curve='{curve_attr}' data-winner=\"{shape.winner}\" "
+        f'data-emphasis="{emphasis}"></div>'
+        f'<div class="detail-shape-metrics">{metrics}</div>'
+        f'<p class="detail-shape-caption">{lead_txt} &middot; {tail}</p>'
+        "</section>"
+    )
+
+
 def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
     name_a = team_a.name
     name_b = team_b.name

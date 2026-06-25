@@ -1363,3 +1363,96 @@ def test_playoff_odds_endpoint_omits_record_for_historical_date(env, client):
     rows = client.get("/api/playoff-odds?date=2026-05-15").json()
     assert rows[0]["wins"] is None
     assert rows[0]["losses"] is None
+
+
+def test_detail_shape_section_comeback_game():
+    from src.api.routes import _detail_shape_section
+    from src.db.schema import GameShape
+
+    shape = GameShape(
+        espn_id="401",
+        season=2026,
+        date="2026-08-15",
+        home_team="Las Vegas Aces",
+        away_team="New York Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.4,
+        tension=0.87,
+        comeback=0.31,
+        lead_changes=9,
+        winner_low_wp=0.33,
+        curve="[[0.0, 0.5], [1200.0, 0.2], [2400.0, 0.9]]",
+    )
+    html = _detail_shape_section(shape)
+    assert "Game shape</h2>" in html
+    assert "9.4" in html  # excitement (raw)
+    assert "8.7" in html  # tension * 10
+    assert "6.2" in html  # comeback * 20
+    assert "winner trailed to 33%" in html
+    assert "9 lead changes" in html
+    assert 'data-winner="home"' in html
+    assert 'data-emphasis="comeback"' in html
+    assert "data-curve=" in html
+
+
+def test_detail_shape_section_blowout_uses_led_caption():
+    from src.api.routes import _detail_shape_section
+    from src.db.schema import GameShape
+
+    shape = GameShape(
+        espn_id="402",
+        season=2026,
+        date="2026-08-15",
+        home_team="Las Vegas Aces",
+        away_team="New York Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=100,
+        away_score=70,
+        winner="home",
+        excitement=2.0,
+        tension=0.1,
+        comeback=0.0,
+        lead_changes=0,
+        winner_low_wp=0.6,
+        curve="[[0.0, 0.6], [1200.0, 0.8], [2400.0, 0.99]]",
+    )
+    html = _detail_shape_section(shape)
+    assert "led 100% of the way" in html  # winner > .5 at all 3 samples
+    assert "0 lead changes" in html
+    assert 'data-emphasis="tension"' in html
+
+
+def test_detail_shape_section_none_returns_empty():
+    from src.api.routes import _detail_shape_section
+
+    assert _detail_shape_section(None) == ""
+
+
+def test_detail_shape_section_unparseable_curve_returns_empty():
+    from src.api.routes import _detail_shape_section
+    from src.db.schema import GameShape
+
+    shape = GameShape(
+        espn_id="403",
+        season=2026,
+        date="2026-08-15",
+        home_team="A",
+        away_team="B",
+        home_abbr="A",
+        away_abbr="B",
+        home_score=80,
+        away_score=70,
+        winner="home",
+        excitement=3.0,
+        tension=0.2,
+        comeback=0.0,
+        lead_changes=1,
+        winner_low_wp=0.5,
+        curve="not json",
+    )
+    assert _detail_shape_section(shape) == ""
