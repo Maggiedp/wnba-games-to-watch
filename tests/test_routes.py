@@ -1518,3 +1518,44 @@ def test_render_game_detail_omits_shape_section_when_absent(session, team_ids):
     assert html is not None
     assert "Game shape</h2>" not in html
     assert 'id="shape-mini"' not in html
+
+
+def test_shape_svg_css_is_shared_across_replay_and_detail(session, team_ids):
+    from src.api.routes import render_replay
+
+    # /replay still carries the renderer's SVG CSS (now via _SHARED_HEAD).
+    assert ".shape-nadir" in render_replay()
+
+    # The detail page also carries it (it injects _SHARED_HEAD too).
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_game_shape(
+        session,
+        espn_id="401736210",
+        season=2026,
+        date=date,
+        home_team="Team A",
+        away_team="Team B",
+        home_abbr="TMA",
+        away_abbr="TMB",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.4,
+        tension=0.87,
+        comeback=0.31,
+        lead_changes=9,
+        winner_low_wp=0.33,
+        curve=[[0.0, 0.5], [2400.0, 0.9]],
+    )
+    session.commit()
+    assert ".shape-nadir" in render_game_detail(session, "401736210")

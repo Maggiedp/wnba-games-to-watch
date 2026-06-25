@@ -272,7 +272,13 @@ _SHARED_HEAD = """\
             .trend-line.hi { stroke: var(--orange); stroke-opacity: 1; stroke-width: 2.6; }
             .trend-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
             .trend-label { fill: var(--text-subtle); font-size: 9.5px; font-variant-numeric: tabular-nums; cursor: pointer; }
-            .trend-label.hi { fill: var(--orange); font-weight: 600; }\
+            .trend-label.hi { fill: var(--orange); font-weight: 600; }
+            /* Game-shape fever line (buildShapeSvg) — shared by /replay + detail */
+            .shape-svg { width: 100%; height: auto; display: block; }
+            .shape-mid { stroke: #c8c2b8; stroke-width: 1; stroke-dasharray: 3,3; }
+            .shape-line { stroke-width: 1.6; stroke-linejoin: round; }
+            .shape-doubt { fill: rgba(255,107,0,.09); }
+            .shape-nadir { fill: var(--orange); }\
 """
 
 # SVG win-probability line-chart builder + live header for the game detail
@@ -641,6 +647,11 @@ _DETAIL_STYLE = """
                 display: block;
                 overflow: visible;
             }
+            .detail-shape-chart { margin: 6px 0 12px; max-width: 360px; }
+            .detail-shape-metrics { display: flex; flex-wrap: wrap; gap: 14px 28px; }
+            .detail-shape-metrics .v { font-family: var(--display); font-weight: 700; font-size: 1.4rem; color: var(--navy); font-variant-numeric: tabular-nums; }
+            .detail-shape-metrics .l { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-left: 6px; }
+            .detail-shape-caption { margin-top: 8px; color: var(--text-muted); font-size: .88rem; }
 """
 
 
