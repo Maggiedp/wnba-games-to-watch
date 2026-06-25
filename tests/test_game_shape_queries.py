@@ -3,6 +3,7 @@ from datetime import datetime
 from src.db.queries import (
     get_completed_games_missing_shape,
     get_existing_shape_espn_ids,
+    get_shape_by_espn_id,
     get_team_abbrev_map,
     upsert_game,
     upsert_game_shape,
@@ -165,4 +166,14 @@ def test_get_completed_games_missing_shape_rotates_by_attempt(env):
         "older",
         "newer",
     ]
+    session.close()
+
+
+def test_get_shape_by_espn_id_returns_row_or_none(env):
+    session = _seed_shape(env, espn_id="401")
+    row = get_shape_by_espn_id(session, "401")
+    assert row is not None
+    assert row.espn_id == "401"
+    assert row.winner == "home"
+    assert get_shape_by_espn_id(session, "nope") is None
     session.close()
