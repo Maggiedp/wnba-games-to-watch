@@ -1459,6 +1459,63 @@ def test_detail_shape_section_unparseable_curve_returns_empty():
     assert _detail_shape_section(shape) == ""
 
 
+def test_detail_shape_section_invalid_shape_curve_returns_empty():
+    from src.api.routes import _detail_shape_section
+    from src.db.schema import GameShape
+
+    # JSON-parseable but not [[num, num], ...] (a dict). Must not crash on pt[1]
+    # in the led branch; the whole section is omitted.
+    shape = GameShape(
+        espn_id="404",
+        season=2026,
+        date="2026-08-15",
+        home_team="A",
+        away_team="B",
+        home_abbr="A",
+        away_abbr="B",
+        home_score=80,
+        away_score=70,
+        winner="home",
+        excitement=3.0,
+        tension=0.2,
+        comeback=0.0,
+        lead_changes=1,
+        winner_low_wp=0.6,
+        curve='{"a": 1}',
+    )
+    assert _detail_shape_section(shape) == ""
+
+
+def test_detail_shape_section_curve_with_quote_string_is_dropped():
+    from src.api.routes import _detail_shape_section
+    from src.db.schema import GameShape
+
+    # Well-shaped 2-tuples but a non-numeric, quote-bearing first element that
+    # would otherwise break out of the single-quoted data-curve attribute.
+    # comeback > 0 skips the curve-iterating branch, so only validation stops it.
+    shape = GameShape(
+        espn_id="405",
+        season=2026,
+        date="2026-08-15",
+        home_team="A",
+        away_team="B",
+        home_abbr="A",
+        away_abbr="B",
+        home_score=80,
+        away_score=70,
+        winner="home",
+        excitement=3.0,
+        tension=0.2,
+        comeback=0.3,
+        lead_changes=1,
+        winner_low_wp=0.2,
+        curve='[["a\'onmouseover=alert(1)", 0.5], [1.0, 0.9]]',
+    )
+    html = _detail_shape_section(shape)
+    assert html == ""
+    assert "onmouseover" not in html
+
+
 def test_render_game_detail_includes_shape_section_when_present(session, team_ids):
     a_id, b_id = team_ids
     date = today_et()

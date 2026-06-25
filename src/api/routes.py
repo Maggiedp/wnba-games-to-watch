@@ -889,6 +889,29 @@ def _detail_shape_section(shape) -> str:
         logger.warning("game_shapes curve unparseable for espn_id=%s", shape.espn_id)
         return ""
 
+    # Stored game_shapes is numeric-by-construction, but a corrupt row (backfill
+    # bug, manual DB repair, schema drift) can be JSON-parseable yet wrong-shaped
+    # — which would crash the ledPct loop below on pt[1], or, if a string element
+    # carried a quote, break out of the data-curve attribute. Never trust
+    # json.loads success alone: validate to the stored contract and degrade
+    # (omit the section), the same way /api/replay guards its curve rows.
+    def _is_num(x: object) -> bool:
+        return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+    if shape.winner not in ("home", "away") or not (
+        isinstance(curve, list)
+        and len(curve) >= 2
+        and all(
+            isinstance(pt, list) and len(pt) == 2 and _is_num(pt[0]) and _is_num(pt[1])
+            for pt in curve
+        )
+    ):
+        logger.warning(
+            "game_shapes row malformed for espn_id=%s; omitting shape panel",
+            shape.espn_id,
+        )
+        return ""
+
     # Match JS Math.round (half-up); Python's round() is banker's rounding and
     # would disagree with /replay at exact .5 boundaries.
     def _pct(x: float) -> int:
@@ -902,14 +925,17 @@ def _detail_shape_section(shape) -> str:
     else:
         home_won = shape.winner == "home"
         favored = sum(1 for pt in curve if (pt[1] if home_won else 1 - pt[1]) > 0.5)
-        led = int(100 * favored / len(curve) + 0.5) if curve else 0
+        led = int(100 * favored / len(curve) + 0.5)
         tail = f"led {led}% of the way"
         emphasis = "tension"
 
-    # Numeric-only JSON (floats): safe inside a single-quoted attribute with no
-    # escaping (no quotes/angle-brackets/ampersands), matching shape_chart.js's
-    # pure/numeric contract. winner/emphasis are our own controlled literals.
-    curve_attr = json.dumps(curve)
+    # Values are validated above; DB-derived data that lands in HTML is still
+    # escaped (the detail page's convention — see _detail_h2h_section). For valid
+    # numeric curves escape_html is a no-op; if validation ever regresses it
+    # neutralizes attribute-breakout chars, and the browser decodes the entities
+    # back before JSON.parse reads data-curve.
+    curve_attr = escape_html(json.dumps(curve))
+    winner_attr = escape_html(shape.winner)
     metrics = (
         f'<span><span class="v">{shape.excitement:.1f}</span>'
         '<span class="l">Excitement</span></span>'
@@ -922,7 +948,7 @@ def _detail_shape_section(shape) -> str:
         "<section>"
         '<h2 class="section-title">Game shape</h2>'
         '<div id="shape-mini" class="detail-shape-chart" '
-        f"data-curve='{curve_attr}' data-winner=\"{shape.winner}\" "
+        f"data-curve='{curve_attr}' data-winner=\"{winner_attr}\" "
         f'data-emphasis="{emphasis}"></div>'
         f'<div class="detail-shape-metrics">{metrics}</div>'
         f'<p class="detail-shape-caption">{lead_txt} &middot; {tail}</p>'
