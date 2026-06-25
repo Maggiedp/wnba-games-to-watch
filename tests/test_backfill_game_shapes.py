@@ -129,3 +129,93 @@ def test_backfill_recompute_reprocesses_existing(env, monkeypatch):
     second = session.query(env.GameShape).filter_by(espn_id="24A").one().excitement
     assert second != first  # the re-derived feed produced a new stored value
     session.close()
+
+
+def test_backfill_range_records_per_game_failures(env, monkeypatch):
+    session = env.get_session()
+    upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
+    upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    session.commit()
+
+    import scripts.backfill_game_shapes as bf
+    import scripts.daily_update as du
+
+    events = [
+        {
+            "event_id": "GOOD",
+            "date": "2024-08-15",
+            "status": GameStatus.FINAL,
+            "winner_team": "Las Vegas Aces",
+        },
+        {
+            "event_id": "BAD",
+            "date": "2024-08-15",
+            "status": GameStatus.FINAL,
+            "winner_team": "Las Vegas Aces",
+        },
+    ]
+    monkeypatch.setattr(
+        bf, "fetch_games_for_range", lambda s, e, failed_windows=None: events
+    )
+
+    def fake_wp(espn_id, timeout=10):
+        if espn_id == "BAD":
+            raise RuntimeError("ESPN summary drift")
+        return {
+            "status": GameStatus.FINAL,
+            "home_team": "Las Vegas Aces",
+            "away_team": "New York Liberty",
+            "home_score": "80",
+            "away_score": "70",
+            "plays": [
+                {"period": 1, "clock": "10:00", "home_pct": 0.5},
+                {"period": 4, "clock": "0:00", "home_pct": 0.9},
+            ],
+        }
+
+    monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
+
+    failed_games: list[str] = []
+    stored = bf.backfill_range(
+        session,
+        date(2024, 5, 1),
+        date(2024, 10, 31),
+        recompute=True,
+        failed_games=failed_games,
+    )
+    assert stored == 1  # GOOD stored
+    assert failed_games == ["BAD"]  # BAD recorded, not silently swallowed
+    session.close()
+
+
+def test_backfill_main_recompute_fails_closed_on_per_game_error(env, monkeypatch):
+    session = env.get_session()
+    upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
+    upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    session.commit()
+    session.close()
+
+    import scripts.backfill_game_shapes as bf
+    import scripts.daily_update as du
+
+    events = [
+        {
+            "event_id": "BAD",
+            "date": "2024-08-15",
+            "status": GameStatus.FINAL,
+            "winner_team": "Las Vegas Aces",
+        }
+    ]
+    monkeypatch.setattr(
+        bf, "fetch_games_for_range", lambda s, e, failed_windows=None: events
+    )
+
+    def fake_wp(espn_id, timeout=10):
+        raise RuntimeError("ESPN summary drift")
+
+    monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
+    monkeypatch.setattr(bf.sys, "argv", ["backfill_game_shapes", "--recompute"])
+
+    # recompute + a per-game rebuild failure must exit non-zero, not a silent
+    # exit 0 that leaves the row holding stale pre-fix data.
+    assert bf.main() == 1

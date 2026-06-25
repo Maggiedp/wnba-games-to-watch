@@ -45,9 +45,12 @@ def backfill_range(
     end: date,
     failed_windows: list[str] | None = None,
     recompute: bool = False,
+    failed_games: list[str] | None = None,
 ) -> int:
     """Backfill one date range. Returns the count stored. Skipped source
-    windows (transient ESPN failures) are appended to `failed_windows`.
+    windows (transient ESPN failures) are appended to `failed_windows`; per-game
+    rebuild failures are appended to `failed_games` (so a `--recompute` run can
+    fail closed instead of silently leaving stale rows behind).
 
     `recompute=True` re-derives + overwrites shapes already stored (used after
     an ingest fix changes the computed curve/metrics); the default skips them."""
@@ -74,6 +77,8 @@ def backfill_range(
                     logger.info(f"  …{stored} stored")
         except Exception as ex:  # one bad game must not abort the batch
             logger.warning(f"Skipping espn_id={espn_id}: {ex}")
+            if failed_games is not None:
+                failed_games.append(espn_id)
     return stored
 
 
@@ -87,10 +92,16 @@ def main() -> int:
         try:
             total = 0
             failed_windows: list[str] = []
+            failed_games: list[str] = []
             for season, start, end in SEASON_RANGES:
                 logger.info(f"Season {season}: {start}..{end}")
                 total += backfill_range(
-                    session, start, end, failed_windows, recompute=recompute
+                    session,
+                    start,
+                    end,
+                    failed_windows,
+                    recompute=recompute,
+                    failed_games=failed_games,
                 )
             if failed_windows:
                 logger.error(
@@ -99,6 +110,20 @@ def main() -> int:
                     "re-run to fill the gaps (idempotent)."
                 )
                 return 1
+            if failed_games:
+                # Per-game rebuild misses. In --recompute mode those rows keep
+                # stale pre-fix data, so fail closed (re-run to converge). In
+                # fill-missing mode they're simply not stored yet and self-heal
+                # on the next run, so surface but don't fail.
+                (logger.error if recompute else logger.warning)(
+                    f"{len(failed_games)} game(s) could not be rebuilt: {failed_games}"
+                )
+                if recompute:
+                    logger.error(
+                        "Recompute INCOMPLETE — those rows keep stale pre-fix "
+                        "data; re-run to retry."
+                    )
+                    return 1
             logger.info(f"=== Backfill complete: {total} stored ===")
             return 0
         finally:
