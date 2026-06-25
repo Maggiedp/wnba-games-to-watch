@@ -4,6 +4,29 @@ from src.constants import GameStatus
 from src.db.queries import upsert_game_shape, upsert_team
 
 
+def _seed_stale_shape(session, espn_id="STALE"):
+    """Seed an existing game_shapes row so a failed recompute leaves it stale."""
+    upsert_game_shape(
+        session,
+        espn_id=espn_id,
+        season=2024,
+        date="2024-08-15",
+        home_team="Las Vegas Aces",
+        away_team="New York Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.0,
+        tension=0.8,
+        comeback=0.3,
+        lead_changes=5,
+        winner_low_wp=0.3,
+        curve=[[0.0, 0.5], [1.0, 0.9]],
+    )
+
+
 def test_backfill_stores_completed_and_skips_existing(env, monkeypatch):
     session = env.get_session()
     upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
@@ -137,25 +160,7 @@ def test_backfill_recompute_records_existing_row_misses_only(env, monkeypatch):
     upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
     # STALE already has a stored shape -> if recompute can't refresh it, the
     # stale pre-fix row persists (a real miss to surface).
-    upsert_game_shape(
-        session,
-        espn_id="STALE",
-        season=2024,
-        date="2024-08-15",
-        home_team="Las Vegas Aces",
-        away_team="New York Liberty",
-        home_abbr="LV",
-        away_abbr="NY",
-        home_score=88,
-        away_score=86,
-        winner="home",
-        excitement=9.0,
-        tension=0.8,
-        comeback=0.3,
-        lead_changes=5,
-        winner_low_wp=0.3,
-        curve=[[0.0, 0.5], [1.0, 0.9]],
-    )
+    _seed_stale_shape(session)
     session.commit()
 
     import scripts.backfill_game_shapes as bf
@@ -231,25 +236,7 @@ def test_backfill_main_recompute_fails_closed_on_per_game_error(env, monkeypatch
     upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
     upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
     # STALE has a stored row, so a failed recompute leaves stale data behind.
-    upsert_game_shape(
-        session,
-        espn_id="STALE",
-        season=2024,
-        date="2024-08-15",
-        home_team="Las Vegas Aces",
-        away_team="New York Liberty",
-        home_abbr="LV",
-        away_abbr="NY",
-        home_score=88,
-        away_score=86,
-        winner="home",
-        excitement=9.0,
-        tension=0.8,
-        comeback=0.3,
-        lead_changes=5,
-        winner_low_wp=0.3,
-        curve=[[0.0, 0.5], [1.0, 0.9]],
-    )
+    _seed_stale_shape(session)
     session.commit()
     session.close()
 
