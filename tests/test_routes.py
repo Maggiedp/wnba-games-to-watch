@@ -1559,3 +1559,52 @@ def test_shape_svg_css_is_shared_across_replay_and_detail(session, team_ids):
     )
     session.commit()
     assert ".shape-nadir" in render_game_detail(session, "401736210")
+
+
+def test_game_detail_route_serves_shape_section(env, client):
+    session = env.get_session()
+    a = upsert_team(
+        session, name="Las Vegas Aces", abbreviation="LV", logo_url="", bpi_rating=0.0
+    )
+    b = upsert_team(
+        session, name="New York Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0
+    )
+    session.commit()
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a.id,
+        team_b_id=b.id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_game_shape(
+        session,
+        espn_id="401736210",
+        season=2026,
+        date=date,
+        home_team="Las Vegas Aces",
+        away_team="New York Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.4,
+        tension=0.87,
+        comeback=0.31,
+        lead_changes=9,
+        winner_low_wp=0.33,
+        curve=[[0.0, 0.5], [2400.0, 0.9]],
+    )
+    session.commit()
+    session.close()
+
+    resp = client.get("/game/401736210")
+    assert resp.status_code == 200
+    assert "Game shape</h2>" in resp.text
+    assert "winner trailed to 33%" in resp.text
+    assert 'id="shape-mini"' in resp.text
+    assert "buildShapeSvg" in resp.text  # renderer reached the served page
