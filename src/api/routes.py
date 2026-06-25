@@ -17,6 +17,7 @@ from src.db.queries import (
     get_game_fields,
     get_head_to_head,
     get_playoff_probabilities,
+    get_shape_by_espn_id,
     get_teams_by_ids,
 )
 from src.db.schema import DailyRanking, Game
@@ -370,7 +371,8 @@ def render_game_detail(session: Session, espn_id: str) -> str | None:
         session, game.team_a_id, game.team_b_id, season_year=season_year
     )
 
-    return _render_game_detail_html(game, team_a, team_b, ranking, h2h)
+    shape = get_shape_by_espn_id(session, espn_id)
+    return _render_game_detail_html(game, team_a, team_b, ranking, h2h, shape)
 
 
 _DETAIL_STYLE = """
@@ -917,7 +919,7 @@ def _detail_shape_section(shape) -> str:
     )
 
 
-def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
+def _render_game_detail_html(game, team_a, team_b, ranking, h2h, shape) -> str:
     name_a = team_a.name
     name_b = team_b.name
     title = f"{name_a} vs {name_b} — {_SITE_TITLE}"
@@ -953,9 +955,11 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h) -> str:
         wp_section=_detail_win_prob_section(ranking, team_a, team_b),
         breakdown_section=_detail_breakdown_section(ranking, team_a, team_b),
         h2h_section=_detail_h2h_section(game, team_a, team_b, h2h),
+        shape_section=_detail_shape_section(shape),
         shared_head=_SHARED_HEAD,
         detail_style=_DETAIL_STYLE,
         wp_chart_js=_WP_CHART_JS,
+        shape_chart_js=_SHAPE_CHART_JS,
         shared_js=_SHARED_JS,
     )
 

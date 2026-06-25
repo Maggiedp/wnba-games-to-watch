@@ -10,6 +10,7 @@ from src.db.queries import (
     get_team_by_id,
     upsert_daily_ranking,
     upsert_game,
+    upsert_game_shape,
     upsert_playoff_probability,
     upsert_team,
 )
@@ -1456,3 +1457,64 @@ def test_detail_shape_section_unparseable_curve_returns_empty():
         curve="not json",
     )
     assert _detail_shape_section(shape) == ""
+
+
+def test_render_game_detail_includes_shape_section_when_present(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    upsert_game_shape(
+        session,
+        espn_id="401736210",
+        season=2026,
+        date=date,
+        home_team="Team A",
+        away_team="Team B",
+        home_abbr="TMA",
+        away_abbr="TMB",
+        home_score=88,
+        away_score=86,
+        winner="home",
+        excitement=9.4,
+        tension=0.87,
+        comeback=0.31,
+        lead_changes=9,
+        winner_low_wp=0.33,
+        curve=[[0.0, 0.5], [2400.0, 0.9]],
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+    assert "Game shape</h2>" in html
+    assert "winner trailed to 33%" in html
+    assert 'id="shape-mini"' in html
+    assert "data-curve=" in html
+    assert "buildShapeSvg" in html  # renderer injected into the page
+
+
+def test_render_game_detail_omits_shape_section_when_absent(session, team_ids):
+    a_id, b_id = team_ids
+    date = today_et()
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=date,
+        time="7:00 PM ET",
+        broadcaster="ION",
+        espn_id="401736210",
+    )
+    session.commit()
+
+    html = render_game_detail(session, "401736210")
+    assert html is not None
+    assert "Game shape</h2>" not in html
+    assert 'id="shape-mini"' not in html
