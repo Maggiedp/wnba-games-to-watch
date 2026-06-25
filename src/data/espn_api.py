@@ -369,12 +369,19 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
     # len(plays) >= 2 guard correctly leaves insufficient feeds NULL for
     # retry rather than archiving a fabricated score (Codex review).
     plays = []
+    all_matched = True
     for entry in data.get("winprobability", []):
         pct = _valid_home_pct(entry.get("homeWinPercentage"))
         if pct is None:
             continue
         play_id = str(entry.get("playId", ""))
-        info = play_lookup.get(play_id, {"period": 1, "clock": ""})
+        info = play_lookup.get(play_id)
+        if info is None:
+            # Unmatched playId (ESPN schema drift): no real clock. Keep the
+            # sample with a fabricated period/clock for the WP chart's
+            # index-based render, but flag it so it can't drive the time sort.
+            all_matched = False
+            info = {"period": 1, "clock": ""}
         plays.append(
             {
                 "seq": len(plays),
@@ -389,9 +396,14 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
     # elapsed game time, and the excitement / lead-change metrics assume time
     # order, so sort at the boundary. Stable sort keeps equal-time plays (same
     # clock) in their original relative order; resequence seq over the result.
-    plays.sort(key=elapsed_seconds)
-    for i, play in enumerate(plays):
-        play["seq"] = i
+    # Sort ONLY when every sample resolved to a real play — an unmatched playId
+    # has a fabricated clock, so letting it drive the sort would silently
+    # relocate it; rare schema-drift feeds keep their original feed order
+    # (no worse than before this sort existed).
+    if all_matched:
+        plays.sort(key=elapsed_seconds)
+        for i, play in enumerate(plays):
+            play["seq"] = i
 
     return {
         "espn_id": espn_id,

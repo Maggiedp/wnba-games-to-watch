@@ -136,6 +136,31 @@ def test_fetch_live_win_probability_sorts_plays_by_game_time():
     assert [p["seq"] for p in got] == [0, 1, 2, 3]  # resequenced over final order
 
 
+def test_fetch_live_win_probability_keeps_feed_order_when_a_playid_is_unmatched():
+    """An unmatched playId falls back to a fabricated clock (kept for the
+    index-based WP chart). That fabricated time must NOT drive the game-time
+    sort, or the sample gets silently relocated — so when any sample is
+    unmatched, preserve the original feed order (no worse than pre-sort)."""
+    plays = [
+        {"id": "a", "period": {"number": 1}, "clock": {"displayValue": "10:00"}},
+        {"id": "b", "period": {"number": 4}, "clock": {"displayValue": "1:00"}},
+    ]
+    # Feed order is out of game-time order (b is late, a is early) AND includes
+    # an unmatched playId -> the sort must be skipped, leaving feed order intact.
+    wp = [
+        {"playId": "b", "homeWinPercentage": 0.80},
+        {"playId": "UNMATCHED", "homeWinPercentage": 0.40},
+        {"playId": "a", "homeWinPercentage": 0.50},
+    ]
+    summary = _make_summary(plays=plays, wp=wp)
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    # Original feed order preserved (NOT time-sorted, which would give
+    # [0.50, 0.40, 0.80] and move the unmatched sample to a fabricated 600s).
+    assert [p["home_pct"] for p in result["plays"]] == [0.80, 0.40, 0.50]
+    assert [p["seq"] for p in result["plays"]] == [0, 1, 2]
+
+
 def _summary_with_wp(pcts):
     """Build a summary whose winprobability entries carry the given
     raw `homeWinPercentage` values (any type), one play per value."""
