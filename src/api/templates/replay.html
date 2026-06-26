@@ -23,7 +23,8 @@
 %%SHARED_HEAD%%
             .wrap { max-width: 920px; width: 100%; margin: 0 auto; padding: 24px 16px 64px; }
             h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }
-            .sub { color: var(--text-muted); margin: 0 0 24px; }
+            .sub { color: var(--text-muted); margin: 0 0 8px; }
+            .shape-key { color: var(--text-muted); font-size: .9rem; line-height: 1.45; margin: 0 0 24px; }
             a.back { color: var(--orange-deep); text-decoration: none; font-size: .9rem; }
             .cross { color: var(--text-muted); font-size: .9rem; margin: 28px 0 0; }
             .cross a { color: var(--orange-deep); }
@@ -60,6 +61,7 @@
   <a class="back" href="/">&larr; Back to games</a>
   <h1>Replay Value</h1>
   <p class="sub">Which WNBA games were worth watching — ranked by the shape of the win-probability curve.</p>
+  <p class="shape-key">Each line traces the <strong>winner's</strong> win probability from tip-off to the final buzzer — so every game climbs to the top. One that hugs the 50% midline was a nail-biter; one that jumps up early was a runaway.</p>
 
   <div class="controls">
     <div class="sort-pills" id="replay-sorts" role="group" aria-label="Sort by">
@@ -131,7 +133,7 @@
     const m = METRICS[sortKey];
     const svg = buildShapeSvg(g.curve, g.winner, {
       accent: lead ? 'var(--orange)' : 'var(--navy-3)', emphasis: sortKey,
-      width: lead ? 640 : 320, height: lead ? 150 : 90 });
+      width: lead ? 640 : 320, height: lead ? 150 : 90, midLabel: lead });
     const star = lead ? '<span class="shape-star" aria-hidden="true">✸</span>' : '';
     const inner = `<div class="shape-head">${star}<span class="shape-score">${scoreLine(g)}</span>`
       + `<span class="shape-date">${fmtDate(g.date)}</span></div>`
