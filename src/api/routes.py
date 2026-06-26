@@ -653,6 +653,7 @@ _DETAIL_STYLE = """
             .detail-shape-metrics .v { font-family: var(--display); font-weight: 700; font-size: 1.4rem; color: var(--navy); font-variant-numeric: tabular-nums; }
             .detail-shape-metrics .l { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-left: 6px; }
             .detail-shape-caption { margin-top: 8px; color: var(--text-muted); font-size: .88rem; }
+            .detail-shape-key { margin: 2px 0 12px; color: var(--text-muted); font-size: .85rem; }
 """
 
 
@@ -969,6 +970,8 @@ def _detail_shape_section(shape) -> str:
     return (
         "<section>"
         '<h2 class="section-title">Game shape</h2>'
+        '<p class="detail-shape-key">Line tracks the <strong>winner\'s</strong> '
+        "win probability, tip-off &rarr; final.</p>"
         '<div id="shape-mini" class="detail-shape-chart" '
         f"data-curve='{curve_attr}' data-winner=\"{winner_attr}\" "
         f'data-emphasis="{emphasis}"></div>'
