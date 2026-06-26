@@ -1632,3 +1632,21 @@ def test_game_detail_route_serves_shape_section(env, client):
     assert "winner trailed to 33%" in resp.text
     assert 'id="shape-mini"' in resp.text
     assert "buildShapeSvg" in resp.text  # renderer reached the served page
+
+
+def test_thin_curve_caps_points_and_keeps_endpoints():
+    from src.api.routes import _COMPLETED_MINI_POINTS, _thin_curve
+
+    curve = [[float(i), i / 100.0] for i in range(100)]
+    thinned = _thin_curve(curve)
+
+    assert len(thinned) <= _COMPLETED_MINI_POINTS
+    assert thinned[0] == curve[0]  # first sample preserved
+    assert thinned[-1] == curve[-1]  # last sample preserved
+
+
+def test_thin_curve_returns_short_curve_unchanged():
+    from src.api.routes import _thin_curve
+
+    curve = [[0.0, 0.5], [2400.0, 0.9]]
+    assert _thin_curve(curve) == curve

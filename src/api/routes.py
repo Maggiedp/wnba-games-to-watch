@@ -108,6 +108,20 @@ class PlayoffOddsResponse(BaseModel):
     losses: int | None
 
 
+_COMPLETED_MINI_POINTS = 28  # sparkline resolution for the homepage completed minis
+
+
+def _thin_curve(curve: list, max_points: int = _COMPLETED_MINI_POINTS) -> list:
+    """Evenly thin a [[t_sec, home_pct], ...] curve to <= max_points, always
+    keeping the first and last sample so the line still spans the full game.
+    Mirrors src.scoring.game_shape.downsample_curve's index stride."""
+    if len(curve) <= max_points:
+        return curve
+    step = (len(curve) - 1) / (max_points - 1)
+    idx = sorted({round(i * step) for i in range(max_points)})
+    return [curve[i] for i in idx]
+
+
 def format_games_response(
     rankings: list[DailyRanking],
     session: Session,
