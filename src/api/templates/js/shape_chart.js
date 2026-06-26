@@ -4,7 +4,8 @@
 // top-right and the silhouette is the story. Pure/numeric (no external strings,
 // so no escaping needed); colored via an inline CSS-var stroke like
 // detail_chart.js. `opts`: {width, height, accent (CSS color string),
-// emphasis: 'excitement'|'tension'|'comeback'}.
+// emphasis: 'excitement'|'tension'|'comeback', midLabel (truthy = draw a
+// "50%" tick at the midline's right end)}.
 function buildShapeSvg(curve, winner, opts) {
   opts = opts || {};
   if (!curve || curve.length < 2) return '';
@@ -27,7 +28,8 @@ function buildShapeSvg(curve, winner, opts) {
       ...pts.map(p => [p[0].toFixed(1), p[1].toFixed(1)]),
       [lastX, botY]].map(p => `${p[0]},${p[1]}`).join(' ');
   const line = 'M ' + pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' L ');
-  const midY = sy(0.5).toFixed(1);
+  const mid = sy(0.5);
+  const midY = mid.toFixed(1);
 
   let extra = '';
   if (emphasis === 'tension') {
@@ -46,7 +48,7 @@ function buildShapeSvg(curve, winner, opts) {
   // the /replay lead card + the standalone detail mini (not the small-multiples
   // grid). Drawn last so it sits above the line.
   const midLabel = opts.midLabel
-    ? `<text class="shape-mid-label" x="${(W - padR).toFixed(1)}" y="${(sy(0.5) - 2).toFixed(1)}" text-anchor="end">50%</text>`
+    ? `<text class="shape-mid-label" x="${(W - padR).toFixed(1)}" y="${(mid - 2).toFixed(1)}" text-anchor="end">50%</text>`
     : '';
 
   return `<svg class="shape-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Win probability shape">`
