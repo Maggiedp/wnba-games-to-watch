@@ -729,6 +729,15 @@
                 font-style: italic;
                 color: var(--navy-3);
             }
+            .completed-shape-key {
+                margin: 0 0 16px;
+                font-size: 0.85rem;
+                color: var(--navy-3);
+            }
+            .completed-shape-key a {
+                color: var(--navy-3);
+                text-decoration: underline;
+            }
             .completed-header-row {
                 display: flex;
                 justify-content: space-between;
@@ -1143,6 +1152,7 @@
                             <button class="sort-btn" id="completed-sort-excitement" type="button" aria-pressed="false">Excitement</button>
                         </div>
                     </div>
+                    <p class="completed-shape-key">Each line traces the game's win-probability swing &mdash; flat is a blowout, wild is a nailbiter. <a href="/replay">See all &rarr;</a></p>
                     <div id="completed-games-container"></div>
                 </div>
             </section>

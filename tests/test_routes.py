@@ -1783,3 +1783,14 @@ def test_completed_minis_placeholder_and_paint_wired():
     assert (
         'container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .shape-mini`)' in src
     )  # paints desktop + mobile (both)
+
+
+def test_completed_section_has_shape_key_and_replay_link():
+    from src.api.routes import render_homepage
+
+    src = render_homepage()
+    assert 'class="completed-shape-key"' in src
+    assert "win-probability swing" in src  # the one-line explainer
+    assert (
+        'href="/replay">See all' in src
+    )  # contextual See-all link (not the footer one)
