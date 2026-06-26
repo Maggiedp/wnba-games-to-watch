@@ -42,10 +42,18 @@ function buildShapeSvg(curve, winner, opts) {
     extra = `<circle class="shape-nadir" cx="${pts[lo][0].toFixed(1)}" cy="${pts[lo][1].toFixed(1)}" r="3.5"/>`;
   }
 
+  // Opt-in legend: a small "50%" at the right end of the midline. On only for
+  // the /replay lead card + the standalone detail mini (not the small-multiples
+  // grid). Drawn last so it sits above the line.
+  const midLabel = opts.midLabel
+    ? `<text class="shape-mid-label" x="${(W - padR).toFixed(1)}" y="${(sy(0.5) - 2).toFixed(1)}" text-anchor="end">50%</text>`
+    : '';
+
   return `<svg class="shape-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Win probability shape">`
     + `<line class="shape-mid" x1="${padL}" y1="${midY}" x2="${W - padR}" y2="${midY}"/>`
     + extra
     + `<polygon class="shape-fill" points="${fill}" fill="${accent}" fill-opacity="0.12"/>`
     + `<path class="shape-line" d="${line}" fill="none" stroke="${accent}"/>`
+    + midLabel
     + `</svg>`;
 }
