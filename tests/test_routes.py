@@ -1650,3 +1650,113 @@ def test_thin_curve_returns_short_curve_unchanged():
 
     curve = [[0.0, 0.5], [2400.0, 0.9]]
     assert _thin_curve(curve) == curve
+
+
+def _seed_completed_game(env, *, date, espn_id, excitement=5.0):
+    """Seed one completed 2026 game (Game + DailyRanking) and return team ids."""
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(env.Team).filter_by(name="Aces").one().id
+    b = session.query(env.Team).filter_by(name="Liberty").one().id
+    session.add(
+        Game(
+            team_a_id=a,
+            team_b_id=b,
+            date=date,
+            time="",
+            broadcaster="ION",
+            winner_id=a,
+            final_score_a=88,
+            final_score_b=80,
+            espn_id=espn_id,
+            excitement_index=excitement,
+        )
+    )
+    upsert_daily_ranking(
+        session,
+        date=date,
+        team_a_id=a,
+        team_b_id=b,
+        quality_score=50.0,
+        importance_score=None,
+        overall_score=50.0,
+        broadcaster="ION",
+    )
+    session.commit()
+    session.close()
+    return a, b
+
+
+def test_completed_endpoint_attaches_shape_curve_when_shape_exists(env, client):
+    _seed_completed_game(env, date="2026-05-21", espn_id="e1")
+    session = env.get_session()
+    upsert_game_shape(
+        session,
+        espn_id="e1",
+        season=2026,
+        date="2026-05-21",
+        home_team="Aces",
+        away_team="Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=80,
+        winner="home",
+        excitement=5.0,
+        tension=0.5,
+        comeback=0.2,
+        lead_changes=3,
+        winner_low_wp=0.3,
+        curve=[[0.0, 0.5], [1200.0, 0.4], [2400.0, 0.8]],
+    )
+    session.commit()
+    session.close()
+
+    row = next(
+        r for r in client.get("/api/games/completed").json() if r["espn_id"] == "e1"
+    )
+    assert isinstance(row["shape_curve"], list)
+    assert len(row["shape_curve"]) >= 2
+    assert row["shape_curve"][0] == [0.0, 0.5]
+
+
+def test_completed_endpoint_shape_curve_none_without_shape(env, client):
+    _seed_completed_game(env, date="2026-05-22", espn_id="e2")
+
+    row = next(
+        r for r in client.get("/api/games/completed").json() if r["espn_id"] == "e2"
+    )
+    assert row["shape_curve"] is None
+
+
+def test_completed_endpoint_malformed_curve_degrades_to_none(env, client):
+    _seed_completed_game(env, date="2026-05-23", espn_id="e3")
+    session = env.get_session()
+    session.add(
+        env.GameShape(
+            espn_id="e3",
+            season=2026,
+            date="2026-05-23",
+            home_team="Aces",
+            away_team="Liberty",
+            home_abbr="LV",
+            away_abbr="NY",
+            home_score=88,
+            away_score=80,
+            winner="home",
+            excitement=5.0,
+            tension=0.5,
+            comeback=0.2,
+            lead_changes=3,
+            winner_low_wp=0.3,
+            curve="not-json",
+        )
+    )
+    session.commit()
+    session.close()
+
+    resp = client.get("/api/games/completed")
+    assert resp.status_code == 200  # one bad row must not 500 the list
+    row = next(r for r in resp.json() if r["espn_id"] == "e3")
+    assert row["shape_curve"] is None

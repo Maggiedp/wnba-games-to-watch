@@ -18,6 +18,7 @@ from src.db.queries import (
     get_head_to_head,
     get_playoff_probabilities,
     get_shape_by_espn_id,
+    get_shapes_by_espn_ids,
     get_teams_by_ids,
 )
 from src.db.schema import DailyRanking, Game
@@ -88,6 +89,10 @@ class GameResponse(BaseModel):
     final_score_a: int | None = None
     final_score_b: int | None = None
     excitement_index: float | None = None
+    # Winner-oriented WP "fever line" [[t_sec, home_pct], ...] for the homepage
+    # completed-section mini; only populated when include_shapes=True and a
+    # game_shapes row exists. None otherwise (incl. upcoming games).
+    shape_curve: list[list[float]] | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -126,6 +131,7 @@ def format_games_response(
     rankings: list[DailyRanking],
     session: Session,
     game_status_by_espn_id: dict[str, str] | None = None,
+    include_shapes: bool = False,
 ) -> list[GameResponse]:
     """Format DailyRanking objects into GameResponse objects."""
     if not rankings:
@@ -196,6 +202,23 @@ def format_games_response(
                 excitement_index=excitement_index,
             )
         )
+
+    if include_shapes:
+        shape_ids = [r.espn_id for r in results if r.espn_id]
+        shapes = get_shapes_by_espn_ids(session, shape_ids) if shape_ids else {}
+        for r in results:
+            shape = shapes.get(r.espn_id) if r.espn_id else None
+            if shape is None:
+                continue
+            try:
+                curve = json.loads(shape.curve)
+            except (ValueError, TypeError):
+                logger.warning(
+                    "game_shapes curve unparseable for espn_id=%s", r.espn_id
+                )
+                continue
+            if isinstance(curve, list) and len(curve) >= 2:
+                r.shape_curve = _thin_curve(curve)
 
     return results
 

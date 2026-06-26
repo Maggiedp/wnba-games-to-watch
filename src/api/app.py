@@ -262,7 +262,7 @@ async def get_completed_games_endpoint():
     session = get_session()
     try:
         rankings = get_completed_rankings(session, season_year=2026)
-        return format_games_response(rankings, session)
+        return format_games_response(rankings, session, include_shapes=True)
     finally:
         session.close()
 
@@ -275,7 +275,9 @@ async def get_games_by_broadcaster(broadcaster: str, mode: str = "upcoming"):
         rankings = get_rankings_by_broadcaster(
             session, start_date, broadcaster, mode=mode
         )
-        return format_games_response(rankings, session)
+        return format_games_response(
+            rankings, session, include_shapes=(mode == "completed")
+        )
     finally:
         session.close()
 
