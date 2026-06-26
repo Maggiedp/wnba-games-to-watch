@@ -40,3 +40,14 @@ test('away winner orients the line upward at the end (q high -> small y)', () =>
   const lastY = parseFloat(d.split(' L ').pop().split(',')[1]);
   assert.ok(lastY < 50, `expected winner to end in the top half, got y=${lastY}`);
 });
+
+test('midLabel true prints a 50% label on the midline', () => {
+  const svg = buildShapeSvg(curve, 'home', { midLabel: true });
+  assert.match(svg, /class="shape-mid-label"/);
+  assert.match(svg, />50%</);
+});
+
+test('midLabel defaults off (no label)', () => {
+  const svg = buildShapeSvg(curve, 'home', {});
+  assert.doesNotMatch(svg, /shape-mid-label/);
+});

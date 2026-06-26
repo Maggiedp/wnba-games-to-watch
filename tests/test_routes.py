@@ -1407,6 +1407,8 @@ def test_detail_shape_section_comeback_game():
     assert 'data-winner="home"' in html
     assert 'data-emphasis="comeback"' in html
     assert "data-curve=" in html
+    assert 'class="detail-shape-key"' in html
+    assert "Line tracks the" in html  # winner-orientation micro-explainer
 
 
 def test_detail_shape_section_blowout_uses_led_caption():
@@ -1518,6 +1520,7 @@ def test_render_game_detail_includes_shape_section_when_present(session, team_id
     assert "winner trailed to 33%" in html
     assert 'id="shape-mini"' in html
     assert "data-curve=" in html
+    assert "midLabel: true" in html  # detail mini opts into the 50% label
     assert "buildShapeSvg" in html  # renderer injected into the page
 
 
