@@ -4,6 +4,7 @@ from src.db.queries import (
     get_completed_games_missing_shape,
     get_existing_shape_espn_ids,
     get_shape_by_espn_id,
+    get_shapes_by_espn_ids,
     get_team_abbrev_map,
     upsert_game,
     upsert_game_shape,
@@ -176,4 +177,22 @@ def test_get_shape_by_espn_id_returns_row_or_none(env):
     assert row.espn_id == "401"
     assert row.winner == "home"
     assert get_shape_by_espn_id(session, "nope") is None
+    session.close()
+
+
+def test_get_shapes_by_espn_ids_returns_present_keyed_by_id(env):
+    session = _seed_shape(env, espn_id="401")
+    _seed_shape(env, espn_id="402")
+
+    shapes = get_shapes_by_espn_ids(session, ["401", "402", "missing"])
+
+    assert set(shapes.keys()) == {"401", "402"}
+    assert shapes["401"].espn_id == "401"
+    assert shapes["402"].curve == "[[0.0, 0.5], [2400.0, 0.85]]"
+    session.close()
+
+
+def test_get_shapes_by_espn_ids_empty_input_returns_empty_dict(env):
+    session = env.get_session()
+    assert get_shapes_by_espn_ids(session, []) == {}
     session.close()
