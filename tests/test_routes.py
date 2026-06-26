@@ -1767,3 +1767,19 @@ def test_homepage_injects_shape_chart_renderer():
     from src.api.routes import render_homepage
 
     assert "function buildShapeSvg" in render_homepage()
+
+
+def test_completed_minis_placeholder_and_paint_wired():
+    """renderGameRow/renderGameCard emit a .shape-mini placeholder and
+    renderCompleted fills it via buildShapeSvg (winner derived from scores)."""
+    from src.api.routes import render_homepage
+
+    src = render_homepage()
+    assert 'class="shape-mini"' in src  # placeholder emitted
+    assert "buildShapeSvg(g.shape_curve" in src  # painted in renderCompleted
+    assert (
+        "g.final_score_a > g.final_score_b ? 'home' : 'away'" in src
+    )  # winner orientation
+    assert (
+        'container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .shape-mini`)' in src
+    )  # paints desktop + mobile (both)

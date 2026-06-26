@@ -560,6 +560,17 @@
                 flex-direction: column;
                 align-items: flex-start;
             }
+            .shape-mini {
+                display: block;
+                width: 80px;
+                margin-top: 4px;
+            }
+            .shape-mini:empty { display: none; }
+            .shape-mini .shape-svg {
+                display: block;
+                width: 80px;
+                height: 24px;
+            }
 
             /* ---------- Mini bars ---------- */
             .mini-bar-row {
@@ -1691,6 +1702,14 @@
                     container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .excitement-eyebrow`).forEach(eyebrow => {
                         applyExcitementClass(eyebrow, excitementLabelFor(g.excitement_index));
                     });
+                    // Winner-oriented mini fever-line (winner from final scores: team_a is home).
+                    if (Array.isArray(g.shape_curve) && g.shape_curve.length >= 2) {
+                        const winner = g.final_score_a > g.final_score_b ? 'home' : 'away';
+                        const svg = buildShapeSvg(g.shape_curve, winner, { accent: 'var(--navy-3)', width: 80, height: 24 });
+                        container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .shape-mini`).forEach(mini => {
+                            mini.innerHTML = svg;
+                        });
+                    }
                 });
             }
 
@@ -1981,7 +2000,7 @@
                     <tr${game.espn_id ? ` data-espn-id="${escapeHtml(game.espn_id)}" role="link" tabindex="0"` : ''}>
                         <td class="col-date">${formatLocalDate(game)}</td>
                         <td class="col-time">${escapeHtml(formatLocalTime(game.time_utc, game.time))}</td>
-                        <td class="score-cell"><div class="score-stack">${game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${escapeHtml(game.espn_id)}"></span>` : ''}<span class="score-num ${cls}">${primaryScore(game, scoreHeader)}</span></div></td>
+                        <td class="score-cell"><div class="score-stack">${game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${escapeHtml(game.espn_id)}"></span>` : ''}<span class="score-num ${cls}">${primaryScore(game, scoreHeader)}</span>${game.espn_id ? '<span class="shape-mini"></span>' : ''}</div></td>
                         <td>
                             ${badge}
                             <div class="matchup">
@@ -2019,6 +2038,7 @@
                         <div class="games-card-stack">
                             ${livePillHtml(game)}
                             ${game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${escapeHtml(game.espn_id)}"></span>` : ''}
+                            ${game.espn_id ? '<span class="shape-mini"></span>' : ''}
                             ${eyebrow}
                             <div class="games-card-matchup">
                                 <div>
