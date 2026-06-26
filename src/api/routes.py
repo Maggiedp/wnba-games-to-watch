@@ -357,6 +357,7 @@ _HOMEPAGE_HTML = (
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
     .replace("%%HOMEPAGE_HELPERS_JS%%", _HOMEPAGE_HELPERS_JS)
+    .replace("%%SHAPE_CHART_JS%%", _SHAPE_CHART_JS)
 )
 
 _TRANSPARENCY_HTML = (

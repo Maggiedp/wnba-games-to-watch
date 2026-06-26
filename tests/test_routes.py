@@ -1760,3 +1760,10 @@ def test_completed_endpoint_malformed_curve_degrades_to_none(env, client):
     assert resp.status_code == 200  # one bad row must not 500 the list
     row = next(r for r in resp.json() if r["espn_id"] == "e3")
     assert row["shape_curve"] is None
+
+
+def test_homepage_injects_shape_chart_renderer():
+    """buildShapeSvg must reach the homepage so completed-section minis render."""
+    from src.api.routes import render_homepage
+
+    assert "function buildShapeSvg" in render_homepage()
