@@ -15,3 +15,9 @@ def test_homepage_footer_links_to_replay(client):
     r = client.get("/")
     assert r.status_code == 200
     assert '<a href="/replay">Replay value</a>' in r.text
+
+
+def test_replay_page_ships_midline_label_style(client):
+    r = client.get("/replay")
+    assert r.status_code == 200
+    assert ".shape-mid-label" in r.text  # 50% label styled via _SHARED_HEAD

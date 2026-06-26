@@ -278,7 +278,8 @@ _SHARED_HEAD = """\
             .shape-mid { stroke: #c8c2b8; stroke-width: 1; stroke-dasharray: 3,3; }
             .shape-line { stroke-width: 1.6; stroke-linejoin: round; }
             .shape-doubt { fill: rgba(255,107,0,.09); }
-            .shape-nadir { fill: var(--orange); }\
+            .shape-nadir { fill: var(--orange); }
+            .shape-mid-label { fill: var(--text-subtle); font-size: 11px; }\
 """
 
 # SVG win-probability line-chart builder + live header for the game detail
