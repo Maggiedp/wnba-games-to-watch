@@ -1151,6 +1151,9 @@ def store_playoff_probabilities(
             reach_semis_prob=round_probs.reach_semis.get(team_name),
             reach_finals_prob=round_probs.reach_finals.get(team_name),
             win_championship_prob=round_probs.win_championship.get(team_name),
+            seed_distribution=json.dumps(
+                round_probs.seed_distribution.get(team_name) or {}
+            ),
         )
         stored += 1
     logger.info(f"Stored {stored} playoff probabilities for {snapshot_date}")

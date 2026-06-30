@@ -3791,3 +3791,18 @@ def test_get_playoff_probabilities_malformed_seed_distribution_is_none(
     )
     result = get_playoff_probabilities(session, "2026-06-01")
     assert result[a_id].seed_distribution is None
+
+
+def test_store_playoff_probabilities_persists_seed_distribution(session, team_ids):
+    from scripts.daily_update import store_playoff_probabilities
+    from src.scoring.monte_carlo import RoundProbabilities
+
+    a_id, _ = team_ids
+    round_probs = RoundProbabilities(
+        make_playoffs={"Team A": 0.8},
+        seed_distribution={"Team A": {1: 0.5, 2: 0.3}},
+    )
+    store_playoff_probabilities(session, round_probs, "2026-06-01")
+
+    result = get_playoff_probabilities(session, "2026-06-01")
+    assert result[a_id].seed_distribution == {1: 0.5, 2: 0.3}
