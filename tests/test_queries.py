@@ -1,5 +1,7 @@
 """Tests for src/db/queries.py — focused on upsert correctness."""
 
+import json
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -3756,3 +3758,36 @@ def test_get_team_records_absent_for_team_with_no_regular_season_games(
     assert a_id not in records
     assert b_id not in records
     assert records.get(a_id, (0, 0)) == (0, 0)
+
+
+def test_upsert_and_get_seed_distribution_roundtrip(session, team_ids):
+    a_id, b_id = team_ids
+    upsert_playoff_probability(
+        session,
+        date="2026-06-01",
+        team_id=a_id,
+        probability=0.72,
+        seed_distribution=json.dumps({"1": 0.4, "2": 0.32}),
+    )
+    # Legacy row: no seed_distribution passed -> NULL -> None.
+    upsert_playoff_probability(
+        session, date="2026-06-01", team_id=b_id, probability=0.33
+    )
+    result = get_playoff_probabilities(session, "2026-06-01")
+    assert result[a_id].seed_distribution == {1: 0.4, 2: 0.32}
+    assert result[b_id].seed_distribution is None
+
+
+def test_get_playoff_probabilities_malformed_seed_distribution_is_none(
+    session, team_ids
+):
+    a_id, _ = team_ids
+    upsert_playoff_probability(
+        session,
+        date="2026-06-01",
+        team_id=a_id,
+        probability=0.72,
+        seed_distribution="{not valid json",
+    )
+    result = get_playoff_probabilities(session, "2026-06-01")
+    assert result[a_id].seed_distribution is None

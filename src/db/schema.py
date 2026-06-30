@@ -128,6 +128,7 @@ class PlayoffProbability(Base):
     reach_semis_prob = Column(Float, nullable=True)
     reach_finals_prob = Column(Float, nullable=True)
     win_championship_prob = Column(Float, nullable=True)
+    seed_distribution = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     __table_args__ = (
@@ -502,6 +503,12 @@ def init_db():
                 text(
                     "ALTER TABLE playoff_probabilities ADD COLUMN IF NOT EXISTS "
                     "win_championship_prob FLOAT"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE playoff_probabilities ADD COLUMN IF NOT EXISTS "
+                    "seed_distribution TEXT"
                 )
             )
             conn.execute(
