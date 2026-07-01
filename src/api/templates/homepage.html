@@ -157,6 +157,46 @@
                 }
             }
 
+            /* ---------- Seed-distribution ("Seeds") view ---------- */
+            .playoff-header-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                margin-bottom: 8px;
+            }
+            .playoff-header-row .playoff-picture-header {
+                margin-bottom: 0;
+            }
+            .playoff-table th.seed-col {
+                text-align: center;
+            }
+            .playoff-table td.seed-cell {
+                text-align: center;
+                font-variant-numeric: tabular-nums;
+            }
+            .playoff-table td.seed-cell.modal {
+                outline: 2px solid rgba(255, 107, 0, 0.9);
+                outline-offset: -2px;
+                border-radius: 3px;
+                font-weight: 600;
+            }
+            .playoff-caption {
+                font-size: 12px;
+                color: var(--navy-3);
+                margin: 8px 0 0;
+            }
+            .playoff-team-abbr {
+                font-weight: 500;
+                display: none;
+            }
+            @media (max-width: 768px) {
+                #playoff-table.view-seeds .playoff-team-name { display: none; }
+                #playoff-table.view-seeds .playoff-team-abbr { display: inline; }
+                #playoff-table.view-seeds td.seed-cell,
+                #playoff-table.view-seeds th.seed-col { padding: 5px 4px; }
+            }
+
             /* ---------- Inline team playoff probability ---------- */
             .team-prob, .win-prob {
                 font-size: 0.72rem;
@@ -1097,20 +1137,18 @@
                 </button>
                 <div id="playoff-content" class="playoff-picture" hidden>
                     <div class="playoff-picture-inner">
-                        <div class="playoff-picture-header" id="playoff-heading">Playoff Picture &middot; Updated daily</div>
+                        <div class="playoff-header-row">
+                            <div class="playoff-picture-header" id="playoff-heading">Playoff Picture &middot; Updated daily</div>
+                            <div class="sort-toggle" id="playoff-view-toggle" role="group" aria-label="Playoff table view" hidden>
+                                <button class="sort-btn" data-playoff-view="rounds" type="button" aria-pressed="true">Rounds</button>
+                                <button class="sort-btn" data-playoff-view="seeds" type="button" aria-pressed="false">Seeds</button>
+                            </div>
+                        </div>
                         <table class="playoff-table" id="playoff-table">
-                            <thead>
-                                <tr>
-                                    <th class="team-col">Team</th>
-                                    <th class="record-col">Rec</th>
-                                    <th>Playoffs</th>
-                                    <th>Semis</th>
-                                    <th>Finals</th>
-                                    <th>Champ</th>
-                                </tr>
-                            </thead>
+                            <thead id="playoff-thead"></thead>
                             <tbody id="playoff-tbody"></tbody>
                         </table>
+                        <p class="playoff-caption" id="playoff-caption" hidden>Chance each team finishes at each seed. A row sums to its playoff odds.</p>
                     </div>
                 </div>
             </section>

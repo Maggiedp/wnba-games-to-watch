@@ -1657,3 +1657,13 @@ def test_playoff_odds_endpoint_includes_seed_distribution(env, client):
 
     rows = client.get("/api/playoff-odds").json()
     assert rows[0]["seed_distribution"] == {"1": 0.5, "2": 0.35}
+
+
+def test_homepage_ships_playoff_view_toggle(client):
+    """The Rounds|Seeds toggle markup ships in the homepage (hidden until a
+    daily run writes seed_distribution; un-hidden client-side)."""
+    html = client.get("/").text
+    assert 'id="playoff-view-toggle"' in html
+    assert 'data-playoff-view="rounds"' in html
+    assert 'data-playoff-view="seeds"' in html
+    assert 'id="playoff-thead"' in html
