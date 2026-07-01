@@ -89,3 +89,35 @@ function completedEntryFromLiveWp(game, wpData, completed) {
         excitement_index: excitementScore(wpData.plays),
     };
 }
+
+// Seed distribution → per-seed display cells for the Playoff Picture "Seeds" view.
+// seedDistribution is the /api/playoff-odds field: {seed: prob} with string keys
+// (JSON) summing to the team's make-playoffs prob; only seeds that occurred are
+// present (absent seed = 0), and it's null/{} for rows a daily run hasn't written.
+// Returns { cells: [{seed, prob, display, isModal}] for seeds 1..8, hasData }.
+//   display: '' for 0/absent, '<1%' for tiny-nonzero, 'NN%' otherwise (mirrors the
+//            round-cell convention).
+//   isModal: marks the single most-likely seed (argmax); nothing is flagged when
+//            there's no data. hasData = any seed prob > 0.
+function buildSeedRow(seedDistribution) {
+    const sd = seedDistribution || {};
+    let modalSeed = 0;
+    let modalProb = 0;
+    const cells = [];
+    for (let seed = 1; seed <= 8; seed++) {
+        const raw = sd[seed];  // numeric index coerces to the string JSON key
+        const prob = (typeof raw === 'number' && raw > 0) ? raw : 0;
+        if (prob > modalProb) { modalProb = prob; modalSeed = seed; }
+        cells.push({ seed, prob });
+    }
+    for (const c of cells) {
+        if (c.prob > 0) {
+            const pct = Math.round(c.prob * 100);
+            c.display = pct === 0 ? '<1%' : pct + '%';
+        } else {
+            c.display = '';
+        }
+        c.isModal = c.seed === modalSeed && modalProb > 0;
+    }
+    return { cells, hasData: modalProb > 0 };
+}

@@ -6,6 +6,7 @@ const { loadHelpers } = require('./helpers');
 const {
   excitementLabelFor, winProbText, elapsedSeconds,
   excitementScore, computeExcitement, completedEntryFromLiveWp,
+  buildSeedRow,
 } = loadHelpers('shared.js', 'homepage_helpers.js');
 
 // --- elapsedSeconds (mirrors tests/test_excitement.py for the Python port) ---
@@ -125,4 +126,38 @@ test('completedEntryFromLiveWp rejects NaN scores (incomplete payload)', () => {
 test('completedEntryFromLiveWp nulls excitement_index when plays are too thin', () => {
   const entry = completedEntryFromLiveWp({ espn_id: '401' }, { ...finalWp, plays: [] }, []);
   assert.equal(entry.excitement_index, null);
+});
+
+// --- buildSeedRow (Playoff Picture "Seeds" view) ---
+
+test('buildSeedRow: null/undefined/empty has no data and 8 all-blank cells', () => {
+  for (const empty of [null, undefined, {}]) {
+    const row = buildSeedRow(empty);
+    assert.equal(row.hasData, false);
+    assert.equal(row.cells.length, 8);
+    // join to a string, not deepEqual: the vm loader puts cells in a separate
+    // realm, so a cross-realm array fails deepStrictEqual's prototype check.
+    assert.equal(row.cells.map(c => c.seed).join(','), '1,2,3,4,5,6,7,8');
+    assert.ok(row.cells.every(c => c.display === '' && c.prob === 0 && !c.isModal));
+  }
+});
+
+test('buildSeedRow: string-keyed distribution renders % and flags the modal seed', () => {
+  // Sums to 1.00; seeds 6-8 absent → blank. Modal (argmax) = seed 1.
+  const row = buildSeedRow({ '1': 0.45, '2': 0.30, '3': 0.15, '4': 0.07, '5': 0.03 });
+  assert.equal(row.hasData, true);
+  assert.equal(row.cells[0].display, '45%');
+  assert.equal(row.cells[1].display, '30%');
+  assert.equal(row.cells[4].display, '3%');
+  assert.equal(row.cells[5].display, '');   // seed 6 absent
+  assert.equal(row.cells[7].display, '');   // seed 8 absent
+  assert.equal(row.cells[0].isModal, true);
+  assert.equal(row.cells.filter(c => c.isModal).length, 1);
+});
+
+test('buildSeedRow: tiny-but-nonzero shows <1%, explicit zero shows blank', () => {
+  const row = buildSeedRow({ '7': 0, '8': 0.003 });
+  assert.equal(row.cells[7].display, '<1%');  // 0.003 rounds to 0% → "<1%"
+  assert.equal(row.cells[6].display, '');     // explicit 0 → blank
+  assert.equal(row.cells[7].isModal, true);   // the only nonzero seed is modal
 });
