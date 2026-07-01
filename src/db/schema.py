@@ -391,6 +391,7 @@ def init_db():
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_semis_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_finals_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN win_championship_prob FLOAT",
+                "ALTER TABLE playoff_probabilities ADD COLUMN seed_distribution TEXT",
                 "ALTER TABLE daily_rankings ADD COLUMN importance_detail TEXT",
             ]:
                 try:
