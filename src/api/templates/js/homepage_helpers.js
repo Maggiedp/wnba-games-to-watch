@@ -108,17 +108,11 @@ function buildSeedRow(seedDistribution) {
         const raw = sd[seed];  // numeric index coerces to the string JSON key
         const prob = (typeof raw === 'number' && raw > 0) ? raw : 0;
         if (prob > modalProb) { modalProb = prob; modalSeed = seed; }
-        cells.push({ seed, prob });
+        const pct = Math.round(prob * 100);
+        const display = prob > 0 ? (pct === 0 ? '<1%' : pct + '%') : '';
+        cells.push({ seed, prob, display, isModal: false });
     }
-    for (const c of cells) {
-        if (c.prob > 0) {
-            const pct = Math.round(c.prob * 100);
-            c.display = pct === 0 ? '<1%' : pct + '%';
-        } else {
-            c.display = '';
-        }
-        c.isModal = c.seed === modalSeed && modalProb > 0;
-    }
+    if (modalProb > 0) cells[modalSeed - 1].isModal = true;
     return { cells, hasData: modalProb > 0 };
 }
 

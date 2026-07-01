@@ -1477,6 +1477,18 @@
                 table.classList.toggle('view-seeds', seeds);
                 if (caption) caption.hidden = !seeds;
 
+                // Logo + team name (+ abbreviation in the seeds view) — shared by
+                // both branches so the logo markup lives in one place.
+                const teamCell = (t, withAbbr) => {
+                    const logoHtml = t.logo_url
+                        ? `<img class="playoff-logo" src="${escapeHtml(t.logo_url)}" alt="" aria-hidden="true">`
+                        : `<span class="playoff-logo"></span>`;
+                    const abbr = withAbbr
+                        ? `<span class="playoff-team-abbr">${escapeHtml(t.abbreviation || '')}</span>`
+                        : '';
+                    return `<td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span>${abbr}</td>`;
+                };
+
                 if (seeds) {
                     thead.innerHTML = '<tr><th class="team-col">Team</th>'
                         + [1, 2, 3, 4, 5, 6, 7, 8].map(
@@ -1485,9 +1497,6 @@
                     tbody.innerHTML = odds.map(t => {
                         const row = buildSeedRow(t.seed_distribution);
                         const eliminated = !row.hasData;
-                        const logoHtml = t.logo_url
-                            ? `<img class="playoff-logo" src="${escapeHtml(t.logo_url)}" alt="" aria-hidden="true">`
-                            : `<span class="playoff-logo"></span>`;
                         const cells = row.cells.map(c => {
                             const alpha = c.prob > 0
                                 ? Math.min(0.85, 0.06 + c.prob * 0.9).toFixed(3)
@@ -1500,7 +1509,7 @@
                         }).join('');
                         return `
                         <tr${eliminated ? ' class="eliminated"' : ''}>
-                            <td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span><span class="playoff-team-abbr">${escapeHtml(t.abbreviation || '')}</span></td>
+                            ${teamCell(t, true)}
                             ${cells}
                         </tr>`;
                     }).join('');
@@ -1514,9 +1523,6 @@
                         // True elimination = exactly 0 odds to make the playoffs, not
                         // a sub-0.5% value that merely rounds to 0% on display.
                         const eliminated = t.make_playoffs_prob === 0;
-                        const logoHtml = t.logo_url
-                            ? `<img class="playoff-logo" src="${escapeHtml(t.logo_url)}" alt="" aria-hidden="true">`
-                            : `<span class="playoff-logo"></span>`;
                         const cell = (frac, label) => {
                             const pct = Math.round(frac * 100);
                             // Show "<1%" for live-but-tiny odds so a team isn't
@@ -1532,7 +1538,7 @@
                             : `<td class="record-cell" aria-label="${t.wins} wins, ${t.losses} losses">${t.wins}-${t.losses}</td>`;
                         return `
                         <tr${eliminated ? ' class="eliminated"' : ''}>
-                            <td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span></td>
+                            ${teamCell(t, false)}
                             ${recordCell}
                             ${cell(t.make_playoffs_prob, 'chance to make the playoffs')}
                             ${cell(t.reach_semis_prob, 'chance to reach the semifinals')}
