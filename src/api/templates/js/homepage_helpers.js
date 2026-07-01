@@ -121,3 +121,15 @@ function buildSeedRow(seedDistribution) {
     }
     return { cells, hasData: modalProb > 0 };
 }
+
+// Gate for the Playoff Picture "Seeds" toggle. Offer it only when the snapshot is
+// COMPLETE — every displayed team has a computed seed_distribution (populated, or
+// {} for an eliminated team; both non-null). A null is a legacy / not-yet-written /
+// malformed row, so a mixed or partial snapshot keeps the toggle hidden rather than
+// rendering a team that still has real playoff odds as a blank, eliminated-looking
+// row. (buildSeedRow's hasData can't gate this: it's false for a legitimately
+// eliminated {} too, so `some(hasData)` would expose a mixed snapshot.)
+function seedsViewAvailable(odds) {
+    return Array.isArray(odds) && odds.length > 0
+        && odds.every(t => t && t.seed_distribution != null);
+}

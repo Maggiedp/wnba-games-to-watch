@@ -6,7 +6,7 @@ const { loadHelpers } = require('./helpers');
 const {
   excitementLabelFor, winProbText, elapsedSeconds,
   excitementScore, computeExcitement, completedEntryFromLiveWp,
-  buildSeedRow,
+  buildSeedRow, seedsViewAvailable,
 } = loadHelpers('shared.js', 'homepage_helpers.js');
 
 // --- elapsedSeconds (mirrors tests/test_excitement.py for the Python port) ---
@@ -160,4 +160,20 @@ test('buildSeedRow: tiny-but-nonzero shows <1%, explicit zero shows blank', () =
   assert.equal(row.cells[7].display, '<1%');  // 0.003 rounds to 0% → "<1%"
   assert.equal(row.cells[6].display, '');     // explicit 0 → blank
   assert.equal(row.cells[7].isModal, true);   // the only nonzero seed is modal
+});
+
+// --- seedsViewAvailable (Seeds toggle gate — must not show a mixed snapshot) ---
+
+test('seedsViewAvailable: only when every displayed team has non-null seed_distribution', () => {
+  const populated = { seed_distribution: { '1': 0.5, '2': 0.5 } };
+  const eliminated = { seed_distribution: {} };   // valid computed empty (0% playoffs)
+  const legacy = { seed_distribution: null };      // no data: legacy/unwritten/malformed
+  // {} counts as data — an eliminated team is a complete row, not a missing one.
+  assert.equal(seedsViewAvailable([populated, eliminated]), true);
+  // Mixed snapshot (one legacy null) must keep the toggle hidden.
+  assert.equal(seedsViewAvailable([populated, legacy]), false);
+  assert.equal(seedsViewAvailable([legacy, legacy]), false);
+  // Nothing to show.
+  assert.equal(seedsViewAvailable([]), false);
+  assert.equal(seedsViewAvailable(null), false);
 });

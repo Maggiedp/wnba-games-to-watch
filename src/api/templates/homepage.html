@@ -1464,10 +1464,11 @@
                 const table = document.getElementById('playoff-table');
                 const caption = document.getElementById('playoff-caption');
 
-                // The Seeds view is offered only once a daily run has written
-                // seed_distribution (it's null on every row right after a deploy).
-                const seedsAvailable = odds.some(
-                    t => buildSeedRow(t.seed_distribution).hasData);
+                // The Seeds view is offered only when the snapshot is complete —
+                // every displayed team has a computed seed_distribution. A mixed
+                // snapshot (some legacy/unwritten null rows) keeps the toggle
+                // hidden so a team with real odds can't render as blank/eliminated.
+                const seedsAvailable = seedsViewAvailable(odds);
                 const viewToggle = document.getElementById('playoff-view-toggle');
                 if (viewToggle) viewToggle.hidden = !seedsAvailable;
                 if (!seedsAvailable) playoffView = 'rounds';
