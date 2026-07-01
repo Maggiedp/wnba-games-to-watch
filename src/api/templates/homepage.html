@@ -1243,6 +1243,8 @@
             let selectedNetworks = new Set();
             let sortBy = 'date';
             let completedSortMode = 'date';
+            let allPlayoffOdds = [];
+            let playoffView = 'rounds';  // 'rounds' | 'seeds'
 
             const NETWORK_LABELS = {
                 'ESPN': 'ESPN', 'ABC': 'ABC', 'NBC': 'NBC/Peacock',
@@ -1448,35 +1450,86 @@
                     if (!resp.ok) return;
                     const odds = await resp.json();
                     if (!odds || odds.length === 0) return;
-                    renderPlayoffPicture(odds);
+                    allPlayoffOdds = odds;
+                    renderPlayoffPicture();
                 } catch (e) {
                     // Non-fatal — page works without the section
                 }
             }
 
-            function renderPlayoffPicture(odds) {
+            function renderPlayoffPicture() {
+                const odds = allPlayoffOdds;
+                const thead = document.getElementById('playoff-thead');
                 const tbody = document.getElementById('playoff-tbody');
-                tbody.innerHTML = odds.map(t => {
-                    // True elimination = exactly 0 odds to make the playoffs, not
-                    // a sub-0.5% value that merely rounds to 0% on display.
-                    const eliminated = t.make_playoffs_prob === 0;
-                    const logoHtml = t.logo_url
-                        ? `<img class="playoff-logo" src="${escapeHtml(t.logo_url)}" alt="" aria-hidden="true">`
-                        : `<span class="playoff-logo"></span>`;
-                    const cell = (frac, label) => {
-                        const pct = Math.round(frac * 100);
-                        // Show "<1%" for live-but-tiny odds so a team isn't
-                        // misrepresented as 0% when it still has a real chance.
-                        const display = (frac > 0 && pct === 0) ? '<1%' : pct + '%';
-                        const fill = `linear-gradient(to right, rgba(255,107,0,0.20) ${pct}%, transparent ${pct}%)`;
-                        return `<td class="prob-cell" style="background: ${fill}" aria-label="${display} ${label}">${display}</td>`;
-                    };
-                    // Record is present only on a today request (the homepage
-                    // always asks for today); a historical snapshot omits it.
-                    const recordCell = (t.wins == null || t.losses == null)
-                        ? '<td class="record-cell"></td>'
-                        : `<td class="record-cell" aria-label="${t.wins} wins, ${t.losses} losses">${t.wins}-${t.losses}</td>`;
-                    return `
+                const table = document.getElementById('playoff-table');
+                const caption = document.getElementById('playoff-caption');
+
+                // The Seeds view is offered only once a daily run has written
+                // seed_distribution (it's null on every row right after a deploy).
+                const seedsAvailable = odds.some(
+                    t => buildSeedRow(t.seed_distribution).hasData);
+                const viewToggle = document.getElementById('playoff-view-toggle');
+                if (viewToggle) viewToggle.hidden = !seedsAvailable;
+                if (!seedsAvailable) playoffView = 'rounds';
+
+                const seeds = playoffView === 'seeds';
+                table.classList.toggle('view-seeds', seeds);
+                if (caption) caption.hidden = !seeds;
+
+                if (seeds) {
+                    thead.innerHTML = '<tr><th class="team-col">Team</th>'
+                        + [1, 2, 3, 4, 5, 6, 7, 8].map(
+                            s => `<th class="seed-col">${s}</th>`).join('')
+                        + '</tr>';
+                    tbody.innerHTML = odds.map(t => {
+                        const row = buildSeedRow(t.seed_distribution);
+                        const eliminated = !row.hasData;
+                        const logoHtml = t.logo_url
+                            ? `<img class="playoff-logo" src="${escapeHtml(t.logo_url)}" alt="" aria-hidden="true">`
+                            : `<span class="playoff-logo"></span>`;
+                        const cells = row.cells.map(c => {
+                            const alpha = c.prob > 0
+                                ? Math.min(0.85, 0.06 + c.prob * 0.9).toFixed(3)
+                                : '0';
+                            const cls = 'seed-cell' + (c.isModal ? ' modal' : '');
+                            const aria = c.prob > 0
+                                ? ` aria-label="${c.display} chance to finish as the ${c.seed} seed"`
+                                : '';
+                            return `<td class="${cls}" style="background: rgba(255,107,0,${alpha})"${aria}>${c.display}</td>`;
+                        }).join('');
+                        return `
+                        <tr${eliminated ? ' class="eliminated"' : ''}>
+                            <td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span><span class="playoff-team-abbr">${escapeHtml(t.abbreviation || '')}</span></td>
+                            ${cells}
+                        </tr>`;
+                    }).join('');
+                } else {
+                    thead.innerHTML = '<tr>'
+                        + '<th class="team-col">Team</th>'
+                        + '<th class="record-col">Rec</th>'
+                        + '<th>Playoffs</th><th>Semis</th><th>Finals</th><th>Champ</th>'
+                        + '</tr>';
+                    tbody.innerHTML = odds.map(t => {
+                        // True elimination = exactly 0 odds to make the playoffs, not
+                        // a sub-0.5% value that merely rounds to 0% on display.
+                        const eliminated = t.make_playoffs_prob === 0;
+                        const logoHtml = t.logo_url
+                            ? `<img class="playoff-logo" src="${escapeHtml(t.logo_url)}" alt="" aria-hidden="true">`
+                            : `<span class="playoff-logo"></span>`;
+                        const cell = (frac, label) => {
+                            const pct = Math.round(frac * 100);
+                            // Show "<1%" for live-but-tiny odds so a team isn't
+                            // misrepresented as 0% when it still has a real chance.
+                            const display = (frac > 0 && pct === 0) ? '<1%' : pct + '%';
+                            const fill = `linear-gradient(to right, rgba(255,107,0,0.20) ${pct}%, transparent ${pct}%)`;
+                            return `<td class="prob-cell" style="background: ${fill}" aria-label="${display} ${label}">${display}</td>`;
+                        };
+                        // Record is present only on a today request (the homepage
+                        // always asks for today); a historical snapshot omits it.
+                        const recordCell = (t.wins == null || t.losses == null)
+                            ? '<td class="record-cell"></td>'
+                            : `<td class="record-cell" aria-label="${t.wins} wins, ${t.losses} losses">${t.wins}-${t.losses}</td>`;
+                        return `
                         <tr${eliminated ? ' class="eliminated"' : ''}>
                             <td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span></td>
                             ${recordCell}
@@ -1485,9 +1538,28 @@
                             ${cell(t.reach_finals_prob, 'chance to reach the finals')}
                             ${cell(t.win_championship_prob, 'chance to win the championship')}
                         </tr>`;
-                }).join('');
+                    }).join('');
+                }
+
                 const btn = document.getElementById('playoff-toggle');
                 if (btn) btn.hidden = false;
+            }
+
+            function setupPlayoffViewToggle() {
+                const group = document.getElementById('playoff-view-toggle');
+                if (!group || group.dataset.ready) return;
+                group.dataset.ready = '1';
+                group.querySelectorAll('[data-playoff-view]').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const view = btn.dataset.playoffView;
+                        if (view === playoffView) return;
+                        playoffView = view;
+                        group.querySelectorAll('[data-playoff-view]').forEach(b =>
+                            b.setAttribute('aria-pressed',
+                                b.dataset.playoffView === view ? 'true' : 'false'));
+                        renderPlayoffPicture();
+                    });
+                });
             }
 
             function setupPlayoffToggle() {
@@ -2239,6 +2311,7 @@
                 setPreset('7');  // Default view: the next 7 days, matching the tagline.
                 loadGames();
                 setupPlayoffToggle();
+                setupPlayoffViewToggle();
                 fetchPlayoffOdds();
                 document.getElementById('from-date').addEventListener('change', () => { clearActivePreset(); applyFilters(); });
                 document.getElementById('to-date').addEventListener('change', () => { clearActivePreset(); applyFilters(); });
