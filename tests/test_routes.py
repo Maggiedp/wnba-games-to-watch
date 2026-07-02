@@ -1765,6 +1765,52 @@ def test_completed_endpoint_malformed_curve_degrades_to_none(env, client):
     assert row["shape_curve"] is None
 
 
+def test_completed_endpoint_parseable_but_malformed_curves_degrade_to_none(env, client):
+    """A JSON-parseable but non-finite / wrong-shaped stored curve must not reach
+    the payload as garbage (null points, NaN->null coercion, scalars). Each
+    degrades to shape_curve=None with a 200 — the same finite+shape standard as
+    the detail panel + /api/replay. Regression for the Codex adversarial-review
+    finding that the completed path trusted json.loads success alone."""
+    bad = [
+        ("bn", "2026-06-01", "[[0.0, NaN], [2400.0, 0.8]]"),  # NaN (json.loads OK)
+        ("bi", "2026-06-02", "[[0.0, Infinity], [2400.0, 0.8]]"),  # Infinity
+        ("bs", "2026-06-03", "[1, 2]"),  # list of scalars, not [t, pct] pairs
+        ("bp", "2026-06-04", "[[0.0, null], [2400.0, 0.8]]"),  # null point value
+        ("bx", "2026-06-05", '[["x", "y"], [1.0, 2.0]]'),  # non-numeric points
+    ]
+    for espn_id, date, curve in bad:
+        _seed_completed_game(env, date=date, espn_id=espn_id)
+        session = env.get_session()
+        session.add(
+            env.GameShape(
+                espn_id=espn_id,
+                season=2026,
+                date=date,
+                home_team="Aces",
+                away_team="Liberty",
+                home_abbr="LV",
+                away_abbr="NY",
+                home_score=88,
+                away_score=80,
+                winner="home",
+                excitement=5.0,
+                tension=0.5,
+                comeback=0.2,
+                lead_changes=3,
+                winner_low_wp=0.3,
+                curve=curve,
+            )
+        )
+        session.commit()
+        session.close()
+
+    resp = client.get("/api/games/completed")
+    assert resp.status_code == 200  # no bad row may 500 or emit invalid JSON
+    by_id = {r["espn_id"]: r for r in resp.json()}
+    for espn_id, _, _ in bad:
+        assert by_id[espn_id]["shape_curve"] is None, espn_id
+
+
 def test_homepage_injects_shape_chart_renderer():
     """buildShapeSvg must reach the homepage so completed-section minis render."""
     from src.api.routes import render_homepage

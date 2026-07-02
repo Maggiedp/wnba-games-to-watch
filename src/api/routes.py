@@ -130,6 +130,12 @@ def _thin_curve(curve: list, max_points: int = _COMPLETED_MINI_POINTS) -> list:
     return [curve[i] for i in idx]
 
 
+def _is_finite_number(x: object) -> bool:
+    """True for a real finite int/float (rejects bool, NaN, Infinity). Shared by
+    the completed-section curve guard and the detail-page shape validator."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
 def format_games_response(
     rankings: list[DailyRanking],
     session: Session,
@@ -220,8 +226,29 @@ def format_games_response(
                     "game_shapes curve unparseable for espn_id=%s", r.espn_id
                 )
                 continue
-            if isinstance(curve, list) and len(curve) >= 2:
+            # A JSON-parseable curve can still be unusable: json.loads accepts
+            # NaN/Infinity, and a corrupt/backfill-repaired row can be wrong-shaped
+            # (scalars, null points). Match the detail-panel + /api/replay standard —
+            # require >=2 [finite, finite] pairs — and skip+log otherwise, so one bad
+            # row degrades to a missing mini rather than emitting null/garbage curve
+            # points (or a serializer NaN->null coercion) into the completed payload.
+            if (
+                isinstance(curve, list)
+                and len(curve) >= 2
+                and all(
+                    isinstance(pt, list)
+                    and len(pt) == 2
+                    and _is_finite_number(pt[0])
+                    and _is_finite_number(pt[1])
+                    for pt in curve
+                )
+            ):
                 r.shape_curve = _thin_curve(curve)
+            else:
+                logger.warning(
+                    "game_shapes curve malformed for espn_id=%s; skipping mini",
+                    r.espn_id,
+                )
 
     return results
 
@@ -945,27 +972,22 @@ def _detail_shape_section(shape) -> str:
     # compute_game_shape (all derived from sanitized home_pct in [0,1]). Range
     # checks here would guard only hand-edited, physically-impossible rows
     # (adversarial-review round 3 — accepted won't-fix).
-    def _is_finite(x: object) -> bool:
-        return (
-            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
-        )
-
     if (
         shape.winner not in ("home", "away")
         or not isinstance(shape.lead_changes, int)
         or isinstance(shape.lead_changes, bool)
-        or not _is_finite(shape.excitement)
-        or not _is_finite(shape.tension)
-        or not _is_finite(shape.comeback)
-        or not _is_finite(shape.winner_low_wp)
+        or not _is_finite_number(shape.excitement)
+        or not _is_finite_number(shape.tension)
+        or not _is_finite_number(shape.comeback)
+        or not _is_finite_number(shape.winner_low_wp)
         or not (
             isinstance(curve, list)
             and len(curve) >= 2
             and all(
                 isinstance(pt, list)
                 and len(pt) == 2
-                and _is_finite(pt[0])
-                and _is_finite(pt[1])
+                and _is_finite_number(pt[0])
+                and _is_finite_number(pt[1])
                 for pt in curve
             )
         )
