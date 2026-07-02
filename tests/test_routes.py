@@ -1,5 +1,7 @@
 """Tests for src/api/routes.py — focused on response formatting."""
 
+import json
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -714,6 +716,7 @@ def test_playoff_odds_endpoint_shape_and_sort(env, client):
         "win_championship_prob",
         "wins",
         "losses",
+        "seed_distribution",
     }
     assert rows[0]["make_playoffs_prob"] == pytest.approx(0.90)
     assert rows[0]["win_championship_prob"] == pytest.approx(0.10)
@@ -1632,3 +1635,35 @@ def test_game_detail_route_serves_shape_section(env, client):
     assert "winner trailed to 33%" in resp.text
     assert 'id="shape-mini"' in resp.text
     assert "buildShapeSvg" in resp.text  # renderer reached the served page
+
+
+def test_playoff_odds_endpoint_includes_seed_distribution(env, client):
+    """GET /api/playoff-odds carries the per-seed distribution per team."""
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    today = today_et()
+    upsert_playoff_probability(
+        session,
+        date=today,
+        team_id=a_id,
+        probability=0.85,
+        reach_semis_prob=0.60,
+        reach_finals_prob=0.40,
+        win_championship_prob=0.25,
+        seed_distribution=json.dumps({"1": 0.5, "2": 0.35}),
+    )
+    session.close()
+
+    rows = client.get("/api/playoff-odds").json()
+    assert rows[0]["seed_distribution"] == {"1": 0.5, "2": 0.35}
+
+
+def test_homepage_ships_playoff_view_toggle(client):
+    """The Rounds|Seeds toggle markup ships in the homepage (hidden until a
+    daily run writes seed_distribution; un-hidden client-side)."""
+    html = client.get("/").text
+    assert 'id="playoff-view-toggle"' in html
+    assert 'data-playoff-view="rounds"' in html
+    assert 'data-playoff-view="seeds"' in html
+    assert 'id="playoff-thead"' in html

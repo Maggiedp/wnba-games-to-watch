@@ -106,6 +106,9 @@ class PlayoffOddsResponse(BaseModel):
     # get_playoff_odds endpoint for why records are today-only).
     wins: int | None
     losses: int | None
+    # Per-seed probabilities {seed: prob} for seeds 1-8 (sums to make_playoffs);
+    # None for rows not yet written by a daily run (forward-only).
+    seed_distribution: dict[int, float] | None
 
 
 def format_games_response(

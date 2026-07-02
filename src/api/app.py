@@ -480,6 +480,7 @@ async def get_playoff_odds(date: str = Query(default=None)):
                     win_championship_prob=recs[tid].win_championship_prob or 0.0,
                     wins=wins,
                     losses=losses,
+                    seed_distribution=recs[tid].seed_distribution,
                 )
             )
         return sorted(
