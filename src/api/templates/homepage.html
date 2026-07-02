@@ -168,18 +168,23 @@
             .playoff-header-row .playoff-picture-header {
                 margin-bottom: 0;
             }
-            .playoff-table th.seed-col {
+            .playoff-table th.seed-col,
+            .playoff-table th.miss-col {
                 text-align: center;
             }
-            .playoff-table td.seed-cell {
+            /* Fixed layout + equal columns: otherwise width:100% auto-layout dumps
+               all slack into seed 1 (the column with the most blank cells). With
+               team-col fixed, the 8 seed + Miss columns share the rest equally. */
+            #playoff-table.view-seeds {
+                table-layout: fixed;
+            }
+            #playoff-table.view-seeds th.team-col {
+                width: 20%;
+            }
+            .playoff-table td.seed-cell,
+            .playoff-table td.miss-cell {
                 text-align: center;
                 font-variant-numeric: tabular-nums;
-            }
-            .playoff-table td.seed-cell.modal {
-                outline: 2px solid rgba(255, 107, 0, 0.9);
-                outline-offset: -2px;
-                border-radius: 3px;
-                font-weight: 600;
             }
             .playoff-caption {
                 font-size: 12px;
@@ -194,7 +199,9 @@
                 #playoff-table.view-seeds .playoff-team-name { display: none; }
                 #playoff-table.view-seeds .playoff-team-abbr { display: inline; }
                 #playoff-table.view-seeds td.seed-cell,
-                #playoff-table.view-seeds th.seed-col { padding: 5px 4px; }
+                #playoff-table.view-seeds td.miss-cell,
+                #playoff-table.view-seeds th.seed-col,
+                #playoff-table.view-seeds th.miss-col { padding: 5px 4px; }
             }
 
             /* ---------- Inline team playoff probability ---------- */
@@ -1148,7 +1155,7 @@
                             <thead id="playoff-thead"></thead>
                             <tbody id="playoff-tbody"></tbody>
                         </table>
-                        <p class="playoff-caption" id="playoff-caption" hidden>Chance each team finishes at each seed. A row sums to its playoff odds.</p>
+                        <p class="playoff-caption" id="playoff-caption" hidden>Chance each team finishes at each seed, or misses the playoffs.</p>
                     </div>
                 </div>
             </section>
@@ -1493,24 +1500,28 @@
                     thead.innerHTML = '<tr><th class="team-col">Team</th>'
                         + [1, 2, 3, 4, 5, 6, 7, 8].map(
                             s => `<th class="seed-col">${s}</th>`).join('')
-                        + '</tr>';
+                        + '<th class="miss-col">Miss</th></tr>';
                     tbody.innerHTML = odds.map(t => {
                         const row = buildSeedRow(t.seed_distribution);
                         const eliminated = !row.hasData;
                         const cells = row.cells.map(c => {
-                            const alpha = c.prob > 0
-                                ? Math.min(0.85, 0.06 + c.prob * 0.9).toFixed(3)
-                                : '0';
-                            const cls = 'seed-cell' + (c.isModal ? ' modal' : '');
+                            const alpha = heatAlpha(c.prob);
                             const aria = c.prob > 0
                                 ? ` aria-label="${c.display} chance to finish as the ${c.seed} seed"`
                                 : '';
-                            return `<td class="${cls}" style="background: rgba(255,107,0,${alpha})"${aria}>${c.display}</td>`;
+                            return `<td class="seed-cell" style="background: rgba(255,107,0,${alpha})"${aria}>${c.display}</td>`;
                         }).join('');
+                        // Miss = chance of not making the playoffs, so the row + Miss
+                        // sums to 100%. Grey, not orange: missing isn't a "hot" outcome.
+                        const missProb = Math.max(0, 1 - t.make_playoffs_prob);
+                        const missText = seedPctText(missProb);
+                        const missAlpha = heatAlpha(missProb);
+                        const missCell = `<td class="miss-cell" style="background: rgba(124,114,102,${missAlpha})"${missText ? ` aria-label="${missText} chance to miss the playoffs"` : ''}>${missText}</td>`;
                         return `
                         <tr${eliminated ? ' class="eliminated"' : ''}>
                             ${teamCell(t, true)}
                             ${cells}
+                            ${missCell}
                         </tr>`;
                     }).join('');
                 } else {
