@@ -654,3 +654,27 @@ def test_compute_daily_scores_empty_games_returns_empty(monkeypatch):
     assert round_probs.reach_semis == {}
     assert round_probs.reach_finals == {}
     assert round_probs.win_championship == {}
+
+
+def test_run_monte_carlo_seed_distribution():
+    """Per team, P(seed=k) sums to make_playoffs and keys are within 1..8.
+    With no remaining games seeding is deterministic: the strongest team is
+    always the #1 seed; teams outside the top 8 have an empty distribution."""
+    standings = {}
+    for i, name in enumerate(_ALL_TEAMS):
+        standings[name] = {
+            "wins": 20 - i * 2,
+            "losses": i,
+            "elo": 1600 - i * 20,
+        }
+    result = run_monte_carlo_simulation(standings, [], num_simulations=200)
+
+    for name in _ALL_TEAMS:
+        sd = result.seed_distribution[name]
+        assert set(sd.keys()) <= {1, 2, 3, 4, 5, 6, 7, 8}
+        assert sum(sd.values()) == pytest.approx(result.make_playoffs[name], abs=1e-9)
+
+    # Deterministic seeding with an already-complete season.
+    assert result.seed_distribution[_ALL_TEAMS[0]] == {1: 1.0}
+    assert result.seed_distribution[_ALL_TEAMS[7]] == {8: 1.0}
+    assert result.seed_distribution[_ALL_TEAMS[8]] == {}

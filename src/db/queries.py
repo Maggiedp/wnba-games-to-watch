@@ -880,6 +880,7 @@ class PlayoffProbabilityRecord:
     reach_semis_prob: float | None
     reach_finals_prob: float | None
     win_championship_prob: float | None
+    seed_distribution: dict[int, float] | None = None
 
 
 def upsert_playoff_probability(
@@ -890,6 +891,7 @@ def upsert_playoff_probability(
     reach_semis_prob: float | None = None,
     reach_finals_prob: float | None = None,
     win_championship_prob: float | None = None,
+    seed_distribution: str | None = None,
 ) -> PlayoffProbability:
     """Upsert a team's playoff probabilities for a given date.
 
@@ -910,6 +912,8 @@ def upsert_playoff_probability(
             record.reach_finals_prob = reach_finals_prob
         if win_championship_prob is not None:
             record.win_championship_prob = win_championship_prob
+        if seed_distribution is not None:
+            record.seed_distribution = seed_distribution
     else:
         record = PlayoffProbability(
             date=date,
@@ -918,10 +922,29 @@ def upsert_playoff_probability(
             reach_semis_prob=reach_semis_prob,
             reach_finals_prob=reach_finals_prob,
             win_championship_prob=win_championship_prob,
+            seed_distribution=seed_distribution,
         )
         session.add(record)
     session.commit()
     return record
+
+
+def _parse_seed_distribution(raw: str | None) -> dict[int, float] | None:
+    """Parse a stored seed_distribution JSON ({"1": p1, ...}) into
+    {seed_int: prob}. Returns None for NULL/empty or any malformed payload so a
+    single bad row can't 500 /api/playoff-odds."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        return {int(k): float(v) for k, v in data.items()}
+    except (ValueError, TypeError):
+        return None
 
 
 def get_playoff_probabilities(
@@ -937,6 +960,7 @@ def get_playoff_probabilities(
             reach_semis_prob=r.reach_semis_prob,
             reach_finals_prob=r.reach_finals_prob,
             win_championship_prob=r.win_championship_prob,
+            seed_distribution=_parse_seed_distribution(r.seed_distribution),
         )
         for r in records
     }

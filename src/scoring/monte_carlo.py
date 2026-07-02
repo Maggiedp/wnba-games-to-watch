@@ -44,6 +44,8 @@ class RoundProbabilities:
     reach_semis: dict[str, float] = field(default_factory=dict)
     reach_finals: dict[str, float] = field(default_factory=dict)
     win_championship: dict[str, float] = field(default_factory=dict)
+    # Per-team P(finishing as seed k), k in 1..8; sums to make_playoffs[team].
+    seed_distribution: dict[str, dict[int, float]] = field(default_factory=dict)
 
 
 def to_team_standings(current_standings: dict[str, dict]) -> dict[str, TeamStanding]:
@@ -127,6 +129,7 @@ def run_monte_carlo_simulation(
     semi_counts: dict[str, int] = defaultdict(int)
     final_counts: dict[str, int] = defaultdict(int)
     champ_counts: dict[str, int] = defaultdict(int)
+    seed_counts: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
     outcome_matrix: list[list[bool]] = []
     playoff_sets: list[set[str]] = []
     bracket_outcomes_per_sim: list[dict[tuple[str, int], bool]] = []
@@ -160,6 +163,8 @@ def run_monte_carlo_simulation(
         playoff_team_set = set(seeded[:PLAYOFF_TEAMS])
         for team_name in playoff_team_set:
             made_counts[team_name] += 1
+        for seed_idx, team_name in enumerate(seeded[:PLAYOFF_TEAMS], start=1):
+            seed_counts[team_name][seed_idx] += 1
 
         sim_bracket_outcomes: dict[tuple[str, int], bool] = {}
         sim_champion: str | None = None
@@ -193,11 +198,20 @@ def run_monte_carlo_simulation(
     def _to_prob(counts: dict[str, int]) -> dict[str, float]:
         return {n: counts.get(n, 0) / num_simulations for n in all_teams}
 
+    seed_distribution = {
+        name: {
+            seed: count / num_simulations
+            for seed, count in sorted(seed_counts.get(name, {}).items())
+        }
+        for name in all_teams
+    }
+
     result = RoundProbabilities(
         make_playoffs=_to_prob(made_counts),
         reach_semis=_to_prob(semi_counts),
         reach_finals=_to_prob(final_counts),
         win_championship=_to_prob(champ_counts),
+        seed_distribution=seed_distribution,
     )
 
     if return_matrix:
