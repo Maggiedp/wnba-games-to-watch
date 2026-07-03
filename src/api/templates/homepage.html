@@ -2250,11 +2250,8 @@
                     const text = winProbText(game, last.home_pct);
                     const sel = `[data-row-wp-id="${CSS.escape(game.espn_id)}"]`;
                     document.querySelectorAll(sel).forEach(el => { el.innerHTML = text; });
-                    // Paint excitement eyebrow + the live "building" fever-line for this
-                    // game from play-by-play data. The mini is home-oriented (winner='home'
-                    // -> raw home_pct): a live game has no winner to climb toward. --live red
-                    // signals "happening now"; buildShapeSvg renders '' for <2 points so the
-                    // mini stays hidden early-game.
+                    // Paint the excitement eyebrow + the live "building" fever-line
+                    // (--live red = "happening now") for this game from play-by-play data.
                     const excitementLabel = computeExcitement(plays);
                     const miniSvg = buildShapeSvg(curveFromPlays(plays), 'home', { accent: 'var(--live)', width: 80, height: 24 });
                     document.querySelectorAll(`[data-espn-id="${CSS.escape(game.espn_id)}"]`).forEach(row => {
