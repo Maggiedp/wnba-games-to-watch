@@ -1454,10 +1454,10 @@ def test_detail_shape_section_invalid_shape_curve_returns_empty():
 def test_detail_shape_section_curve_with_quote_string_is_dropped():
     from src.api.routes import _detail_shape_section
 
-    # Well-shaped 2-tuples but a non-numeric, quote-bearing first element that
-    # would otherwise break out of the single-quoted data-curve attribute.
-    # comeback > 0 (default) skips the curve-iterating branch, so only validation
-    # stops it.
+    # Well-shaped 2-tuples but a non-numeric first element. The curve is no longer
+    # emitted into the HTML (the winner-oriented mini was removed), but validation
+    # still rejects a non-finite curve point -> "". comeback > 0 (default) skips
+    # the curve-iterating caption branch, so only validation stops it.
     html = _detail_shape_section(
         _shape(curve='[["a\'onmouseover=alert(1)", 0.5], [1.0, 0.9]]')
     )
@@ -1556,45 +1556,14 @@ def test_render_game_detail_omits_shape_section_when_absent(session, team_ids):
     assert 'id="shape-mini"' not in html
 
 
-def test_shape_svg_css_is_shared_across_replay_and_detail(session, team_ids):
-    from src.api.routes import render_replay
+def test_shape_svg_css_is_shared_across_replay_and_homepage():
+    from src.api.routes import render_homepage, render_replay
 
-    # /replay still carries the renderer's SVG CSS (now via _SHARED_HEAD).
+    # buildShapeSvg's output CSS lives in _SHARED_HEAD; the two real consumers —
+    # the /replay gallery and the homepage completed/live minis — must carry it.
+    # (The detail page no longer renders a shape SVG, so it's no longer asserted.)
     assert ".shape-nadir" in render_replay()
-
-    # The detail page also carries it (it injects _SHARED_HEAD too).
-    a_id, b_id = team_ids
-    date = today_et()
-    upsert_game(
-        session,
-        team_a_id=a_id,
-        team_b_id=b_id,
-        date=date,
-        time="7:00 PM ET",
-        broadcaster="ION",
-        espn_id="401736210",
-    )
-    upsert_game_shape(
-        session,
-        espn_id="401736210",
-        season=2026,
-        date=date,
-        home_team="Team A",
-        away_team="Team B",
-        home_abbr="TMA",
-        away_abbr="TMB",
-        home_score=88,
-        away_score=86,
-        winner="home",
-        excitement=9.4,
-        tension=0.87,
-        comeback=0.31,
-        lead_changes=9,
-        winner_low_wp=0.33,
-        curve=[[0.0, 0.5], [2400.0, 0.9]],
-    )
-    session.commit()
-    assert ".shape-nadir" in render_game_detail(session, "401736210")
+    assert ".shape-nadir" in render_homepage()
 
 
 def test_game_detail_route_serves_shape_section(env, client):

@@ -723,12 +723,10 @@ _DETAIL_STYLE = """
                 overflow: visible;
             }
             .detail-shape { margin-top: 12px; }
-            .detail-shape-chart { margin: 6px 0 12px; max-width: 360px; }
             .detail-shape-metrics { display: flex; flex-wrap: wrap; gap: 14px 28px; }
             .detail-shape-metrics .v { font-family: var(--display); font-weight: 700; font-size: 1.4rem; color: var(--navy); font-variant-numeric: tabular-nums; }
             .detail-shape-metrics .l { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-left: 6px; }
             .detail-shape-caption { margin-top: 8px; color: var(--text-muted); font-size: .88rem; }
-            .detail-shape-key { margin: 2px 0 12px; color: var(--text-muted); font-size: .85rem; }
 """
 
 
