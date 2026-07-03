@@ -7,6 +7,7 @@ const {
   excitementLabelFor, winProbText, elapsedSeconds,
   excitementScore, computeExcitement, completedEntryFromLiveWp,
   buildSeedRow, seedsViewAvailable, seedPctText, heatAlpha,
+  curveFromPlays,
 } = loadHelpers('shared.js', 'homepage_helpers.js');
 
 // --- elapsedSeconds (mirrors tests/test_excitement.py for the Python port) ---
@@ -27,6 +28,30 @@ test('elapsedSeconds treats OT periods as 300s', () => {
   // First OT, 5:00 remaining = 0 elapsed in OT → 2400 prior.
   assert.equal(elapsedSeconds({ period: 5, clock: '5:00' }), 2400);
   assert.equal(elapsedSeconds({ period: 5, clock: '0:00' }), 2700);
+});
+
+// --- curveFromPlays (live "building" fever-line curve) ---
+
+test('curveFromPlays maps plays to [elapsed, home_pct] pairs', () => {
+  const plays = [
+    { period: 1, clock: '10:00', home_pct: 0.5 },  // 600 - 600 = 0 elapsed
+    { period: 2, clock: '0:00', home_pct: 0.7 },   // full 1200
+    { period: 4, clock: '0:00', home_pct: 0.9 },   // full 2400
+  ];
+  // Assert field-wise (not deepEqual): the array is built in the vm realm, so
+  // its Array.prototype differs from the test realm's and deepStrictEqual would
+  // fail on the prototype check (same reason completedEntryFromLiveWp below is
+  // asserted per-field).
+  const curve = curveFromPlays(plays);
+  assert.equal(curve.length, 3);
+  assert.equal(curve[0][0], 0);     assert.equal(curve[0][1], 0.5);
+  assert.equal(curve[1][0], 1200);  assert.equal(curve[1][1], 0.7);
+  assert.equal(curve[2][0], 2400);  assert.equal(curve[2][1], 0.9);
+});
+
+test('curveFromPlays returns [] for null/empty input', () => {
+  assert.equal(curveFromPlays(null).length, 0);
+  assert.equal(curveFromPlays([]).length, 0);
 });
 
 // --- excitementScore / computeExcitement ---
