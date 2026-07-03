@@ -262,6 +262,14 @@ async def get_completed_games_endpoint():
     session = get_session()
     try:
         rankings = get_completed_rankings(session, season_year=2026)
+        # include_shapes attaches a thinned (~28pt) fever-line curve per game. The
+        # completed payload is fetched on every homepage load (to populate the
+        # toggle count) even though the section is collapsed by default, so this is
+        # eager work for a not-yet-visible section — a deliberate, accepted tradeoff
+        # (curves are thinned to keep it light; see the Replay Value design doc §3).
+        # Known limitation, won't-fix unless observed: at season-end scale (~280
+        # completed games) the shape data ~doubles this payload. Lever if it ever
+        # matters: lazy-fetch curves only on first expand of the completed section.
         return format_games_response(rankings, session, include_shapes=True)
     finally:
         session.close()
