@@ -1637,6 +1637,261 @@ def test_game_detail_route_serves_shape_section(env, client):
     assert "buildShapeSvg" in resp.text  # renderer reached the served page
 
 
+def test_thin_curve_caps_points_and_keeps_endpoints():
+    from src.api.routes import _COMPLETED_MINI_POINTS, _thin_curve
+
+    curve = [[float(i), i / 100.0] for i in range(100)]
+    thinned = _thin_curve(curve)
+
+    assert len(thinned) <= _COMPLETED_MINI_POINTS
+    assert thinned[0] == curve[0]  # first sample preserved
+    assert thinned[-1] == curve[-1]  # last sample preserved
+
+
+def test_thin_curve_returns_short_curve_unchanged():
+    from src.api.routes import _thin_curve
+
+    curve = [[0.0, 0.5], [2400.0, 0.9]]
+    assert _thin_curve(curve) == curve
+
+
+def _seed_completed_game(env, *, date, espn_id, excitement=5.0):
+    """Seed one completed 2026 game (Game + DailyRanking) and return team ids."""
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
+    a = session.query(env.Team).filter_by(name="Aces").one().id
+    b = session.query(env.Team).filter_by(name="Liberty").one().id
+    session.add(
+        Game(
+            team_a_id=a,
+            team_b_id=b,
+            date=date,
+            time="",
+            broadcaster="ION",
+            winner_id=a,
+            final_score_a=88,
+            final_score_b=80,
+            espn_id=espn_id,
+            excitement_index=excitement,
+        )
+    )
+    upsert_daily_ranking(
+        session,
+        date=date,
+        team_a_id=a,
+        team_b_id=b,
+        quality_score=50.0,
+        importance_score=None,
+        overall_score=50.0,
+        broadcaster="ION",
+    )
+    session.commit()
+    session.close()
+    return a, b
+
+
+def test_completed_endpoint_attaches_shape_curve_when_shape_exists(env, client):
+    _seed_completed_game(env, date="2026-05-21", espn_id="e1")
+    session = env.get_session()
+    upsert_game_shape(
+        session,
+        espn_id="e1",
+        season=2026,
+        date="2026-05-21",
+        home_team="Aces",
+        away_team="Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=80,
+        winner="home",
+        excitement=5.0,
+        tension=0.5,
+        comeback=0.2,
+        lead_changes=3,
+        winner_low_wp=0.3,
+        curve=[[0.0, 0.5], [1200.0, 0.4], [2400.0, 0.8]],
+    )
+    session.commit()
+    session.close()
+
+    row = next(
+        r for r in client.get("/api/games/completed").json() if r["espn_id"] == "e1"
+    )
+    assert isinstance(row["shape_curve"], list)
+    assert len(row["shape_curve"]) >= 2
+    assert row["shape_curve"][0] == [0.0, 0.5]
+    assert (
+        row["shape_winner"] == "home"
+    )  # authoritative winner from the game_shapes row
+
+
+def test_completed_endpoint_shape_winner_uses_shape_row_not_scores(env, client):
+    """The mini's orientation must come from game_shapes.winner, not final scores.
+    Seed a shape whose winner ('away') disagrees with the game's final scores
+    (home leads 88-80) and assert shape_winner reflects the shape row — so a
+    drifted/backfilled row or a null score can't flip the curve upside down
+    (Codex adversarial-review round 2)."""
+    _seed_completed_game(
+        env, date="2026-05-24", espn_id="mw"
+    )  # scores: home 88, away 80
+    session = env.get_session()
+    upsert_game_shape(
+        session,
+        espn_id="mw",
+        season=2026,
+        date="2026-05-24",
+        home_team="Aces",
+        away_team="Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=80,
+        winner="away",  # deliberately disagrees with the game's final scores
+        excitement=5.0,
+        tension=0.5,
+        comeback=0.2,
+        lead_changes=3,
+        winner_low_wp=0.3,
+        curve=[[0.0, 0.5], [2400.0, 0.8]],
+    )
+    session.commit()
+    session.close()
+
+    row = next(
+        r for r in client.get("/api/games/completed").json() if r["espn_id"] == "mw"
+    )
+    assert row["shape_winner"] == "away"  # from the shape row, NOT the 88>80 scores
+    assert isinstance(row["shape_curve"], list)
+
+
+def test_completed_endpoint_shape_curve_none_without_shape(env, client):
+    _seed_completed_game(env, date="2026-05-22", espn_id="e2")
+
+    row = next(
+        r for r in client.get("/api/games/completed").json() if r["espn_id"] == "e2"
+    )
+    assert row["shape_curve"] is None
+
+
+def test_completed_endpoint_malformed_curve_degrades_to_none(env, client):
+    _seed_completed_game(env, date="2026-05-23", espn_id="e3")
+    session = env.get_session()
+    session.add(
+        env.GameShape(
+            espn_id="e3",
+            season=2026,
+            date="2026-05-23",
+            home_team="Aces",
+            away_team="Liberty",
+            home_abbr="LV",
+            away_abbr="NY",
+            home_score=88,
+            away_score=80,
+            winner="home",
+            excitement=5.0,
+            tension=0.5,
+            comeback=0.2,
+            lead_changes=3,
+            winner_low_wp=0.3,
+            curve="not-json",
+        )
+    )
+    session.commit()
+    session.close()
+
+    resp = client.get("/api/games/completed")
+    assert resp.status_code == 200  # one bad row must not 500 the list
+    row = next(r for r in resp.json() if r["espn_id"] == "e3")
+    assert row["shape_curve"] is None
+
+
+def test_completed_endpoint_parseable_but_malformed_curves_degrade_to_none(env, client):
+    """A JSON-parseable but non-finite / wrong-shaped stored curve must not reach
+    the payload as garbage (null points, NaN->null coercion, scalars). Each
+    degrades to shape_curve=None with a 200 — the same finite+shape standard as
+    the detail panel + /api/replay. Regression for the Codex adversarial-review
+    finding that the completed path trusted json.loads success alone."""
+    bad = [
+        ("bn", "2026-06-01", "[[0.0, NaN], [2400.0, 0.8]]"),  # NaN (json.loads OK)
+        ("bi", "2026-06-02", "[[0.0, Infinity], [2400.0, 0.8]]"),  # Infinity
+        ("bs", "2026-06-03", "[1, 2]"),  # list of scalars, not [t, pct] pairs
+        ("bp", "2026-06-04", "[[0.0, null], [2400.0, 0.8]]"),  # null point value
+        ("bx", "2026-06-05", '[["x", "y"], [1.0, 2.0]]'),  # non-numeric points
+    ]
+    for espn_id, date, curve in bad:
+        _seed_completed_game(env, date=date, espn_id=espn_id)
+        session = env.get_session()
+        session.add(
+            env.GameShape(
+                espn_id=espn_id,
+                season=2026,
+                date=date,
+                home_team="Aces",
+                away_team="Liberty",
+                home_abbr="LV",
+                away_abbr="NY",
+                home_score=88,
+                away_score=80,
+                winner="home",
+                excitement=5.0,
+                tension=0.5,
+                comeback=0.2,
+                lead_changes=3,
+                winner_low_wp=0.3,
+                curve=curve,
+            )
+        )
+        session.commit()
+        session.close()
+
+    resp = client.get("/api/games/completed")
+    assert resp.status_code == 200  # no bad row may 500 or emit invalid JSON
+    by_id = {r["espn_id"]: r for r in resp.json()}
+    for espn_id, _, _ in bad:
+        assert by_id[espn_id]["shape_curve"] is None, espn_id
+
+
+def test_homepage_injects_shape_chart_renderer():
+    """buildShapeSvg must reach the homepage so completed-section minis render."""
+    from src.api.routes import render_homepage
+
+    assert "function buildShapeSvg" in render_homepage()
+
+
+def test_completed_minis_placeholder_and_paint_wired():
+    """renderGameRow/renderGameCard emit a .shape-mini placeholder and
+    renderCompleted fills it via buildShapeSvg, oriented by the authoritative
+    game_shapes winner (shape_winner), not the final scores."""
+    from src.api.routes import render_homepage
+
+    src = render_homepage()
+    assert 'class="shape-mini"' in src  # placeholder emitted
+    assert (
+        "buildShapeSvg(g.shape_curve, g.shape_winner" in src
+    )  # painted; winner from shape
+    assert (
+        "g.shape_winner === 'home' || g.shape_winner === 'away'" in src
+    )  # orientation gate
+    # Orientation must NOT be re-derived from final scores (cross-table flip risk).
+    assert "g.final_score_a > g.final_score_b ? 'home' : 'away'" not in src
+    assert (
+        'container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .shape-mini`)' in src
+    )  # paints desktop + mobile (both)
+
+
+def test_completed_section_has_shape_key_and_replay_link():
+    from src.api.routes import render_homepage
+
+    src = render_homepage()
+    assert 'class="completed-shape-key"' in src
+    assert "win-probability swing" in src  # the one-line explainer
+    assert (
+        'href="/replay">See all' in src
+    )  # contextual See-all link (not the footer one)
+
+
 def test_playoff_odds_endpoint_includes_seed_distribution(env, client):
     """GET /api/playoff-odds carries the per-seed distribution per team."""
     session = env.get_session()

@@ -1158,3 +1158,16 @@ def get_shape_by_espn_id(session: Session, espn_id: str) -> GameShape | None:
     """The stored game shape for one game, or None. DB-only reader for the
     detail-page 'Game shape' panel; looked up by espn_id (the table's key)."""
     return session.query(GameShape).filter(GameShape.espn_id == espn_id).first()
+
+
+def get_shapes_by_espn_ids(
+    session: Session, espn_ids: list[str] | set[str]
+) -> dict[str, GameShape]:
+    """Game shapes for many games in one query, keyed by espn_id. DB-only
+    reader for the homepage completed-section mini fever-lines; ids with no
+    stored shape are simply absent from the returned dict (caller renders no
+    mini for them). GameShape is self-contained — no join needed."""
+    if not espn_ids:
+        return {}
+    rows = session.query(GameShape).filter(GameShape.espn_id.in_(list(espn_ids))).all()
+    return {row.espn_id: row for row in rows}

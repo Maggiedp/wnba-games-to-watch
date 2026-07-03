@@ -18,6 +18,7 @@ from src.db.queries import (
     get_head_to_head,
     get_playoff_probabilities,
     get_shape_by_espn_id,
+    get_shapes_by_espn_ids,
     get_teams_by_ids,
 )
 from src.db.schema import DailyRanking, Game
@@ -88,6 +89,14 @@ class GameResponse(BaseModel):
     final_score_a: int | None = None
     final_score_b: int | None = None
     excitement_index: float | None = None
+    # Winner-oriented WP "fever line" [[t_sec, home_pct], ...] for the homepage
+    # completed-section mini; only populated when include_shapes=True and a
+    # game_shapes row exists. None otherwise (incl. upcoming games).
+    shape_curve: list[list[float]] | None = None
+    # Authoritative winner ('home'/'away') from the SAME game_shapes row as
+    # shape_curve. The mini orients by this (matching /replay + detail), not by
+    # final scores — avoids a cross-table scores<->winner drift/null flip.
+    shape_winner: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -111,10 +120,31 @@ class PlayoffOddsResponse(BaseModel):
     seed_distribution: dict[int, float] | None
 
 
+_COMPLETED_MINI_POINTS = 28  # sparkline resolution for the homepage completed minis
+
+
+def _thin_curve(curve: list, max_points: int = _COMPLETED_MINI_POINTS) -> list:
+    """Evenly thin a [[t_sec, home_pct], ...] curve to <= max_points, always
+    keeping the first and last sample so the line still spans the full game.
+    Mirrors src.scoring.game_shape.downsample_curve's index stride."""
+    if len(curve) <= max_points:
+        return curve
+    step = (len(curve) - 1) / (max_points - 1)
+    idx = sorted({round(i * step) for i in range(max_points)})
+    return [curve[i] for i in idx]
+
+
+def _is_finite_number(x: object) -> bool:
+    """True for a real finite int/float (rejects bool, NaN, Infinity). Shared by
+    the completed-section curve guard and the detail-page shape validator."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
 def format_games_response(
     rankings: list[DailyRanking],
     session: Session,
     game_status_by_espn_id: dict[str, str] | None = None,
+    include_shapes: bool = False,
 ) -> list[GameResponse]:
     """Format DailyRanking objects into GameResponse objects."""
     if not rankings:
@@ -185,6 +215,46 @@ def format_games_response(
                 excitement_index=excitement_index,
             )
         )
+
+    if include_shapes:
+        shape_ids = [r.espn_id for r in results if r.espn_id]
+        shapes = get_shapes_by_espn_ids(session, shape_ids) if shape_ids else {}
+        for r in results:
+            shape = shapes.get(r.espn_id) if r.espn_id else None
+            if shape is None:
+                continue
+            try:
+                curve = json.loads(shape.curve)
+            except (ValueError, TypeError):
+                logger.warning(
+                    "game_shapes curve unparseable for espn_id=%s", r.espn_id
+                )
+                continue
+            # A JSON-parseable curve can still be unusable: json.loads accepts
+            # NaN/Infinity, and a corrupt/backfill-repaired row can be wrong-shaped
+            # (scalars, null points). Match the detail-panel + /api/replay standard —
+            # require >=2 [finite, finite] pairs — and skip+log otherwise, so one bad
+            # row degrades to a missing mini rather than emitting null/garbage curve
+            # points (or a serializer NaN->null coercion) into the completed payload.
+            if (
+                shape.winner in ("home", "away")
+                and isinstance(curve, list)
+                and len(curve) >= 2
+                and all(
+                    isinstance(pt, list)
+                    and len(pt) == 2
+                    and _is_finite_number(pt[0])
+                    and _is_finite_number(pt[1])
+                    for pt in curve
+                )
+            ):
+                r.shape_curve = _thin_curve(curve)
+                r.shape_winner = shape.winner
+            else:
+                logger.warning(
+                    "game_shapes curve malformed for espn_id=%s; skipping mini",
+                    r.espn_id,
+                )
 
     return results
 
@@ -323,6 +393,7 @@ _HOMEPAGE_HTML = (
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
     .replace("%%HOMEPAGE_HELPERS_JS%%", _HOMEPAGE_HELPERS_JS)
+    .replace("%%SHAPE_CHART_JS%%", _SHAPE_CHART_JS)
 )
 
 _TRANSPARENCY_HTML = (
@@ -907,27 +978,22 @@ def _detail_shape_section(shape) -> str:
     # compute_game_shape (all derived from sanitized home_pct in [0,1]). Range
     # checks here would guard only hand-edited, physically-impossible rows
     # (adversarial-review round 3 — accepted won't-fix).
-    def _is_finite(x: object) -> bool:
-        return (
-            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
-        )
-
     if (
         shape.winner not in ("home", "away")
         or not isinstance(shape.lead_changes, int)
         or isinstance(shape.lead_changes, bool)
-        or not _is_finite(shape.excitement)
-        or not _is_finite(shape.tension)
-        or not _is_finite(shape.comeback)
-        or not _is_finite(shape.winner_low_wp)
+        or not _is_finite_number(shape.excitement)
+        or not _is_finite_number(shape.tension)
+        or not _is_finite_number(shape.comeback)
+        or not _is_finite_number(shape.winner_low_wp)
         or not (
             isinstance(curve, list)
             and len(curve) >= 2
             and all(
                 isinstance(pt, list)
                 and len(pt) == 2
-                and _is_finite(pt[0])
-                and _is_finite(pt[1])
+                and _is_finite_number(pt[0])
+                and _is_finite_number(pt[1])
                 for pt in curve
             )
         )

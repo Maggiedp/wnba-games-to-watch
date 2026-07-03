@@ -607,6 +607,17 @@
                 flex-direction: column;
                 align-items: flex-start;
             }
+            .shape-mini {
+                display: block;
+                width: 80px;
+                margin-top: 4px;
+            }
+            .shape-mini:empty { display: none; }
+            .shape-mini .shape-svg {
+                display: block;
+                width: 80px;
+                height: 24px;
+            }
 
             /* ---------- Mini bars ---------- */
             .mini-bar-row {
@@ -764,6 +775,15 @@
                 font-weight: 500;
                 font-style: italic;
                 color: var(--navy-3);
+            }
+            .completed-shape-key {
+                margin: 0 0 16px;
+                font-size: 0.85rem;
+                color: var(--navy-3);
+            }
+            .completed-shape-key a {
+                color: var(--navy-3);
+                text-decoration: underline;
             }
             .completed-header-row {
                 display: flex;
@@ -1177,6 +1197,7 @@
                             <button class="sort-btn" id="completed-sort-excitement" type="button" aria-pressed="false">Excitement</button>
                         </div>
                     </div>
+                    <p class="completed-shape-key">Each line traces the game's win-probability swing &mdash; flat is a blowout, wild is a nailbiter. <a href="/replay">See all &rarr;</a></p>
                     <div id="completed-games-container"></div>
                 </div>
             </section>
@@ -1819,6 +1840,16 @@
                     container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .excitement-eyebrow`).forEach(eyebrow => {
                         applyExcitementClass(eyebrow, excitementLabelFor(g.excitement_index));
                     });
+                    // Winner-oriented mini fever-line. Orient by the authoritative
+                    // game_shapes winner (same row as the curve; matches /replay + detail),
+                    // NOT final scores — avoids a cross-table drift/null-score flip.
+                    if ((g.shape_winner === 'home' || g.shape_winner === 'away')
+                        && Array.isArray(g.shape_curve) && g.shape_curve.length >= 2) {
+                        const svg = buildShapeSvg(g.shape_curve, g.shape_winner, { accent: 'var(--navy-3)', width: 80, height: 24 });
+                        container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .shape-mini`).forEach(mini => {
+                            mini.innerHTML = svg;
+                        });
+                    }
                 });
             }
 
@@ -1966,6 +1997,8 @@
 
 %%HOMEPAGE_HELPERS_JS%%
 
+%%SHAPE_CHART_JS%%
+
             function renderTeam(name, logo) {
                 const safeName = escapeHtml(name);
                 if (logo) {
@@ -2107,7 +2140,7 @@
                     <tr${game.espn_id ? ` data-espn-id="${escapeHtml(game.espn_id)}" role="link" tabindex="0"` : ''}>
                         <td class="col-date">${formatLocalDate(game)}</td>
                         <td class="col-time">${escapeHtml(formatLocalTime(game.time_utc, game.time))}</td>
-                        <td class="score-cell"><div class="score-stack">${game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${escapeHtml(game.espn_id)}"></span>` : ''}<span class="score-num ${cls}">${primaryScore(game, scoreHeader)}</span></div></td>
+                        <td class="score-cell"><div class="score-stack">${game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${escapeHtml(game.espn_id)}"></span>` : ''}<span class="score-num ${cls}">${primaryScore(game, scoreHeader)}</span>${game.espn_id ? '<span class="shape-mini"></span>' : ''}</div></td>
                         <td>
                             ${badge}
                             <div class="matchup">
@@ -2145,6 +2178,7 @@
                         <div class="games-card-stack">
                             ${livePillHtml(game)}
                             ${game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${escapeHtml(game.espn_id)}"></span>` : ''}
+                            ${game.espn_id ? '<span class="shape-mini"></span>' : ''}
                             ${eyebrow}
                             <div class="games-card-matchup">
                                 <div>
