@@ -63,16 +63,14 @@
 
             <section>
                 <h2 class="section-title">Win-probability chart</h2>
-                <div id="wp-chart" data-espn-id="{{ espn_id }}" data-home-abbr="{{ abbr_a }}" data-away-abbr="{{ abbr_b }}" data-is-today="{{ is_today | lower }}"></div>
+                <div id="wp-chart" data-espn-id="{{ espn_id }}" data-home-abbr="{{ abbr_a }}" data-away-abbr="{{ abbr_b }}" data-is-today="{{ is_today | lower }}" data-has-shape="{{ has_shape | lower }}"></div>
                 <p class="chart-placeholder">Appears once the game tips off.</p>
+                {{ shape_section | safe }}
             </section>
-
-            {{ shape_section | safe }}
         </main>
         <script>
 {{ shared_js | safe }}
 {{ wp_chart_js | safe }}
-{{ shape_chart_js | safe }}
 {% raw %}
             // Localize the eyebrow date/time to the viewer's timezone (the ET
             // text rendered server-side is the fallback), matching the rest of
@@ -99,6 +97,11 @@
                 // Only today's games keep polling pre-tipoff (see is_today gate
                 // in render). A far-future/past game stops after the first poll.
                 const IS_TODAY = chartEl.dataset.isToday === 'true';
+                // A finished game (server rendered a stored game-shape) picks
+                // degraded-state placeholder copy, so a completed game whose
+                // live-wp fetch fails / returns no plays isn't mislabeled
+                // "appears once the game tips off" (Codex adversarial-review).
+                const HAS_SHAPE = chartEl.dataset.hasShape === 'true';
 
                 let pollTimer = null;
                 let backoffIdx = 0;
@@ -123,7 +126,12 @@
 
                 function showPlaceholder() {
                     chartEl.innerHTML = '';
-                    if (placeholderEl) placeholderEl.style.display = '';
+                    if (placeholderEl) {
+                        // A finished game whose curve can't draw overrides the
+                        // static "tips off" copy; pregame keeps it (one source).
+                        if (HAS_SHAPE) placeholderEl.textContent = 'Chart unavailable.';
+                        placeholderEl.style.display = '';
+                    }
                 }
 
                 function showMessage(msg) {
@@ -192,22 +200,6 @@
                 }
 
                 load();
-            })();
-
-            // Render the stored game-shape fever line (winner-oriented) from the
-            // server-embedded curve. Independent of the live poll above — the
-            // panel is a finished-game artifact, present only when the server
-            // included #shape-mini (omitted when there's no stored shape).
-            (function () {
-                const el = document.getElementById('shape-mini');
-                if (!el || !el.dataset.curve) return;
-                let curve;
-                try { curve = JSON.parse(el.dataset.curve); } catch (e) { return; }
-                el.innerHTML = buildShapeSvg(curve, el.dataset.winner, {
-                    accent: 'var(--navy-3)',
-                    emphasis: el.dataset.emphasis || 'excitement',
-                    width: 320, height: 90, midLabel: true,
-                });
             })();
 {% endraw %}
         </script>

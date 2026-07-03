@@ -722,12 +722,11 @@ _DETAIL_STYLE = """
                 display: block;
                 overflow: visible;
             }
-            .detail-shape-chart { margin: 6px 0 12px; max-width: 360px; }
+            .detail-shape { margin-top: 12px; }
             .detail-shape-metrics { display: flex; flex-wrap: wrap; gap: 14px 28px; }
             .detail-shape-metrics .v { font-family: var(--display); font-weight: 700; font-size: 1.4rem; color: var(--navy); font-variant-numeric: tabular-nums; }
             .detail-shape-metrics .l { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-left: 6px; }
             .detail-shape-caption { margin-top: 8px; color: var(--text-muted); font-size: .88rem; }
-            .detail-shape-key { margin: 2px 0 12px; color: var(--text-muted); font-size: .85rem; }
 """
 
 
@@ -950,13 +949,14 @@ def _detail_h2h_section(game, team_a, team_b, h2h) -> str:
 
 
 def _detail_shape_section(shape) -> str:
-    """The 'Game shape' panel for the detail page: three metrics + a caption +
-    a mount for the winner-oriented fever line (drawn client-side by
-    buildShapeSvg from the data-* attributes). Returns '' when there's no
-    stored shape (live / not-yet-computed game) or the stored curve is
-    unparseable, so the section is omitted entirely — the same 'appears after
-    the daily run' behavior as the importance block. Scaling (excitement x1,
-    tension x10, comeback x20) and caption wording mirror the /replay gallery."""
+    """The game-shape metrics strip folded beneath the detail page's
+    win-probability chart: three metrics + a caption. Returns '' when there's no
+    stored shape (live / not-yet-computed game) or the stored row is malformed,
+    so nothing renders — the same 'appears after the daily run' behavior as the
+    importance block. Scaling (excitement x1, tension x10, comeback x20) and
+    caption wording mirror the /replay gallery. (No winner-oriented mini here —
+    the interactive home/away WP chart above is the page's only curve; see
+    docs/superpowers/specs/2026-07-02-detail-shape-fold-design.md.)"""
     if shape is None:
         return ""
     try:
@@ -999,7 +999,7 @@ def _detail_shape_section(shape) -> str:
         )
     ):
         logger.warning(
-            "game_shapes row malformed for espn_id=%s; omitting shape panel",
+            "game_shapes row malformed for espn_id=%s; omitting shape metrics",
             shape.espn_id,
         )
         return ""
@@ -1013,21 +1013,12 @@ def _detail_shape_section(shape) -> str:
     lead_txt = f"{n} lead change" + ("" if n == 1 else "s")
     if shape.comeback > 0:
         tail = f"winner trailed to {_pct(shape.winner_low_wp)}%"
-        emphasis = "comeback"
     else:
         home_won = shape.winner == "home"
         favored = sum(1 for pt in curve if (pt[1] if home_won else 1 - pt[1]) > 0.5)
         led = int(100 * favored / len(curve) + 0.5)
         tail = f"led {led}% of the way"
-        emphasis = "tension"
 
-    # Values are validated above; DB-derived data that lands in HTML is still
-    # escaped (the detail page's convention — see _detail_h2h_section). For valid
-    # numeric curves escape_html is a no-op; if validation ever regresses it
-    # neutralizes attribute-breakout chars, and the browser decodes the entities
-    # back before JSON.parse reads data-curve.
-    curve_attr = escape_html(json.dumps(curve))
-    winner_attr = escape_html(shape.winner)
     metrics = (
         f'<span><span class="v">{shape.excitement:.1f}</span>'
         '<span class="l">Excitement</span></span>'
@@ -1037,16 +1028,10 @@ def _detail_shape_section(shape) -> str:
         '<span class="l">Comeback</span></span>'
     )
     return (
-        "<section>"
-        '<h2 class="section-title">Game shape</h2>'
-        '<p class="detail-shape-key">Line tracks the <strong>winner\'s</strong> '
-        "win probability, tip-off &rarr; final.</p>"
-        '<div id="shape-mini" class="detail-shape-chart" '
-        f"data-curve='{curve_attr}' data-winner=\"{winner_attr}\" "
-        f'data-emphasis="{emphasis}"></div>'
+        '<div class="detail-shape">'
         f'<div class="detail-shape-metrics">{metrics}</div>'
         f'<p class="detail-shape-caption">{lead_txt} &middot; {tail}</p>'
-        "</section>"
+        "</div>"
     )
 
 
@@ -1087,10 +1072,10 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h, shape) -> str:
         breakdown_section=_detail_breakdown_section(ranking, team_a, team_b),
         h2h_section=_detail_h2h_section(game, team_a, team_b, h2h),
         shape_section=_detail_shape_section(shape),
+        has_shape=shape is not None,
         shared_head=_SHARED_HEAD,
         detail_style=_DETAIL_STYLE,
         wp_chart_js=_WP_CHART_JS,
-        shape_chart_js=_SHAPE_CHART_JS,
         shared_js=_SHARED_JS,
     )
 
