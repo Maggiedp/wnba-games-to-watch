@@ -1523,6 +1523,9 @@ def test_render_game_detail_includes_shape_section_when_present(session, team_id
     # The metrics strip is folded under the interactive WP chart...
     assert "detail-shape-metrics" in html
     assert "winner trailed to 33%" in html
+    # Finished game → the chart's degraded-state placeholder must not claim the
+    # game hasn't tipped off (Codex adversarial-review follow-up).
+    assert 'data-has-shape="true"' in html
     assert html.index('<div class="detail-shape">') > html.index('id="wp-chart"')
     # ...not as a separate winner-oriented mini, and buildShapeSvg is no longer
     # injected on the detail page.
@@ -1554,6 +1557,7 @@ def test_render_game_detail_omits_shape_section_when_absent(session, team_ids):
     # head CSS; the wrapper div only renders when there's a stored shape.
     assert '<div class="detail-shape">' not in html
     assert 'id="shape-mini"' not in html
+    assert 'data-has-shape="false"' in html  # no stored shape → pre-tipoff copy
 
 
 def test_shape_svg_css_is_shared_across_replay_and_homepage():

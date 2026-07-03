@@ -63,7 +63,7 @@
 
             <section>
                 <h2 class="section-title">Win-probability chart</h2>
-                <div id="wp-chart" data-espn-id="{{ espn_id }}" data-home-abbr="{{ abbr_a }}" data-away-abbr="{{ abbr_b }}" data-is-today="{{ is_today | lower }}"></div>
+                <div id="wp-chart" data-espn-id="{{ espn_id }}" data-home-abbr="{{ abbr_a }}" data-away-abbr="{{ abbr_b }}" data-is-today="{{ is_today | lower }}" data-has-shape="{{ has_shape | lower }}"></div>
                 <p class="chart-placeholder">Appears once the game tips off.</p>
                 {{ shape_section | safe }}
             </section>
@@ -97,6 +97,11 @@
                 // Only today's games keep polling pre-tipoff (see is_today gate
                 // in render). A far-future/past game stops after the first poll.
                 const IS_TODAY = chartEl.dataset.isToday === 'true';
+                // A finished game (server rendered a stored game-shape) picks
+                // degraded-state placeholder copy, so a completed game whose
+                // live-wp fetch fails / returns no plays isn't mislabeled
+                // "appears once the game tips off" (Codex adversarial-review).
+                const HAS_SHAPE = chartEl.dataset.hasShape === 'true';
 
                 let pollTimer = null;
                 let backoffIdx = 0;
@@ -121,7 +126,12 @@
 
                 function showPlaceholder() {
                     chartEl.innerHTML = '';
-                    if (placeholderEl) placeholderEl.style.display = '';
+                    if (placeholderEl) {
+                        // A finished game whose curve can't draw overrides the
+                        // static "tips off" copy; pregame keeps it (one source).
+                        if (HAS_SHAPE) placeholderEl.textContent = 'Chart unavailable.';
+                        placeholderEl.style.display = '';
+                    }
                 }
 
                 function showMessage(msg) {

@@ -1072,6 +1072,7 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h, shape) -> str:
         breakdown_section=_detail_breakdown_section(ranking, team_a, team_b),
         h2h_section=_detail_h2h_section(game, team_a, team_b, h2h),
         shape_section=_detail_shape_section(shape),
+        has_shape=shape is not None,
         shared_head=_SHARED_HEAD,
         detail_style=_DETAIL_STYLE,
         wp_chart_js=_WP_CHART_JS,
