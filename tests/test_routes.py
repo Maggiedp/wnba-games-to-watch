@@ -1722,6 +1722,48 @@ def test_completed_endpoint_attaches_shape_curve_when_shape_exists(env, client):
     assert isinstance(row["shape_curve"], list)
     assert len(row["shape_curve"]) >= 2
     assert row["shape_curve"][0] == [0.0, 0.5]
+    assert (
+        row["shape_winner"] == "home"
+    )  # authoritative winner from the game_shapes row
+
+
+def test_completed_endpoint_shape_winner_uses_shape_row_not_scores(env, client):
+    """The mini's orientation must come from game_shapes.winner, not final scores.
+    Seed a shape whose winner ('away') disagrees with the game's final scores
+    (home leads 88-80) and assert shape_winner reflects the shape row — so a
+    drifted/backfilled row or a null score can't flip the curve upside down
+    (Codex adversarial-review round 2)."""
+    _seed_completed_game(
+        env, date="2026-05-24", espn_id="mw"
+    )  # scores: home 88, away 80
+    session = env.get_session()
+    upsert_game_shape(
+        session,
+        espn_id="mw",
+        season=2026,
+        date="2026-05-24",
+        home_team="Aces",
+        away_team="Liberty",
+        home_abbr="LV",
+        away_abbr="NY",
+        home_score=88,
+        away_score=80,
+        winner="away",  # deliberately disagrees with the game's final scores
+        excitement=5.0,
+        tension=0.5,
+        comeback=0.2,
+        lead_changes=3,
+        winner_low_wp=0.3,
+        curve=[[0.0, 0.5], [2400.0, 0.8]],
+    )
+    session.commit()
+    session.close()
+
+    row = next(
+        r for r in client.get("/api/games/completed").json() if r["espn_id"] == "mw"
+    )
+    assert row["shape_winner"] == "away"  # from the shape row, NOT the 88>80 scores
+    assert isinstance(row["shape_curve"], list)
 
 
 def test_completed_endpoint_shape_curve_none_without_shape(env, client):
@@ -1820,15 +1862,20 @@ def test_homepage_injects_shape_chart_renderer():
 
 def test_completed_minis_placeholder_and_paint_wired():
     """renderGameRow/renderGameCard emit a .shape-mini placeholder and
-    renderCompleted fills it via buildShapeSvg (winner derived from scores)."""
+    renderCompleted fills it via buildShapeSvg, oriented by the authoritative
+    game_shapes winner (shape_winner), not the final scores."""
     from src.api.routes import render_homepage
 
     src = render_homepage()
     assert 'class="shape-mini"' in src  # placeholder emitted
-    assert "buildShapeSvg(g.shape_curve" in src  # painted in renderCompleted
     assert (
-        "g.final_score_a > g.final_score_b ? 'home' : 'away'" in src
-    )  # winner orientation
+        "buildShapeSvg(g.shape_curve, g.shape_winner" in src
+    )  # painted; winner from shape
+    assert (
+        "g.shape_winner === 'home' || g.shape_winner === 'away'" in src
+    )  # orientation gate
+    # Orientation must NOT be re-derived from final scores (cross-table flip risk).
+    assert "g.final_score_a > g.final_score_b ? 'home' : 'away'" not in src
     assert (
         'container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .shape-mini`)' in src
     )  # paints desktop + mobile (both)

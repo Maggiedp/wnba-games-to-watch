@@ -93,6 +93,10 @@ class GameResponse(BaseModel):
     # completed-section mini; only populated when include_shapes=True and a
     # game_shapes row exists. None otherwise (incl. upcoming games).
     shape_curve: list[list[float]] | None = None
+    # Authoritative winner ('home'/'away') from the SAME game_shapes row as
+    # shape_curve. The mini orients by this (matching /replay + detail), not by
+    # final scores — avoids a cross-table scores<->winner drift/null flip.
+    shape_winner: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -233,7 +237,8 @@ def format_games_response(
             # row degrades to a missing mini rather than emitting null/garbage curve
             # points (or a serializer NaN->null coercion) into the completed payload.
             if (
-                isinstance(curve, list)
+                shape.winner in ("home", "away")
+                and isinstance(curve, list)
                 and len(curve) >= 2
                 and all(
                     isinstance(pt, list)
@@ -244,6 +249,7 @@ def format_games_response(
                 )
             ):
                 r.shape_curve = _thin_curve(curve)
+                r.shape_winner = shape.winner
             else:
                 logger.warning(
                     "game_shapes curve malformed for espn_id=%s; skipping mini",

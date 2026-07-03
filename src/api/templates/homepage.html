@@ -1840,10 +1840,12 @@
                     container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .excitement-eyebrow`).forEach(eyebrow => {
                         applyExcitementClass(eyebrow, excitementLabelFor(g.excitement_index));
                     });
-                    // Winner-oriented mini fever-line (winner from final scores: team_a is home).
-                    if (Array.isArray(g.shape_curve) && g.shape_curve.length >= 2) {
-                        const winner = g.final_score_a > g.final_score_b ? 'home' : 'away';
-                        const svg = buildShapeSvg(g.shape_curve, winner, { accent: 'var(--navy-3)', width: 80, height: 24 });
+                    // Winner-oriented mini fever-line. Orient by the authoritative
+                    // game_shapes winner (same row as the curve; matches /replay + detail),
+                    // NOT final scores — avoids a cross-table drift/null-score flip.
+                    if ((g.shape_winner === 'home' || g.shape_winner === 'away')
+                        && Array.isArray(g.shape_curve) && g.shape_curve.length >= 2) {
+                        const svg = buildShapeSvg(g.shape_curve, g.shape_winner, { accent: 'var(--navy-3)', width: 80, height: 24 });
                         container.querySelectorAll(`[data-espn-id="${g.espn_id}"] .shape-mini`).forEach(mini => {
                             mini.innerHTML = svg;
                         });
