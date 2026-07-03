@@ -1401,23 +1401,25 @@ def test_detail_shape_section_comeback_game():
     from src.api.routes import _detail_shape_section
 
     html = _detail_shape_section(_shape())
-    assert "Game shape</h2>" in html
+    assert '<div class="detail-shape">' in html
+    assert "detail-shape-metrics" in html
     assert "9.4" in html  # excitement (raw)
     assert "8.7" in html  # tension * 10
     assert "6.2" in html  # comeback * 20
     assert "winner trailed to 33%" in html
     assert "9 lead changes" in html
-    assert 'data-winner="home"' in html
-    assert 'data-emphasis="comeback"' in html
-    assert "data-curve=" in html
-    assert 'class="detail-shape-key"' in html
-    assert "Line tracks the" in html  # winner-orientation micro-explainer
+    # The winner-oriented mini + its heading/explainer are gone — the strip is
+    # now folded under the interactive WP chart, not a second curve.
+    assert "Game shape</h2>" not in html
+    assert 'id="shape-mini"' not in html
+    assert "data-curve=" not in html
+    assert "detail-shape-key" not in html
 
 
 def test_detail_shape_section_blowout_uses_led_caption():
     from src.api.routes import _detail_shape_section
 
-    # comeback == 0 + a wire-to-wire winner -> "led X%" caption, tension emphasis.
+    # comeback == 0 + a wire-to-wire winner -> "led X%" caption.
     html = _detail_shape_section(
         _shape(
             comeback=0.0,
@@ -1427,7 +1429,6 @@ def test_detail_shape_section_blowout_uses_led_caption():
     )
     assert "led 100% of the way" in html  # winner > .5 at all 3 samples
     assert "0 lead changes" in html
-    assert 'data-emphasis="tension"' in html
 
 
 def test_detail_shape_section_none_returns_empty():
@@ -1519,12 +1520,18 @@ def test_render_game_detail_includes_shape_section_when_present(session, team_id
     session.commit()
 
     html = render_game_detail(session, "401736210")
-    assert "Game shape</h2>" in html
+    # The metrics strip is folded under the interactive WP chart...
+    assert "detail-shape-metrics" in html
     assert "winner trailed to 33%" in html
-    assert 'id="shape-mini"' in html
-    assert "data-curve=" in html
-    assert "midLabel: true" in html  # detail mini opts into the 50% label
-    assert "buildShapeSvg" in html  # renderer injected into the page
+    assert html.index('<div class="detail-shape">') > html.index('id="wp-chart"')
+    # ...not as a separate winner-oriented mini, and buildShapeSvg is no longer
+    # injected on the detail page.
+    assert "Game shape</h2>" not in html
+    assert 'id="shape-mini"' not in html
+    assert "data-curve=" not in html
+    # The JS renderer is no longer injected. Check the function definition, not
+    # bare "buildShapeSvg" — _SHARED_HEAD carries that string in a CSS comment.
+    assert "function buildShapeSvg" not in html
 
 
 def test_render_game_detail_omits_shape_section_when_absent(session, team_ids):
@@ -1543,7 +1550,9 @@ def test_render_game_detail_omits_shape_section_when_absent(session, team_ids):
 
     html = render_game_detail(session, "401736210")
     assert html is not None
-    assert "Game shape</h2>" not in html
+    # Body marker, not "detail-shape-metrics" — that class name is always in the
+    # head CSS; the wrapper div only renders when there's a stored shape.
+    assert '<div class="detail-shape">' not in html
     assert 'id="shape-mini"' not in html
 
 
@@ -1631,10 +1640,11 @@ def test_game_detail_route_serves_shape_section(env, client):
 
     resp = client.get("/game/401736210")
     assert resp.status_code == 200
-    assert "Game shape</h2>" in resp.text
+    assert "detail-shape-metrics" in resp.text
     assert "winner trailed to 33%" in resp.text
-    assert 'id="shape-mini"' in resp.text
-    assert "buildShapeSvg" in resp.text  # renderer reached the served page
+    assert 'id="shape-mini"' not in resp.text
+    # Renderer JS no longer injected (function def, not the CSS-comment string).
+    assert "function buildShapeSvg" not in resp.text
 
 
 def test_thin_curve_caps_points_and_keeps_endpoints():
