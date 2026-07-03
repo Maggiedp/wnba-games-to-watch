@@ -42,6 +42,16 @@ function elapsedSeconds(play) {
     return prior + elapsedInPeriod;
 }
 
+// Live win-probability plays -> the [[elapsed_seconds, home_pct], ...] curve
+// buildShapeSvg expects, for the homepage live "building" fever-line. The mini
+// is home-oriented (the call site passes winner='home' -> raw home_pct): a live
+// game has no winner yet, so it can't climb toward one. No length guard needed
+// -- buildShapeSvg renders '' for a <2-point curve, hiding the mini early-game.
+function curveFromPlays(plays) {
+    if (!plays) return [];
+    return plays.map(p => [elapsedSeconds(p), p.home_pct]);
+}
+
 // Excitement = leverage-weighted past WP movement + expected future WP movement.
 //   past   = Σ |ΔWPᵢ| · Lᵢ                  where Lᵢ = elapsed_s / 2400
 //   future = γ · 2p(1−p) · L_now            where p = current WP
