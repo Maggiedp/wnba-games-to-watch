@@ -1,10 +1,13 @@
 import pytest
 
+from src.scoring.excitement import compute_excitement
 from src.scoring.game_shape import (
+    LiveShape,
     ShapeMetrics,
     compute_comeback,
     compute_game_shape,
     compute_lead_changes,
+    compute_live_shape,
     compute_tension,
     downsample_curve,
     winner_low_wp,
@@ -103,3 +106,46 @@ def test_compute_game_shape_aggregates():
     assert shape.excitement > 0
     assert shape.lead_changes == 1
     assert len(shape.curve) == 3
+
+
+def _live_plays():
+    return [
+        _play(1, "10:00", 0.50),
+        _play(2, "5:00", 0.70),
+        _play(3, "5:00", 0.35),
+        _play(4, "2:00", 0.60),
+        _play(4, "0:00", 0.55),
+    ]
+
+
+def test_compute_live_shape_bundles_winner_independent_metrics():
+    plays = _live_plays()
+    shape = compute_live_shape(plays)
+    assert isinstance(shape, LiveShape)
+    assert shape.tension == compute_tension(plays)
+    assert shape.excitement == compute_excitement(plays, final=False)
+    assert shape.lead_changes == compute_lead_changes(plays)
+    assert shape.curve == downsample_curve(plays)
+
+
+def test_compute_live_shape_uses_live_excitement_with_future_term():
+    # Both samples sit at a coin flip: the live future term (final=False) makes
+    # the live score strictly greater than the final-only score (final=True).
+    plays = [_play(1, "10:00", 0.50), _play(4, "0:00", 0.50)]
+    shape = compute_live_shape(plays)
+    assert shape.excitement == pytest.approx(compute_excitement(plays, final=False))
+    assert compute_excitement(plays, final=False) > compute_excitement(
+        plays, final=True
+    )
+
+
+def test_compute_live_shape_none_when_insufficient_plays():
+    assert compute_live_shape([]) is None
+    assert compute_live_shape([_play(1, "10:00", 0.5)]) is None
+
+
+def test_compute_live_shape_omits_winner_dependent_fields():
+    shape = compute_live_shape(_live_plays())
+    assert not hasattr(shape, "comeback")
+    assert not hasattr(shape, "winner_low_wp")
+    assert not hasattr(shape, "winner")

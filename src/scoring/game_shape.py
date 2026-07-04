@@ -6,8 +6,9 @@ home-win-probability series; `elapsed_seconds` converts ESPN period+clock to
 game-time seconds. Mirrors excitement.py's "<2 plays → None" contract so an
 insufficient feed is left absent and retried next run.
 
-Constants here must stay in sync with the JS mirror added in a later plan
-(a test will assert this once the mirror exists).
+Live games on /replay compute their shape server-side through
+`compute_live_shape` (Plan 3d, 2026-07-03) — reusing these same functions — so
+there is intentionally NO JS metric mirror to keep in sync.
 """
 
 from dataclasses import dataclass
@@ -128,5 +129,36 @@ def compute_game_shape(plays: list[dict], home_won: bool) -> ShapeMetrics | None
         comeback=comeback,
         lead_changes=lead_changes,
         winner_low_wp=low,
+        curve=downsample_curve(plays),
+    )
+
+
+@dataclass
+class LiveShape:
+    tension: float
+    excitement: float
+    lead_changes: int
+    curve: list[list[float]]
+
+
+def compute_live_shape(plays: list[dict]) -> LiveShape | None:
+    """Winner-independent shape bundle for a LIVE (unfinished) game: tension,
+    live excitement (future term ON via final=False), lead changes, and the
+    home-oriented downsampled curve. None if <2 usable plays (caller skips the
+    game and retries next poll).
+
+    Deliberately NO comeback / winner_low_wp / winner: those are winner-dependent
+    and a live game has no winner — computing "against the current leader" would
+    flip on every lead change. See the Replay Value Plan 3d design (2026-07-03).
+    """
+    tension = compute_tension(plays)
+    excitement = compute_excitement(plays, final=False)
+    lead_changes = compute_lead_changes(plays)
+    if None in (tension, excitement, lead_changes):
+        return None
+    return LiveShape(
+        tension=tension,
+        excitement=excitement,
+        lead_changes=lead_changes,
         curve=downsample_curve(plays),
     )
