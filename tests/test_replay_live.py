@@ -173,3 +173,31 @@ def test_replay_live_response_is_cached_within_ttl(client, monkeypatch):
     assert after_first > 0  # first call computed (hit ESPN)
     client.get("/api/replay-live")
     assert calls["n"] == after_first  # second call served from cache
+
+
+def test_replay_live_single_flights_concurrent_cold_builds(client, monkeypatch):
+    # Concurrent cold requests must collapse into ONE slate build (single-flight),
+    # so viewers share one ESPN fetch instead of each fanning out. Without the
+    # build lock, all five threads would run _build_replay_live and count > 1.
+    import threading
+    import time as _time
+
+    builds = {"n": 0}
+    counter_lock = threading.Lock()
+
+    def slow_statuses(d):
+        if d == today_et():  # count once per build; hold it so threads overlap
+            with counter_lock:
+                builds["n"] += 1
+            _time.sleep(0.1)
+        return {}
+
+    monkeypatch.setattr(app, "fetch_today_game_statuses", slow_statuses)
+    monkeypatch.setattr(app, "_get_known_espn_ids", lambda: frozenset())
+
+    threads = [threading.Thread(target=app.get_replay_live) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert builds["n"] == 1  # single-flight collapsed 5 cold calls into one build

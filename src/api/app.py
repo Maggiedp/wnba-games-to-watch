@@ -458,6 +458,7 @@ _replay_live_pool = ThreadPoolExecutor(
 )
 _replay_live_cache: "tuple[float, dict] | None" = None
 _replay_live_cache_lock = threading.Lock()
+_replay_live_build_lock = threading.Lock()
 
 
 def _build_replay_live() -> dict:
@@ -557,19 +558,27 @@ def _build_replay_live() -> dict:
 def get_replay_live():
     """Live games as building fever-line cards for the /replay Live-now strip.
 
-    Server-side sibling to /api/replay (DB-only). Cached briefly so concurrent
-    viewers share one ESPN slate fetch; per-game fetches run on the shared bounded
-    pool. Sync def so the blocking work runs in FastAPI's threadpool.
+    Server-side sibling to /api/replay (DB-only). Single-flighted + cached briefly
+    so concurrent viewers share ONE ESPN slate fetch; per-game fetches run on the
+    shared bounded pool. Sync def so the blocking work runs in FastAPI's threadpool.
     """
     global _replay_live_cache
     with _replay_live_cache_lock:
         cached = _replay_live_cache
         if cached and cached[0] > time.monotonic():
             return cached[1]
-    result = _build_replay_live()  # raises HTTPException(502) on scoreboard failure
-    with _replay_live_cache_lock:
-        _replay_live_cache = (time.monotonic() + _REPLAY_LIVE_CACHE_TTL_S, result)
-    return result
+    # Single-flight the build: one request builds while the rest wait on the build
+    # lock, then reuse its cached result instead of each starting their own
+    # scoreboard fetch + fan-out (mirrors _fetch_live_wp_cached's per-key lock).
+    with _replay_live_build_lock:
+        with _replay_live_cache_lock:
+            cached = _replay_live_cache
+            if cached and cached[0] > time.monotonic():
+                return cached[1]  # another request built it while we waited
+        result = _build_replay_live()  # raises HTTPException(502) on scoreboard fail
+        with _replay_live_cache_lock:
+            _replay_live_cache = (time.monotonic() + _REPLAY_LIVE_CACHE_TTL_S, result)
+        return result
 
 
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])
