@@ -100,9 +100,9 @@
   const seasonSel = document.getElementById('replay-season');
   const pillWrap = document.getElementById('replay-sorts');
   const liveMount = document.getElementById('replay-live');
-  const LIVE_POLL_MS = 60000;   // poll cadence while games are pending
-  const LIVE_MAX_ERRS = 5;      // stop after ~5 consecutive failures (~5 min)
-  let liveErrCount = 0;
+  const LIVE_POLL_MS = 60000;          // poll cadence while games are pending
+  const LIVE_MAX_BACKOFF_MS = 300000;  // cap retry interval at 5 min (matches live-status)
+  let liveBackoffMs = LIVE_POLL_MS;
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   // scale: spec section 3 — excitement raw, tension x10, comeback x20 (all ~0-10).
   const METRICS = {
@@ -245,13 +245,16 @@
       const res = await fetch('/api/replay-live');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
-      liveErrCount = 0;
+      liveBackoffMs = LIVE_POLL_MS;  // reset backoff on success
       renderLive(data.games || []);
       if (data.has_pending) setTimeout(loadLive, LIVE_POLL_MS);
     } catch (e) {
-      // Transient: keep any existing strip, retry at the interval, but stop
-      // after a run of failures so a left-open tab can't poll ESPN forever.
-      if (++liveErrCount <= LIVE_MAX_ERRS) setTimeout(loadLive, LIVE_POLL_MS);
+      // Transient outage: keep the existing strip and keep retrying with capped
+      // backoff while the page is open — don't permanently disable (a later
+      // success re-arms normal cadence, or stops cleanly on has_pending=false).
+      // Mirrors the homepage live-status backoff.
+      liveBackoffMs = Math.min(liveBackoffMs * 2, LIVE_MAX_BACKOFF_MS);
+      setTimeout(loadLive, liveBackoffMs);
     }
   }
 

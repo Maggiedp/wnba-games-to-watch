@@ -447,21 +447,24 @@ def get_live_win_probability(espn_id: str = Query(..., pattern=_ESPN_ID_PATTERN)
         raise HTTPException(status_code=502, detail=str(e))
 
 
-# /api/replay-live fans its per-game ESPN fetches out concurrently; a shorter
-# per-game timeout + bounded workers keep one slow slate off the shared threadpool.
+# /api/replay-live runs its per-game ESPN fetches on a SHARED bounded pool (not a
+# per-request executor — that multiplied threads under concurrent viewers) and
+# caches the whole slate briefly so concurrent viewers share one fetch.
 _REPLAY_LIVE_TIMEOUT_S = 6
 _REPLAY_LIVE_MAX_WORKERS = 6
+_REPLAY_LIVE_CACHE_TTL_S = 15
+_replay_live_pool = ThreadPoolExecutor(
+    max_workers=_REPLAY_LIVE_MAX_WORKERS, thread_name_prefix="replay-live"
+)
+_replay_live_cache: "tuple[float, dict] | None" = None
+_replay_live_cache_lock = threading.Lock()
 
 
-@app.get("/api/replay-live")
-def get_replay_live():
-    """Live games as building fever-line cards for the /replay Live-now strip.
+def _build_replay_live() -> dict:
+    """Compute the live slate: statuses -> known live games -> per-game shape.
 
-    Server-side sibling to /api/replay (which stays DB-only): fetch today/
-    yesterday ESPN statuses, filter to live, and for each KNOWN live id pull the
-    cached WP series and compute the winner-independent shape in Python. Returns
-    has_pending so the client polls only while the slate is unfinished. Sync def
-    so the blocking ESPN calls run in FastAPI's threadpool.
+    Uncached; get_replay_live() wraps this with the response cache. Raises
+    HTTPException(502) if the primary (today) scoreboard call fails.
     """
     # Today primary (502 on failure, like /api/games/live-status); yesterday
     # best-effort for late-ET games past the UTC-midnight boundary.
@@ -505,12 +508,11 @@ def get_replay_live():
     finally:
         session.close()
 
-    # Fan the per-game WP fetches out concurrently (bounded) rather than serially:
-    # each 60s poll misses the 15s cache, so a serial loop would pay the SUM of up
-    # to _REPLAY_LIVE_TIMEOUT_S per game on one threadpool worker — under
-    # --max-instances=1 that can starve mission-critical endpoints. Parallel bounds
-    # a whole-slate poll to ~one timeout. _fetch_live_wp_cached is concurrency-safe
-    # (per-key locks) — the same path concurrent viewers already share.
+    # Fetch each live game's WP on the SHARED bounded pool (module-level, created
+    # once) so N concurrent viewers can't each spawn their own worker set; a short
+    # per-game timeout keeps one slow game from holding the slate. This whole slate
+    # is response-cached by the caller, so concurrent viewers share one fetch.
+    # _fetch_live_wp_cached is concurrency-safe (per-key locks).
     def _fetch_one(espn_id):
         try:
             return espn_id, _fetch_live_wp_cached(
@@ -520,10 +522,7 @@ def get_replay_live():
             logger.warning("replay-live: live-wp failed for %s: %s", espn_id, e)
             return espn_id, None
 
-    with ThreadPoolExecutor(
-        max_workers=min(len(live_ids), _REPLAY_LIVE_MAX_WORKERS)
-    ) as pool:
-        payloads = dict(pool.map(_fetch_one, live_ids))
+    payloads = dict(_replay_live_pool.map(_fetch_one, live_ids))
 
     games = []
     for espn_id in live_ids:  # preserve scoreboard order
@@ -552,6 +551,25 @@ def get_replay_live():
             }
         )
     return {"games": games, "has_pending": has_pending}
+
+
+@app.get("/api/replay-live")
+def get_replay_live():
+    """Live games as building fever-line cards for the /replay Live-now strip.
+
+    Server-side sibling to /api/replay (DB-only). Cached briefly so concurrent
+    viewers share one ESPN slate fetch; per-game fetches run on the shared bounded
+    pool. Sync def so the blocking work runs in FastAPI's threadpool.
+    """
+    global _replay_live_cache
+    with _replay_live_cache_lock:
+        cached = _replay_live_cache
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+    result = _build_replay_live()  # raises HTTPException(502) on scoreboard failure
+    with _replay_live_cache_lock:
+        _replay_live_cache = (time.monotonic() + _REPLAY_LIVE_CACHE_TTL_S, result)
+    return result
 
 
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])

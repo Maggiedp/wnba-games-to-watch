@@ -1,8 +1,19 @@
 """Tests for the /replay live-strip predicate + endpoint (Plan 3d)."""
 
+import pytest
+
 import src.api.app as app
 from src.api.routes import is_live_status
 from src.data.espn_api import ESPNAPIError, today_et
+
+
+@pytest.fixture(autouse=True)
+def _clear_replay_live_cache():
+    # The /api/replay-live response cache would otherwise leak between tests
+    # (TTL 15s >> test runtime), so reset it around every test.
+    app._replay_live_cache = None
+    yield
+    app._replay_live_cache = None
 
 
 def test_is_live_status_true_for_the_three_live_states():
@@ -144,3 +155,21 @@ def test_replay_live_unknown_live_id_not_rendered_or_pending(client, monkeypatch
     data = client.get("/api/replay-live").json()
     assert data["games"] == []
     assert data["has_pending"] is False
+
+
+def test_replay_live_response_is_cached_within_ttl(client, monkeypatch):
+    # A second call within the TTL is served from the response cache without
+    # re-hitting ESPN, so concurrent viewers share one slate fetch (finding 1).
+    calls = {"n": 0}
+
+    def counting_statuses(d):
+        calls["n"] += 1
+        return {}
+
+    monkeypatch.setattr(app, "fetch_today_game_statuses", counting_statuses)
+    monkeypatch.setattr(app, "_get_known_espn_ids", lambda: frozenset())
+    client.get("/api/replay-live")
+    after_first = calls["n"]
+    assert after_first > 0  # first call computed (hit ESPN)
+    client.get("/api/replay-live")
+    assert calls["n"] == after_first  # second call served from cache
