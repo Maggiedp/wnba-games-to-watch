@@ -214,8 +214,8 @@
   function liveCardHtml(g) {
     const svg = buildShapeSvg(g.curve, 'home', {
       accent: 'var(--live)', width: 320, height: 90 });
-    const away = `${escapeHtml(g.away_abbr)} ${escapeHtml(String(g.away_score))}`;
-    const home = `${escapeHtml(g.home_abbr)} ${escapeHtml(String(g.home_score))}`;
+    const away = `${escapeHtml(g.away_abbr)} ${escapeHtml(g.away_score)}`;
+    const home = `${escapeHtml(g.home_abbr)} ${escapeHtml(g.home_score)}`;
     const tension = (g.tension * METRICS.tension.scale).toFixed(1);
     const excitement = (g.excitement * METRICS.excitement.scale).toFixed(1);
     const leads = `${g.lead_changes} lead change${g.lead_changes === 1 ? '' : 's'} so far`;
