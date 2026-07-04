@@ -61,6 +61,19 @@ def escape_html(s: object) -> str:
 logger = logging.getLogger(__name__)
 
 
+# ESPN reports three in-progress states — mirrors shared.js's isLiveStatus.
+# (3 rarely-changing status strings duplicated Python<->JS; not a calibration
+# seam, so no sync test — an accepted small duplication, see the Plan 3d spec.)
+_LIVE_STATUSES = frozenset(
+    {"STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_END_PERIOD"}
+)
+
+
+def is_live_status(status: str | None) -> bool:
+    """True if an ESPN status name denotes a game in progress."""
+    return status in _LIVE_STATUSES
+
+
 class GameResponse(BaseModel):
     """Response model for a game."""
 
