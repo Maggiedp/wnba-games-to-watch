@@ -54,6 +54,16 @@
             .shape-caption { margin-top: 6px; color: var(--text-muted); font-size: .85rem; }
 
             @media (max-width: 640px) { .shape-grid { grid-template-columns: 1fr; } }
+
+            /* Live-now strip (Plan 3d) */
+            #replay-live:empty { display: none; }
+            .live-head { font-family: var(--display); font-size: 1.05rem; font-weight: 600; color: var(--live); margin: 0 0 6px; }
+            .shape-live-note { color: var(--text-muted); font-size: .85rem; line-height: 1.45; margin: 0 0 16px; }
+            .shape-card.live { border-color: var(--live); }
+            .shape-card.live:hover { border-color: var(--live); box-shadow: 0 2px 14px rgba(214,68,46,.10); }
+            .shape-live-metrics { display: flex; gap: 20px; margin-top: 2px; }
+            .shape-live-metrics span { display: inline-flex; align-items: baseline; gap: 6px; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); }
+            .shape-live-metrics strong { font-family: var(--display); font-weight: 700; font-size: 1.2rem; color: var(--navy); font-variant-numeric: tabular-nums; }
         </style>
 </head>
 <body>
@@ -74,6 +84,7 @@
     </label>
   </div>
 
+  <div id="replay-live"></div>
   <div id="replay-lead"></div>
   <div class="shape-grid" id="replay-grid"><p class="empty">Loading…</p></div>
 
@@ -88,6 +99,10 @@
   const grid = document.getElementById('replay-grid');
   const seasonSel = document.getElementById('replay-season');
   const pillWrap = document.getElementById('replay-sorts');
+  const liveMount = document.getElementById('replay-live');
+  const LIVE_POLL_MS = 60000;   // poll cadence while games are pending
+  const LIVE_MAX_ERRS = 5;      // stop after ~5 consecutive failures (~5 min)
+  let liveErrCount = 0;
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   // scale: spec section 3 — excitement raw, tension x10, comeback x20 (all ~0-10).
   const METRICS = {
@@ -196,11 +211,56 @@
     }
   }
 
+  function liveCardHtml(g) {
+    const svg = buildShapeSvg(g.curve, 'home', {
+      accent: 'var(--live)', width: 320, height: 90 });
+    const away = `${escapeHtml(g.away_abbr)} ${escapeHtml(String(g.away_score))}`;
+    const home = `${escapeHtml(g.home_abbr)} ${escapeHtml(String(g.home_score))}`;
+    const tension = (g.tension * METRICS.tension.scale).toFixed(1);
+    const excitement = (g.excitement * METRICS.excitement.scale).toFixed(1);
+    const leads = `${g.lead_changes} lead change${g.lead_changes === 1 ? '' : 's'} so far`;
+    const inner =
+      `<div class="shape-head">`
+      + `<span class="live-pill is-live"><span class="live-dot" aria-hidden="true"></span>LIVE</span>`
+      + `<span class="shape-score">${away} &middot; ${home}</span></div>`
+      + `<div class="shape-chart">${svg}</div>`
+      + `<div class="shape-live-metrics">`
+      + `<span><strong>${tension}</strong> Tension</span>`
+      + `<span><strong>${excitement}</strong> Excitement</span></div>`
+      + `<div class="shape-caption">${leads}</div>`;
+    return `<a class="shape-card live" href="/game/${encodeURIComponent(g.espn_id)}">${inner}</a>`;
+  }
+
+  function renderLive(liveGames) {
+    if (!liveGames.length) { liveMount.innerHTML = ''; return; }
+    liveMount.innerHTML =
+      `<h2 class="live-head">Live now</h2>`
+      + `<p class="shape-live-note">Still in progress — the line shows the home team's `
+      + `win probability as it swings (no winner yet).</p>`
+      + `<div class="shape-grid">${liveGames.map(liveCardHtml).join('')}</div>`;
+  }
+
+  async function loadLive() {
+    try {
+      const res = await fetch('/api/replay-live');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      liveErrCount = 0;
+      renderLive(data.games || []);
+      if (data.has_pending) setTimeout(loadLive, LIVE_POLL_MS);
+    } catch (e) {
+      // Transient: keep any existing strip, retry at the interval, but stop
+      // after a run of failures so a left-open tab can't poll ESPN forever.
+      if (++liveErrCount <= LIVE_MAX_ERRS) setTimeout(loadLive, LIVE_POLL_MS);
+    }
+  }
+
   pillWrap.querySelectorAll('[data-sort]').forEach(b =>
     b.addEventListener('click', () => setSort(b.dataset.sort)));
   seasonSel.addEventListener('change', () => load(seasonSel.value));
   setSort('excitement');
   load();
+  loadLive();
 })();
 </script>
 </body>
