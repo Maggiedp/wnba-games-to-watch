@@ -13,7 +13,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
-from src.api.routes import GameResponse, PlayoffOddsResponse, format_games_response
+from src.api.routes import (
+    GameResponse,
+    PlayoffOddsResponse,
+    format_games_response,
+    is_live_status,
+)
 from src.constants import Broadcasters  # noqa: F401 — used in get_broadcasters endpoint
 from src.data.espn_api import (
     ESPNAPIError,
@@ -33,12 +38,14 @@ from src.db.queries import (
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
+    get_team_abbrev_map,
     get_team_records,
     get_teams_by_ids,
     get_upcoming_rankings,
 )
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
+from src.scoring.game_shape import compute_live_shape
 
 logger = logging.getLogger(__name__)
 
@@ -437,6 +444,77 @@ def get_live_win_probability(espn_id: str = Query(..., pattern=_ESPN_ID_PATTERN)
         raise HTTPException(status_code=404, detail="Game not found on ESPN")
     except ESPNAPIError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/replay-live")
+def get_replay_live():
+    """Live games as building fever-line cards for the /replay Live-now strip.
+
+    Server-side sibling to /api/replay (which stays DB-only): fetch today/
+    yesterday ESPN statuses, filter to live, and for each KNOWN live id pull the
+    cached WP series and compute the winner-independent shape in Python. Returns
+    has_pending so the client polls only while the slate is unfinished. Sync def
+    so the blocking ESPN calls run in FastAPI's threadpool.
+    """
+    # Today primary (502 on failure, like /api/games/live-status); yesterday
+    # best-effort for late-ET games past the UTC-midnight boundary.
+    try:
+        statuses = fetch_today_game_statuses(today_et())
+    except ESPNAPIError as e:
+        logger.warning("replay-live: today statuses failed: %s", e)
+        raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
+    try:
+        statuses = {**fetch_today_game_statuses(yesterday_et()), **statuses}
+    except ESPNAPIError as e:
+        logger.warning("replay-live: yesterday statuses failed (non-fatal): %s", e)
+
+    has_pending = any(
+        is_live_status(s) or s == "STATUS_SCHEDULED" for s in statuses.values()
+    )
+    # Gate to DB-known ids BEFORE any ESPN fetch — _fetch_live_wp_cached does not
+    # gate (the /api/live-wp endpoint does), so this endpoint must re-apply it.
+    known = _get_known_espn_ids()
+    live_ids = [
+        eid for eid, s in statuses.items() if is_live_status(s) and eid in known
+    ]
+    if not live_ids:
+        return {"games": [], "has_pending": has_pending}
+
+    session = get_session()
+    try:
+        abbrs = get_team_abbrev_map(session)
+    finally:
+        session.close()
+
+    games = []
+    for espn_id in live_ids:
+        try:
+            payload = _fetch_live_wp_cached(espn_id)
+        except ESPNAPIError as e:  # incl. ESPNNotFoundError (subclass)
+            logger.warning("replay-live: live-wp failed for %s: %s", espn_id, e)
+            continue
+        shape = compute_live_shape(payload.get("plays", []))
+        if shape is None:
+            continue  # <2 usable plays (just tipped) — retry next poll
+        home_name = payload.get("home_team", "")
+        away_name = payload.get("away_team", "")
+        games.append(
+            {
+                "espn_id": espn_id,
+                "home_team": home_name,
+                "away_team": away_name,
+                "home_abbr": abbrs.get(home_name, home_name),
+                "away_abbr": abbrs.get(away_name, away_name),
+                "home_score": payload.get("home_score", ""),
+                "away_score": payload.get("away_score", ""),
+                "tension": shape.tension,
+                "excitement": shape.excitement,
+                "lead_changes": shape.lead_changes,
+                "curve": shape.curve,
+                "live": True,
+            }
+        )
+    return {"games": games, "has_pending": has_pending}
 
 
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])
