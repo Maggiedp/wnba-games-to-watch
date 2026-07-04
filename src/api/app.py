@@ -7,13 +7,19 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from secrets import compare_digest
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
-from src.api.routes import GameResponse, PlayoffOddsResponse, format_games_response
+from src.api.routes import (
+    GameResponse,
+    PlayoffOddsResponse,
+    format_games_response,
+    is_live_status,
+)
 from src.constants import Broadcasters  # noqa: F401 — used in get_broadcasters endpoint
 from src.data.espn_api import (
     ESPNAPIError,
@@ -33,12 +39,14 @@ from src.db.queries import (
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
+    get_team_abbrev_map,
     get_team_records,
     get_teams_by_ids,
     get_upcoming_rankings,
 )
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
+from src.scoring.game_shape import compute_live_shape
 
 logger = logging.getLogger(__name__)
 
@@ -349,7 +357,7 @@ def _store_live_wp_cache(espn_id: str, expires_at: float, kind: str, value: obje
         _live_wp_fetch_locks.pop(evicted_id, None)
 
 
-def _fetch_live_wp_cached(espn_id: str) -> dict:
+def _fetch_live_wp_cached(espn_id: str, timeout: int = 10) -> dict:
     with _live_wp_cache_lock:
         hit = _read_live_wp_cache(espn_id)
         if hit is not None:
@@ -364,7 +372,7 @@ def _fetch_live_wp_cached(espn_id: str) -> dict:
             if hit is not None:
                 return hit
         try:
-            payload = fetch_live_win_probability(espn_id)
+            payload = fetch_live_win_probability(espn_id, timeout=timeout)
         except ESPNNotFoundError as e:
             with _live_wp_cache_lock:
                 _store_live_wp_cache(
@@ -437,6 +445,140 @@ def get_live_win_probability(espn_id: str = Query(..., pattern=_ESPN_ID_PATTERN)
         raise HTTPException(status_code=404, detail="Game not found on ESPN")
     except ESPNAPIError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+# /api/replay-live runs its per-game ESPN fetches on a SHARED bounded pool (not a
+# per-request executor — that multiplied threads under concurrent viewers) and
+# caches the whole slate briefly so concurrent viewers share one fetch.
+_REPLAY_LIVE_TIMEOUT_S = 6
+_REPLAY_LIVE_MAX_WORKERS = 6
+_REPLAY_LIVE_CACHE_TTL_S = 15
+_replay_live_pool = ThreadPoolExecutor(
+    max_workers=_REPLAY_LIVE_MAX_WORKERS, thread_name_prefix="replay-live"
+)
+_replay_live_cache: "tuple[float, dict] | None" = None
+_replay_live_cache_lock = threading.Lock()
+_replay_live_build_lock = threading.Lock()
+
+
+def _build_replay_live() -> dict:
+    """Compute the live slate: statuses -> known live games -> per-game shape.
+
+    Uncached; get_replay_live() wraps this with the response cache. Raises
+    HTTPException(502) if the primary (today) scoreboard call fails.
+    """
+    # Today primary (502 on failure, like /api/games/live-status); yesterday
+    # best-effort for late-ET games past the UTC-midnight boundary.
+    try:
+        statuses = fetch_today_game_statuses(today_et())
+    except ESPNAPIError as e:
+        logger.warning("replay-live: today statuses failed: %s", e)
+        raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
+    try:
+        statuses = {**fetch_today_game_statuses(yesterday_et()), **statuses}
+    except ESPNAPIError as e:
+        logger.warning("replay-live: yesterday statuses failed (non-fatal): %s", e)
+
+    # Gate to DB-known ids BEFORE any ESPN fetch — _fetch_live_wp_cached does not
+    # gate (the /api/live-wp endpoint does), so this endpoint must re-apply it.
+    # has_pending drives client polling; compute it from the SAME known set we can
+    # actually render, so an unknown scoreboard id (schedule drift, an ESPN id
+    # change) can't keep the client polling forever for a card that never appears.
+    known = _get_known_espn_ids()
+    pending, dropped = [], []
+    for eid, s in statuses.items():
+        if is_live_status(s) or s == "STATUS_SCHEDULED":
+            (pending if eid in known else dropped).append(eid)
+    if dropped:
+        logger.warning(
+            "replay-live: %d live/scheduled scoreboard id(s) absent from the DB "
+            "allowlist (schedule drift?): %s",
+            len(dropped),
+            dropped,
+        )
+    has_pending = bool(pending)
+    live_ids = [
+        eid for eid, s in statuses.items() if is_live_status(s) and eid in known
+    ]
+    if not live_ids:
+        return {"games": [], "has_pending": has_pending}
+
+    session = get_session()
+    try:
+        abbrs = get_team_abbrev_map(session)
+    finally:
+        session.close()
+
+    # Fetch each live game's WP on the SHARED bounded pool (module-level, created
+    # once) so N concurrent viewers can't each spawn their own worker set; a short
+    # per-game timeout keeps one slow game from holding the slate. This whole slate
+    # is response-cached by the caller, so concurrent viewers share one fetch.
+    # _fetch_live_wp_cached is concurrency-safe (per-key locks).
+    def _fetch_one(espn_id):
+        try:
+            return espn_id, _fetch_live_wp_cached(
+                espn_id, timeout=_REPLAY_LIVE_TIMEOUT_S
+            )
+        except ESPNAPIError as e:  # incl. ESPNNotFoundError (subclass)
+            logger.warning("replay-live: live-wp failed for %s: %s", espn_id, e)
+            return espn_id, None
+
+    payloads = dict(_replay_live_pool.map(_fetch_one, live_ids))
+
+    games = []
+    for espn_id in live_ids:  # preserve scoreboard order
+        payload = payloads.get(espn_id)
+        if payload is None:
+            continue  # fetch failed — degrade to fewer cards, never 500
+        shape = compute_live_shape(payload.get("plays", []))
+        if shape is None:
+            continue  # <2 usable plays (just tipped) — retry next poll
+        home_name = payload.get("home_team", "")
+        away_name = payload.get("away_team", "")
+        games.append(
+            {
+                "espn_id": espn_id,
+                "home_team": home_name,
+                "away_team": away_name,
+                "home_abbr": abbrs.get(home_name, home_name),
+                "away_abbr": abbrs.get(away_name, away_name),
+                "home_score": payload.get("home_score", ""),
+                "away_score": payload.get("away_score", ""),
+                "tension": shape.tension,
+                "excitement": shape.excitement,
+                "lead_changes": shape.lead_changes,
+                "curve": shape.curve,
+                "live": True,
+            }
+        )
+    return {"games": games, "has_pending": has_pending}
+
+
+@app.get("/api/replay-live")
+def get_replay_live():
+    """Live games as building fever-line cards for the /replay Live-now strip.
+
+    Server-side sibling to /api/replay (DB-only). Single-flighted + cached briefly
+    so concurrent viewers share ONE ESPN slate fetch; per-game fetches run on the
+    shared bounded pool. Sync def so the blocking work runs in FastAPI's threadpool.
+    """
+    global _replay_live_cache
+    with _replay_live_cache_lock:
+        cached = _replay_live_cache
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+    # Single-flight the build: one request builds while the rest wait on the build
+    # lock, then reuse its cached result instead of each starting their own
+    # scoreboard fetch + fan-out (mirrors _fetch_live_wp_cached's per-key lock).
+    with _replay_live_build_lock:
+        with _replay_live_cache_lock:
+            cached = _replay_live_cache
+            if cached and cached[0] > time.monotonic():
+                return cached[1]  # another request built it while we waited
+        result = _build_replay_live()  # raises HTTPException(502) on scoreboard fail
+        with _replay_live_cache_lock:
+            _replay_live_cache = (time.monotonic() + _REPLAY_LIVE_CACHE_TTL_S, result)
+        return result
 
 
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])
