@@ -7,6 +7,7 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from secrets import compare_digest
 from contextlib import asynccontextmanager
 
@@ -356,7 +357,7 @@ def _store_live_wp_cache(espn_id: str, expires_at: float, kind: str, value: obje
         _live_wp_fetch_locks.pop(evicted_id, None)
 
 
-def _fetch_live_wp_cached(espn_id: str) -> dict:
+def _fetch_live_wp_cached(espn_id: str, timeout: int = 10) -> dict:
     with _live_wp_cache_lock:
         hit = _read_live_wp_cache(espn_id)
         if hit is not None:
@@ -371,7 +372,7 @@ def _fetch_live_wp_cached(espn_id: str) -> dict:
             if hit is not None:
                 return hit
         try:
-            payload = fetch_live_win_probability(espn_id)
+            payload = fetch_live_win_probability(espn_id, timeout=timeout)
         except ESPNNotFoundError as e:
             with _live_wp_cache_lock:
                 _store_live_wp_cache(
@@ -446,6 +447,12 @@ def get_live_win_probability(espn_id: str = Query(..., pattern=_ESPN_ID_PATTERN)
         raise HTTPException(status_code=502, detail=str(e))
 
 
+# /api/replay-live fans its per-game ESPN fetches out concurrently; a shorter
+# per-game timeout + bounded workers keep one slow slate off the shared threadpool.
+_REPLAY_LIVE_TIMEOUT_S = 6
+_REPLAY_LIVE_MAX_WORKERS = 6
+
+
 @app.get("/api/replay-live")
 def get_replay_live():
     """Live games as building fever-line cards for the /replay Live-now strip.
@@ -468,12 +475,24 @@ def get_replay_live():
     except ESPNAPIError as e:
         logger.warning("replay-live: yesterday statuses failed (non-fatal): %s", e)
 
-    has_pending = any(
-        is_live_status(s) or s == "STATUS_SCHEDULED" for s in statuses.values()
-    )
     # Gate to DB-known ids BEFORE any ESPN fetch — _fetch_live_wp_cached does not
     # gate (the /api/live-wp endpoint does), so this endpoint must re-apply it.
+    # has_pending drives client polling; compute it from the SAME known set we can
+    # actually render, so an unknown scoreboard id (schedule drift, an ESPN id
+    # change) can't keep the client polling forever for a card that never appears.
     known = _get_known_espn_ids()
+    pending, dropped = [], []
+    for eid, s in statuses.items():
+        if is_live_status(s) or s == "STATUS_SCHEDULED":
+            (pending if eid in known else dropped).append(eid)
+    if dropped:
+        logger.warning(
+            "replay-live: %d live/scheduled scoreboard id(s) absent from the DB "
+            "allowlist (schedule drift?): %s",
+            len(dropped),
+            dropped,
+        )
+    has_pending = bool(pending)
     live_ids = [
         eid for eid, s in statuses.items() if is_live_status(s) and eid in known
     ]
@@ -486,13 +505,31 @@ def get_replay_live():
     finally:
         session.close()
 
-    games = []
-    for espn_id in live_ids:
+    # Fan the per-game WP fetches out concurrently (bounded) rather than serially:
+    # each 60s poll misses the 15s cache, so a serial loop would pay the SUM of up
+    # to _REPLAY_LIVE_TIMEOUT_S per game on one threadpool worker — under
+    # --max-instances=1 that can starve mission-critical endpoints. Parallel bounds
+    # a whole-slate poll to ~one timeout. _fetch_live_wp_cached is concurrency-safe
+    # (per-key locks) — the same path concurrent viewers already share.
+    def _fetch_one(espn_id):
         try:
-            payload = _fetch_live_wp_cached(espn_id)
+            return espn_id, _fetch_live_wp_cached(
+                espn_id, timeout=_REPLAY_LIVE_TIMEOUT_S
+            )
         except ESPNAPIError as e:  # incl. ESPNNotFoundError (subclass)
             logger.warning("replay-live: live-wp failed for %s: %s", espn_id, e)
-            continue
+            return espn_id, None
+
+    with ThreadPoolExecutor(
+        max_workers=min(len(live_ids), _REPLAY_LIVE_MAX_WORKERS)
+    ) as pool:
+        payloads = dict(pool.map(_fetch_one, live_ids))
+
+    games = []
+    for espn_id in live_ids:  # preserve scoreboard order
+        payload = payloads.get(espn_id)
+        if payload is None:
+            continue  # fetch failed — degrade to fewer cards, never 500
         shape = compute_live_shape(payload.get("plays", []))
         if shape is None:
             continue  # <2 usable plays (just tipped) — retry next poll

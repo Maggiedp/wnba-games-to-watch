@@ -52,7 +52,7 @@ def test_replay_live_returns_only_live_games_with_shape(client, monkeypatch):
         },
         known={"111", "222", "333"},
         abbrs={"Home Team": "HOM", "Away Team": "AWY"},
-        wp=lambda eid: {
+        wp=lambda eid, timeout=None: {
             "espn_id": eid,
             "status": "STATUS_IN_PROGRESS",
             "home_team": "Home Team",
@@ -74,7 +74,13 @@ def test_replay_live_returns_only_live_games_with_shape(client, monkeypatch):
 
 
 def test_replay_live_empty_slate(client, monkeypatch):
-    _patch(monkeypatch, statuses_today={}, known=set(), abbrs={}, wp=lambda eid: {})
+    _patch(
+        monkeypatch,
+        statuses_today={},
+        known=set(),
+        abbrs={},
+        wp=lambda eid, timeout=None: {},
+    )
     assert client.get("/api/replay-live").json() == {"games": [], "has_pending": False}
 
 
@@ -84,7 +90,7 @@ def test_replay_live_skips_games_with_insufficient_plays(client, monkeypatch):
         statuses_today={"111": "STATUS_IN_PROGRESS"},
         known={"111"},
         abbrs={},
-        wp=lambda eid: {
+        wp=lambda eid, timeout=None: {
             "home_team": "H",
             "away_team": "A",
             "home_score": "1",
@@ -103,7 +109,7 @@ def test_replay_live_falls_back_to_full_name_when_abbr_missing(client, monkeypat
         statuses_today={"111": "STATUS_IN_PROGRESS"},
         known={"111"},
         abbrs={},  # empty map -> .get(name, name) fallback
-        wp=lambda eid: {
+        wp=lambda eid, timeout=None: {
             "home_team": "Golden State Valkyries",
             "away_team": "Las Vegas Aces",
             "home_score": "40",
@@ -122,3 +128,19 @@ def test_replay_live_502_when_today_statuses_fail(client, monkeypatch):
 
     monkeypatch.setattr(app, "fetch_today_game_statuses", boom)
     assert client.get("/api/replay-live").status_code == 502
+
+
+def test_replay_live_unknown_live_id_not_rendered_or_pending(client, monkeypatch):
+    # A live scoreboard id absent from the DB allowlist: no card AND has_pending
+    # false, so the client stops polling instead of spinning forever on a card
+    # that can never render. Polling is gated on the same known set we render.
+    _patch(
+        monkeypatch,
+        statuses_today={"999": "STATUS_IN_PROGRESS"},  # live but not in the DB
+        known=set(),
+        abbrs={},
+        wp=lambda eid, timeout=None: {},  # never called — id is gated out
+    )
+    data = client.get("/api/replay-live").json()
+    assert data["games"] == []
+    assert data["has_pending"] is False
