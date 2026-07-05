@@ -27,14 +27,11 @@
             .sub { color: var(--text-muted); margin: 0 0 28px; }
             section { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 24px; }
             .desc { color: var(--text-muted); font-size: .9rem; margin: 0 0 16px; }
-            a.back { color: var(--orange-deep); text-decoration: none; font-size: .9rem; }
-            .cross { color: var(--text-muted); font-size: .9rem; margin: 0; }
-            .cross a { color: var(--orange-deep); }
         </style>
 </head>
 <body>
+%%SITE_NAV%%
 <div class="wrap">
-  <a class="back" href="/">&larr; Back to games</a>
   <h1>WNBA Power Rankings</h1>
   <p class="sub">Where every team stands — and how they're moving — by Elo rating.</p>
 
@@ -45,8 +42,6 @@
     <div id="elo-chart" class="chart"><p class="empty">Loading…</p></div>
     <div id="elo-legend" class="legend"></div>
   </section>
-
-  <p class="cross">See <a href="/transparency">how the model is calibrated</a>.</p>
 </div>
 
 <script>

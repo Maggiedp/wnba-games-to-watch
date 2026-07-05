@@ -25,9 +25,6 @@
             h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }
             .sub { color: var(--text-muted); margin: 0 0 8px; }
             .shape-key { color: var(--text-muted); font-size: .9rem; line-height: 1.45; margin: 0 0 24px; }
-            a.back { color: var(--orange-deep); text-decoration: none; font-size: .9rem; }
-            .cross { color: var(--text-muted); font-size: .9rem; margin: 28px 0 0; }
-            .cross a { color: var(--orange-deep); }
 
             .controls { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: center; margin: 0 0 24px; }
             .sort-pills { display: inline-flex; gap: 8px; }
@@ -67,8 +64,8 @@
         </style>
 </head>
 <body>
+%%SITE_NAV%%
 <div class="wrap">
-  <a class="back" href="/">&larr; Back to games</a>
   <h1>Replay Value</h1>
   <p class="sub">Which WNBA games were worth watching — ranked by the shape of the win-probability curve.</p>
   <p class="shape-key">Each line traces the <strong>winner's</strong> win probability from tip-off to the final buzzer — so every game climbs to the top. One that hugs the 50% midline was a nail-biter; one that jumps up early was a runaway.</p>
@@ -88,7 +85,6 @@
   <div id="replay-lead"></div>
   <div class="shape-grid" id="replay-grid"><p class="empty">Loading…</p></div>
 
-  <p class="cross">See <a href="/rankings">the power rankings</a> or <a href="/transparency">how the model is calibrated</a>.</p>
 </div>
 
 <script>

@@ -23,11 +23,7 @@
         </style>
     </head>
     <body>
-        <header class="header">
-            <div class="header-inner">
-                <a class="back-link" href="/">&larr; back to rankings</a>
-            </div>
-        </header>
+        {{ site_nav | safe }}
         <main>
             <p class="eyebrow">{{ meta_line | safe }}</p>
             <span class="live-pill" data-live-id="{{ espn_id }}"><span class="live-dot" aria-hidden="true"></span>LIVE</span>
