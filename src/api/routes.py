@@ -391,7 +391,12 @@ _SHARED_HEAD = """\
                 max-width: 1100px; margin: 16px auto 0;
                 border-top: 1px solid rgba(255,255,255,0.12);
             }
-            .site-nav--in-masthead .site-nav-inner { max-width: none; padding: 12px 0 0; }\
+            .site-nav--in-masthead .site-nav-inner { max-width: none; padding: 12px 0 0; }
+            /* Inner-page shell (transparency / rankings / replay). h1 is scoped to
+               .wrap so it can't leak onto the homepage .wordmark / detail .matchup h1s. */
+            .wrap { max-width: 920px; width: 100%; margin: 0 auto; padding: 24px 16px 64px; }
+            .wrap h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }
+            .sub { color: var(--text-muted); margin: 0 0 28px; }\
 """
 
 # SVG win-probability line-chart builder + live header for the game detail
