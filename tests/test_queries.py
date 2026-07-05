@@ -3430,6 +3430,7 @@ def test_daily_update_main_runs_legacy_espn_id_backfill_in_order(monkeypatch):
     monkeypatch.setattr(du, "init_db", record("init_db"))
     monkeypatch.setattr(du, "get_session", lambda: FakeSession())
     monkeypatch.setattr(du, "fetch_and_store_bpi_ratings", record("bpi"))
+    monkeypatch.setattr(du, "populate_team_style", record("team_style", ret=0))
     monkeypatch.setattr(du, "fetch_and_store_games", record("games", ret=[]))
     monkeypatch.setattr(du, "backfill_legacy_espn_ids", record("espn_ids", ret=0))
     monkeypatch.setattr(du, "backfill_missing_season_types", record("season_types"))
