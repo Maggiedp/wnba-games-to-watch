@@ -116,6 +116,13 @@ async def replay_page():
     return HTMLResponse(render_replay())
 
 
+@app.get("/style", response_class=HTMLResponse)
+async def style_page():
+    from src.api.routes import render_style
+
+    return HTMLResponse(render_style())
+
+
 @app.get("/game/{espn_id}", response_class=HTMLResponse)
 def game_detail(espn_id: str):
     from src.api.routes import render_game_detail

@@ -107,3 +107,13 @@ def test_team_style_endpoint_empty_when_no_data(client, env):
     r = client.get("/api/team-style")
     assert r.status_code == 200
     assert r.json()["teams"] == []
+
+
+def test_style_page_renders_with_nav(client):
+    r = client.get("/style")
+    assert r.status_code == 200
+    body = r.text
+    assert "Team Style" in body
+    assert 'id="style-grid"' in body
+    # Shared top nav present and links to the new page.
+    assert 'href="/style"' in body
