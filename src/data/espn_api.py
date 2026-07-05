@@ -25,6 +25,9 @@ def _canonical_name(name: str) -> str:
 
 SITE_API = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba"
 CORE_API = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba"
+# Team season aggregates (own + opponent splits) — a THIRD ESPN host beyond
+# SITE_API / CORE_API. Feeds the /style fingerprints.
+STATS_API = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/wnba/statistics/byteam"
 
 ET = ZoneInfo("America/New_York")
 # Schedule fetch horizon. Must extend through the Finals — WNBA playoffs run
@@ -145,6 +148,115 @@ def fetch_bpi_ratings() -> dict[str, float]:
     else:
         logger.info(f"Fetched BPI for {len(ratings)} teams from {season} season")
     return ratings
+
+
+def _index_maps(categories: list) -> dict[str, dict[str, int]]:
+    """{category_name: {stat_name: value_index}} from the top-level label schema
+    (only the entries that carry a `names` list)."""
+    out: dict[str, dict[str, int]] = {}
+    for c in categories:
+        names = c.get("names")
+        if names:
+            out[c["name"]] = {n: i for i, n in enumerate(names)}
+    return out
+
+
+def _split_values(team: dict, cat_name: str, split_id: str) -> Optional[list]:
+    for c in team.get("categories", []):
+        if c.get("name") == cat_name and str(c.get("splitId")) == split_id:
+            return c.get("values")
+    return None
+
+
+def _stat(values: Optional[list], idx: dict[str, int], name: str) -> Optional[float]:
+    """A finite float from `values` at the label `name`, or None."""
+    if values is None or name not in idx or idx[name] >= len(values):
+        return None
+    v = values[idx[name]]
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        return None
+    return float(v)
+
+
+def fetch_team_style_stats(season: int) -> list[dict]:
+    """Return raw play-style metrics per team for `season` (regular season).
+
+    One dict per team: {team, pace, three_pa_rate, ft_rate, oreb_pct,
+    assist_rate, def_pressure, games_played}. Teams missing any required field
+    are skipped (logged). Derived from ESPN's byteam own (splitId 0) + opponent
+    (splitId 900) offensive splits; possessions = FGA + 0.44*FTA - OREB + TOV.
+    """
+    data = _get(
+        STATS_API,
+        region="us",
+        lang="en",
+        contentorigin="espn",
+        season=season,
+        seasontype=2,
+    )
+    idx = _index_maps(data.get("categories", []))
+    off_idx = idx.get("offensive", {})
+    gen_idx = idx.get("general", {})
+    rows = []
+    for team in data.get("teams", []):
+        name = _canonical_name(team.get("team", {}).get("displayName", ""))
+        own = _split_values(team, "offensive", "0")
+        opp = _split_values(team, "offensive", "900")
+        gen = _split_values(team, "general", "0")
+        fgm = _stat(own, off_idx, "avgFieldGoalsMade")
+        fga = _stat(own, off_idx, "avgFieldGoalsAttempted")
+        tpa = _stat(own, off_idx, "avgThreePointFieldGoalsAttempted")
+        fta = _stat(own, off_idx, "avgFreeThrowsAttempted")
+        tov = _stat(own, off_idx, "avgTurnovers")
+        oreb = _stat(own, off_idx, "avgOffensiveRebounds")
+        ast = _stat(own, off_idx, "avgAssists")
+        oreb_pct = _stat(own, off_idx, "offensiveReboundPct")
+        o_fga = _stat(opp, off_idx, "avgFieldGoalsAttempted")
+        o_fta = _stat(opp, off_idx, "avgFreeThrowsAttempted")
+        o_tov = _stat(opp, off_idx, "avgTurnovers")
+        o_oreb = _stat(opp, off_idx, "avgOffensiveRebounds")
+        gp = _stat(gen, gen_idx, "gamesPlayed")
+        required = [
+            name,
+            fgm,
+            fga,
+            tpa,
+            fta,
+            tov,
+            oreb,
+            ast,
+            oreb_pct,
+            o_fga,
+            o_fta,
+            o_tov,
+            o_oreb,
+            gp,
+        ]
+        if any(x is None or x == "" for x in required) or fga <= 0 or fgm <= 0:
+            logger.warning("Skipping team-style row (incomplete): %r", name or "?")
+            continue
+        poss_own = fga + 0.44 * fta - oreb + tov
+        poss_opp = o_fga + 0.44 * o_fta - o_oreb + o_tov
+        if poss_own <= 0 or poss_opp <= 0:
+            logger.warning("Skipping team-style row (bad possessions): %r", name)
+            continue
+        rows.append(
+            {
+                "team": name,
+                "pace": (poss_own + poss_opp) / 2.0,
+                "three_pa_rate": tpa / fga,
+                "ft_rate": fta / fga,
+                "oreb_pct": oreb_pct,
+                "assist_rate": ast / fgm,
+                "def_pressure": o_tov / poss_opp,
+                "games_played": int(gp),
+            }
+        )
+    if not rows:
+        logger.error("Could not fetch team-style stats for %s season", season)
+    else:
+        logger.info("Fetched team-style stats for %d teams (%s)", len(rows), season)
+    return rows
 
 
 def fetch_games_for_range(
