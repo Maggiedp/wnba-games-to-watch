@@ -18,6 +18,7 @@ from src.data.espn_api import (
     fetch_live_win_probability,
     fetch_schedule_and_results,
     fetch_team_details,
+    fetch_team_style_stats,
     today_et,
 )
 from src.data.wnba_schedule import (
@@ -44,6 +45,7 @@ from src.db.queries import (
     upsert_game_shape,
     upsert_playoff_probability,
     upsert_team,
+    upsert_team_style,
 )
 from scripts.backfill_legacy_espn_ids import backfill_legacy_espn_ids
 from scripts.backfill_preseason_season_type import backfill_legacy_preseason
@@ -147,6 +149,40 @@ def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
 
     logger.info(f"Stored {len(team_details)} teams")
     return ratings
+
+
+def populate_team_style(session, season: int) -> int:
+    """Fetch ESPN byteam stats and upsert per-team play-style metrics for the
+    /style gallery. Non-fatal: a fetch failure logs and returns 0 (the page
+    degrades to 'styles unavailable'); the rest of the daily job continues."""
+    logger.info("Fetching team-style stats from ESPN...")
+    try:
+        stats = fetch_team_style_stats(season)
+    except Exception as e:  # ESPN outage / shape change must not fail the job
+        logger.warning("Team-style fetch failed (non-fatal): %s", e)
+        return 0
+    resolve = _make_team_id_resolver(session)
+    stored = 0
+    for s in stats:
+        team_id = resolve(s["team"])
+        if team_id is None:
+            logger.warning("Team-style: no team row for %r — skipping", s["team"])
+            continue
+        upsert_team_style(
+            session,
+            season=season,
+            team_id=team_id,
+            pace=s["pace"],
+            three_pa_rate=s["three_pa_rate"],
+            ft_rate=s["ft_rate"],
+            oreb_pct=s["oreb_pct"],
+            assist_rate=s["assist_rate"],
+            def_pressure=s["def_pressure"],
+            games_played=s["games_played"],
+        )
+        stored += 1
+    logger.info("Stored team-style for %d teams", stored)
+    return stored
 
 
 def fetch_and_store_games(session) -> list[dict]:
@@ -1194,6 +1230,7 @@ def main() -> int:
         session = get_session()
         try:
             fetch_and_store_bpi_ratings(session)
+            populate_team_style(session, int(today_et()[:4]))
             games = fetch_and_store_games(session)
             # Recover espn_id for legacy regular-season rows (the 2026 opener
             # through 2026-05-12, ingested before the espn_id column landed).
