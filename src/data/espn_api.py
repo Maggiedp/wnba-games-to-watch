@@ -246,7 +246,11 @@ def fetch_team_style_stats(season: int) -> list[dict]:
                 "pace": (poss_own + poss_opp) / 2.0,
                 "three_pa_rate": tpa / fga,
                 "ft_rate": fta / fga,
-                "oreb_pct": oreb_pct,
+                # ESPN's offensiveReboundPct arrives as a fraction (~0.20-0.30);
+                # scale to a true percent to match the "OREB%" label. Used
+                # directly (no OREB/(OREB+oppDREB) fallback) — ESPN reliably
+                # provides it (verified live across all teams).
+                "oreb_pct": oreb_pct * 100.0,
                 "assist_rate": ast / fgm,
                 "def_pressure": o_tov / poss_opp,
                 "games_played": int(gp),

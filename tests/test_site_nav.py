@@ -2,18 +2,19 @@
 to every view, marks the current page active, and the homepage footer is slimmed
 to meta links only."""
 
-# path -> the nav label marked active on that page. The four (href, label) pairs
+# path -> the nav label marked active on that page. The five (href, label) pairs
 # are also every link the nav must expose on every page (discoverability).
 NAV = (
     ("/", "Games"),
     ("/rankings", "Power rankings"),
     ("/replay", "Replay value"),
+    ("/style", "Team style"),
     ("/transparency", "Behind the numbers"),
 )
 
 
 def test_site_nav_on_every_page(client):
-    """Every page renders the nav, links to all four views, and marks exactly
+    """Every page renders the nav, links to all five views, and marks exactly
     its own view active."""
     for active_path, active_label in NAV:
         r = client.get(active_path)
