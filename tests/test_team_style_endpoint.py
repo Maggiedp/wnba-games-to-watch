@@ -117,3 +117,10 @@ def test_style_page_renders_with_nav(client):
     assert 'id="style-grid"' in body
     # Shared top nav present and links to the new page.
     assert 'href="/style"' in body
+
+
+def test_og_style_png(client):
+    r = client.get("/og-style.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content[:8] == b"\x89PNG\r\n\x1a\n"

@@ -207,6 +207,13 @@ def og_replay_image():
     return _png_response(render_replay_card(), _OG_STATIC_CACHE_S)
 
 
+@app.api_route("/og-style.png", methods=["GET", "HEAD"])
+def og_style_image():
+    from src.api.og_image import render_style_card
+
+    return _png_response(render_style_card(), _OG_STATIC_CACHE_S)
+
+
 @app.get("/api/games/today", response_model=list[GameResponse])
 def get_today_games():
     today = today_et()

@@ -164,6 +164,23 @@ def render_replay_card() -> bytes:
     return _to_png(img)
 
 
+@functools.cache
+def render_style_card() -> bytes:
+    """Static /style brand card (1200x630 PNG bytes). Content is constant."""
+    img, draw = _draw_base()
+    headline_font = _fit_font(draw, "Style", 1080, 150, 900.0)
+    _centered(draw, "Team", 190, headline_font, _OFFWHITE)
+    _centered(draw, "Style", 350, headline_font, _ORANGE)
+    _centered(
+        draw,
+        "How every WNBA team plays, as a fingerprint",
+        540,
+        _load_font(34, 400.0),
+        _MUTED,
+    )
+    return _to_png(img)
+
+
 def render_game_card(
     name_a: str,
     name_b: str,
