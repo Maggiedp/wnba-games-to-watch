@@ -16,6 +16,7 @@ from src.db.schema import (
     PlayoffProbability,
     SeasonConfig,
     Team,
+    TeamStyle,
 )
 
 
@@ -1171,3 +1172,54 @@ def get_shapes_by_espn_ids(
         return {}
     rows = session.query(GameShape).filter(GameShape.espn_id.in_(list(espn_ids))).all()
     return {row.espn_id: row for row in rows}
+
+
+def upsert_team_style(
+    session: Session,
+    *,
+    season: int,
+    team_id: int,
+    pace: float,
+    three_pa_rate: float,
+    ft_rate: float,
+    oreb_pct: float,
+    assist_rate: float,
+    def_pressure: float,
+    games_played: int,
+) -> TeamStyle:
+    """Insert or update the team_style row for (season, team_id). Idempotent;
+    commits per row (mirrors upsert_team — the daily job is single-instance)."""
+    row = (
+        session.query(TeamStyle)
+        .filter(TeamStyle.season == season, TeamStyle.team_id == team_id)
+        .first()
+    )
+    if row is None:
+        row = TeamStyle(season=season, team_id=team_id)
+        session.add(row)
+    row.pace = pace
+    row.three_pa_rate = three_pa_rate
+    row.ft_rate = ft_rate
+    row.oreb_pct = oreb_pct
+    row.assist_rate = assist_rate
+    row.def_pressure = def_pressure
+    row.games_played = games_played
+    session.commit()
+    return row
+
+
+def get_team_styles(session: Session, season: int) -> list[TeamStyle]:
+    """All team_style rows for a season (DB-only reader for /api/team-style)."""
+    return session.query(TeamStyle).filter(TeamStyle.season == season).all()
+
+
+def get_team_style_seasons(session: Session) -> list[int]:
+    """Distinct seasons present in team_style, newest first — lets the endpoint
+    default to the newest POPULATED season (mirrors get_shape_seasons)."""
+    rows = (
+        session.query(TeamStyle.season)
+        .distinct()
+        .order_by(TeamStyle.season.desc())
+        .all()
+    )
+    return [r[0] for r in rows]

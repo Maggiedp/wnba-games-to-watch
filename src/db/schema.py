@@ -178,6 +178,32 @@ class GameShape(Base):
     __table_args__ = (Index("idx_game_shapes_season", "season"),)
 
 
+class TeamStyle(Base):
+    """Per-team season style metrics (raw, league-relative normalization done at
+    read time). One row per (season, team_id). Populated daily from ESPN's
+    byteam statistics; powers the /style fingerprint gallery. A brand-new table,
+    so Base.metadata.create_all creates it — no ALTER needed in init_db."""
+
+    __tablename__ = "team_style"
+
+    id = Column(Integer, primary_key=True)
+    season = Column(Integer, nullable=False)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
+    pace = Column(Float, nullable=False)
+    three_pa_rate = Column(Float, nullable=False)
+    ft_rate = Column(Float, nullable=False)
+    oreb_pct = Column(Float, nullable=False)
+    assist_rate = Column(Float, nullable=False)
+    def_pressure = Column(Float, nullable=False)
+    games_played = Column(Integer, nullable=False)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("season", "team_id", name="uq_team_style_season_team"),
+        Index("idx_team_style_season", "season"),
+    )
+
+
 def get_database_url() -> str:
     db_url = os.getenv("DATABASE_URL", "sqlite:///./data/games_to_watch.db")
     if db_url.startswith("sqlite:///./"):
