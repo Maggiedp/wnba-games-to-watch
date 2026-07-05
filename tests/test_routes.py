@@ -882,7 +882,15 @@ def test_render_game_detail_known_game_renders_core_fields(session, team_ids):
     assert html is not None
     assert "Team A" in html and "Team B" in html
     assert "72" in html  # overall score
-    assert "back to rankings" in html
+    # The shared top nav replaces the old bespoke "back to rankings" link.
+    # A detail page is part of the "Games" section, so that item is active
+    # (and exactly one item is active, matching every other page).
+    assert 'class="site-nav"' in html
+    assert (
+        '<a href="/" class="site-nav-link is-active" aria-current="page">Games</a>'
+        in html
+    )
+    assert html.count('aria-current="page"') == 1
 
 
 def test_render_game_detail_shows_blurbs_and_h2h_empty_state(session, team_ids):

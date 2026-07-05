@@ -25,10 +25,8 @@
             h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }
             h2 { font-family: var(--display); font-size: 1.2rem; font-weight: 600; color: var(--navy); margin: 0 0 4px; }
             .sub { color: var(--text-muted); margin: 0 0 28px; }
-            .sub a { color: var(--orange-deep); }
             section { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 24px; }
             .desc { color: var(--text-muted); font-size: .9rem; margin: 0 0 16px; }
-            a.back { color: var(--orange-deep); text-decoration: none; font-size: .9rem; }
             .cal-layout { display: grid; grid-template-columns: auto 1fr; gap: 32px; align-items: center; }
             .cal-read p { margin: 0 0 12px; color: var(--text-muted); font-size: .92rem; line-height: 1.5; }
             .cal-foot { color: var(--text-subtle) !important; font-size: .82rem !important; }
@@ -37,11 +35,10 @@
         </style>
 </head>
 <body>
+%%SITE_NAV%%
 <div class="wrap">
-  <a class="back" href="/">&larr; Back to games</a>
   <h1>Behind the numbers</h1>
-  <p class="sub">How accurate the model has been.
-     See the <a href="/rankings">power rankings</a>.</p>
+  <p class="sub">How accurate the model has been.</p>
 
   <section>
     <h2>Win-probability calibration</h2>

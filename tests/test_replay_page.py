@@ -11,10 +11,11 @@ def test_replay_page_renders_with_tokens_replaced(client):
     assert "g.has_detail" in html  # archived-game link gating shipped
 
 
-def test_homepage_footer_links_to_replay(client):
+def test_homepage_nav_links_to_replay(client):
+    # /replay is reachable from the shared top nav (promoted out of the footer).
     r = client.get("/")
     assert r.status_code == 200
-    assert '<a href="/replay">Replay value</a>' in r.text
+    assert '<a href="/replay" class="site-nav-link">Replay value</a>' in r.text
 
 
 def test_replay_page_ships_midline_label_style(client):

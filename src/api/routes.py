@@ -365,7 +365,33 @@ _SHARED_HEAD = """\
             .shape-line { stroke-width: 1.6; stroke-linejoin: round; }
             .shape-doubt { fill: rgba(255,107,0,.09); }
             .shape-nadir { fill: var(--orange); }
-            .shape-mid-label { fill: var(--text-subtle); font-size: 11px; }\
+            .shape-mid-label { fill: var(--text-subtle); font-size: 11px; }
+            /* ---------- Site nav (shared across all pages) ---------- */
+            .site-nav { background: var(--navy); border-bottom: 3px solid var(--orange); }
+            .site-nav-inner {
+                max-width: 1100px; margin: 0 auto; padding: 12px 32px;
+                display: flex; flex-wrap: wrap; align-items: center; gap: 7px 24px;
+            }
+            .site-nav-link {
+                position: relative;
+                font-family: var(--body); font-size: 0.82rem; font-weight: 500;
+                letter-spacing: 0.03em; color: #b8c2d0; text-decoration: none;
+                white-space: nowrap; padding: 2px 0;
+                transition: color 0.15s ease;
+            }
+            .site-nav-link:hover, .site-nav-link:focus-visible { color: var(--orange); outline: none; }
+            .site-nav-link.is-active { color: #fff; }
+            .site-nav-link.is-active::after {
+                content: ""; position: absolute; left: 0; right: 0; bottom: -3px;
+                height: 2px; background: var(--orange); border-radius: 1px;
+            }
+            /* Homepage: nav nests inside the navy masthead instead of a standalone bar. */
+            .site-nav--in-masthead {
+                background: transparent; border-bottom: none;
+                max-width: 1100px; margin: 16px auto 0;
+                border-top: 1px solid rgba(255,255,255,0.12);
+            }
+            .site-nav--in-masthead .site-nav-inner { max-width: none; padding: 12px 0 0; }\
 """
 
 # SVG win-probability line-chart builder + live header for the game detail
@@ -398,8 +424,38 @@ _LINE_CHART_JS = _load_template("js/line_chart.js")
 # %%SHAPE_CHART_JS%% (pure/numeric — no shared.js dependency).
 _SHAPE_CHART_JS = _load_template("js/shape_chart.js")
 
+# Primary site views, promoted out of the footer into a top nav shared by every
+# page (homepage masthead + inner pages + detail). Each page marks its own entry
+# active; `in_masthead` is the homepage variant that nests inside the navy
+# masthead (transparent, hairline top rule) instead of the standalone navy bar.
+# Values are trusted literals — safe through the %%TOKEN%% / f-string paths.
+_SITE_NAV_ITEMS = (
+    ("games", "/", "Games"),
+    ("rankings", "/rankings", "Power rankings"),
+    ("replay", "/replay", "Replay value"),
+    ("transparency", "/transparency", "Behind the numbers"),
+)
+
+
+def _site_nav(active: str, in_masthead: bool = False) -> str:
+    links = []
+    for key, href, label in _SITE_NAV_ITEMS:
+        if key == active:
+            links.append(
+                f'<a href="{href}" class="site-nav-link is-active" aria-current="page">{label}</a>'
+            )
+        else:
+            links.append(f'<a href="{href}" class="site-nav-link">{label}</a>')
+    nav_cls = "site-nav site-nav--in-masthead" if in_masthead else "site-nav"
+    return (
+        f'<nav class="{nav_cls}" aria-label="Site views">'
+        f'<div class="site-nav-inner">{"".join(links)}</div></nav>'
+    )
+
+
 _HOMEPAGE_HTML = (
     _load_template("homepage.html")
+    .replace("%%SITE_NAV%%", _site_nav("games", in_masthead=True))
     .replace("%%SITE_TITLE%%", _SITE_TITLE)
     .replace("%%SITE_DESCRIPTION%%", _SITE_DESCRIPTION)
     .replace("%%SITE_URL%%", _SITE_URL)
@@ -411,6 +467,7 @@ _HOMEPAGE_HTML = (
 
 _TRANSPARENCY_HTML = (
     _load_template("transparency.html")
+    .replace("%%SITE_NAV%%", _site_nav("transparency"))
     .replace("%%SITE_TITLE%%", _SITE_TITLE)
     .replace("%%SITE_URL%%", _SITE_URL)
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
@@ -419,6 +476,7 @@ _TRANSPARENCY_HTML = (
 
 _RANKINGS_HTML = (
     _load_template("rankings.html")
+    .replace("%%SITE_NAV%%", _site_nav("rankings"))
     .replace("%%SITE_TITLE%%", _SITE_TITLE)
     .replace("%%SITE_URL%%", _SITE_URL)
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
@@ -428,6 +486,7 @@ _RANKINGS_HTML = (
 
 _REPLAY_HTML = (
     _load_template("replay.html")
+    .replace("%%SITE_NAV%%", _site_nav("replay"))
     .replace("%%SITE_TITLE%%", _SITE_TITLE)
     .replace("%%SITE_URL%%", _SITE_URL)
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
@@ -470,24 +529,6 @@ def render_game_detail(session: Session, espn_id: str) -> str | None:
 
 
 _DETAIL_STYLE = """
-            /* ---------- Header ---------- */
-            .header {
-                background: var(--navy);
-                color: white;
-                padding: 22px 32px 24px;
-                border-bottom: 4px solid var(--orange);
-            }
-            .header-inner { max-width: 760px; margin: 0 auto; }
-            .back-link {
-                font-family: var(--body);
-                font-size: 0.82rem;
-                font-weight: 500;
-                letter-spacing: 0.04em;
-                color: #b9c4d4;
-                text-decoration: none;
-            }
-            .back-link:hover { color: white; }
-
             /* ---------- Page shell ---------- */
             main {
                 max-width: 760px;
@@ -1086,6 +1127,10 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h, shape) -> str:
         h2h_section=_detail_h2h_section(game, team_a, team_b, h2h),
         shape_section=_detail_shape_section(shape),
         has_shape=shape is not None,
+        # A game detail page belongs to the "Games" section: mark it active so
+        # the nav shows current location (and "Games" doubles as back-to-list,
+        # the role the old bespoke back-link header used to fill).
+        site_nav=_site_nav("games"),
         shared_head=_SHARED_HEAD,
         detail_style=_DETAIL_STYLE,
         wp_chart_js=_WP_CHART_JS,
