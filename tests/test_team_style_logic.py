@@ -5,6 +5,53 @@ from src.db.queries import (
     upsert_team,
 )
 
+from src.scoring.team_style import AXES, compute_style_view
+
+
+def _row(team, abbr, gp, **metrics):
+    base = dict(
+        team_id=abs(hash(team)) % 100000,
+        team=team,
+        abbr=abbr,
+        pace=80.0,
+        three_pa_rate=0.30,
+        ft_rate=0.20,
+        oreb_pct=25.0,
+        assist_rate=0.55,
+        def_pressure=0.14,
+        games_played=gp,
+    )
+    base.update(metrics)
+    return base
+
+
+def test_compute_style_view_ranks_neighbors_descriptor():
+    rows = [
+        _row("Fast Team", "FAS", 30, pace=95.0, three_pa_rate=0.45),
+        _row("Slow Team", "SLO", 30, pace=70.0, three_pa_rate=0.22),
+        _row("Mid A", "MDA", 30, pace=82.0, three_pa_rate=0.31),
+        _row("Mid B", "MDB", 30, pace=83.0, three_pa_rate=0.32),
+    ]
+    view = {t["team"]: t for t in compute_style_view(rows)}
+
+    fast = view["Fast Team"]
+    assert fast["low_confidence"] is False
+    assert [a["key"] for a in fast["axes"]] == [k for k, _ in AXES]
+    pace_axis = next(a for a in fast["axes"] if a["key"] == "pace")
+    assert pace_axis["rank"] == 1 and pace_axis["of"] == 4
+    assert pace_axis["norm"] == 100.0
+    assert fast["descriptor"][0] == "Up-tempo"
+    assert fast["plays_like"][0]["abbr"] in {"MDA", "MDB"}
+    assert len(fast["chips"]) == 2
+
+
+def test_compute_style_view_low_confidence_gate():
+    rows = [_row("Rookie", "ROO", 2), _row("Vet", "VET", 30)]
+    view = {t["team"]: t for t in compute_style_view(rows)}
+    assert view["Rookie"]["low_confidence"] is True
+    assert view["Rookie"]["axes"] == []
+    assert view["Vet"]["low_confidence"] is True
+
 
 def test_upsert_and_read_team_style(env):
     session = env.get_session()
