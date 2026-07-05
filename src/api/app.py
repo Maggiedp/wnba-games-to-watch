@@ -41,12 +41,15 @@ from src.db.queries import (
     get_shape_seasons,
     get_team_abbrev_map,
     get_team_records,
+    get_team_style_seasons,
+    get_team_styles,
     get_teams_by_ids,
     get_upcoming_rankings,
 )
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
 from src.scoring.game_shape import compute_live_shape
+from src.scoring.team_style import compute_style_view
 
 logger = logging.getLogger(__name__)
 
@@ -716,6 +719,60 @@ async def get_replay_endpoint(season: int = Query(default=None)):
                 }
             )
         return {"season": season, "seasons": seasons, "games": games}
+    finally:
+        session.close()
+
+
+@app.get("/api/team-style")
+async def get_team_style_endpoint(season: int = Query(default=None)):
+    """Per-team play-style fingerprints for a season (DB-only). Normalizes the
+    raw team_style metrics league-relative and returns axes/chips/descriptor/
+    neighbors. Defaults to the newest POPULATED season (mirrors /api/replay).
+    W-L is attached only on a today request (current-season-to-date)."""
+    session = get_session()
+    try:
+        seasons = get_team_style_seasons(session)
+        if season is None:
+            season = seasons[0] if seasons else int(today_et()[:4])
+        style_rows = get_team_styles(session, season)
+        if not style_rows:
+            return {"season": season, "teams": []}
+        teams = get_teams_by_ids(session, {s.team_id for s in style_rows})
+        rows = []
+        for s in style_rows:
+            t = teams.get(s.team_id)
+            if t is None:
+                continue
+            rows.append(
+                {
+                    "team_id": s.team_id,
+                    "team": t.name,
+                    "abbr": t.abbreviation or "",
+                    "pace": s.pace,
+                    "three_pa_rate": s.three_pa_rate,
+                    "ft_rate": s.ft_rate,
+                    "oreb_pct": s.oreb_pct,
+                    "assist_rate": s.assist_rate,
+                    "def_pressure": s.def_pressure,
+                    "games_played": s.games_played,
+                }
+            )
+        view = compute_style_view(rows)
+        # Attach logo + W-L (today only) and sort by standings.
+        is_today = season == int(today_et()[:4])
+        records = get_team_records(session, season) if is_today else None
+        for v in view:
+            t = teams.get(v["team_id"])
+            v["logo_url"] = (t.logo_url or "") if t else ""
+            if records is not None:
+                v["wins"], v["losses"] = records.get(v["team_id"], (0, 0))
+            else:
+                v["wins"], v["losses"] = None, None
+        if records is not None:
+            view.sort(key=lambda v: (-(v["wins"] or 0), (v["losses"] or 0), v["team"]))
+        else:
+            view.sort(key=lambda v: v["team"])
+        return {"season": season, "teams": view}
     finally:
         session.close()
 
