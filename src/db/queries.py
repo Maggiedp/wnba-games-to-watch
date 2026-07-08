@@ -1228,3 +1228,13 @@ def get_team_style_seasons(session: Session) -> list[int]:
         .all()
     )
     return [r[0] for r in rows]
+
+
+def get_team_style_season_counts(session: Session) -> dict[int, int]:
+    """Row (team) count per season in team_style — a completeness proxy. The
+    daily refresh fails closed when a batch covers fewer teams than the prior
+    snapshot, and the endpoint avoids defaulting to a sparse newest season."""
+    counts: dict[int, int] = {}
+    for (season,) in session.query(TeamStyle.season).all():
+        counts[season] = counts.get(season, 0) + 1
+    return counts

@@ -41,6 +41,7 @@ from src.db.queries import (
     get_shape_seasons,
     get_team_abbrev_map,
     get_team_records,
+    get_team_style_season_counts,
     get_team_style_seasons,
     get_team_styles,
     get_teams_by_ids,
@@ -747,7 +748,18 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
     try:
         seasons = get_team_style_seasons(session)
         if season is None:
-            season = seasons[0] if seasons else int(today_et()[:4])
+            if not seasons:
+                season = int(today_et()[:4])
+            else:
+                season = seasons[0]
+                # Don't default to a sparse newest season (e.g. a bootstrap
+                # refresh early in a new season): if it has fewer teams than the
+                # previous season, fall back to that previous complete season.
+                counts = get_team_style_season_counts(session)
+                if len(seasons) >= 2 and counts.get(seasons[0], 0) < counts.get(
+                    seasons[1], 0
+                ):
+                    season = seasons[1]
         style_rows = get_team_styles(session, season)
         if not style_rows:
             return {"season": season, "teams": []}

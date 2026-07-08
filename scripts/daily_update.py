@@ -37,6 +37,7 @@ from src.db.queries import (
     get_team_abbrev_map,
     get_team_by_id,
     get_team_by_name,
+    get_team_style_season_counts,
     get_teams_by_ids,
     replace_elo_history,
     save_importance_max_swing,
@@ -152,21 +153,25 @@ def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
 
 
 def populate_team_style(session, season: int) -> int:
-    """Fetch ESPN byteam stats and upsert per-team play-style metrics for the
-    /style gallery. Fully non-fatal AND atomic for the season: the whole batch is
-    staged and committed once, and ANY failure (fetch, a malformed row, or a DB
-    write) rolls back and returns 0 — leaving the previous complete snapshot
-    intact. A secondary style feature must never take down the daily job, nor
-    publish a mixed old/new league-relative snapshot from a half-finished run."""
+    """Fetch ESPN byteam stats and refresh per-team play-style metrics for the
+    /style gallery. Atomic AND fail-closed on an incomplete refresh: the batch is
+    staged and committed once, but if it covers FEWER teams than the prior
+    snapshot (a dropped/renamed/unresolved team), or any error occurs, it rolls
+    back and returns 0 — the previous complete snapshot stays live rather than a
+    mixed old/new league-relative one. Non-fatal: never takes down the daily job."""
     logger.info("Fetching team-style stats from ESPN...")
     try:
         stats = fetch_team_style_stats(season)
         resolve = _make_team_id_resolver(session)
+        prior_count = get_team_style_season_counts(session).get(season, 0)
         stored = 0
         for s in stats:
             team_id = resolve(s["team"])
             if team_id is None:
-                logger.warning("Team-style: no team row for %r — skipping", s["team"])
+                # A byteam name that doesn't map to a team row silently drops
+                # that team; log loudly. The short-batch guard below then keeps
+                # the previous complete snapshot instead of a partial one.
+                logger.error("Team-style: no team row for %r — dropped", s["team"])
                 continue
             upsert_team_style(
                 session,
@@ -183,6 +188,18 @@ def populate_team_style(session, season: int) -> int:
                 commit=False,
             )
             stored += 1
+        # Fail closed on an incomplete refresh: fewer teams than last time means
+        # a dropped/renamed team, and committing would publish a mixed old/new
+        # league-relative snapshot. Keep the previous complete one. (prior_count
+        # == 0 is the season's first refresh — bootstrap, accept whatever ESPN has.)
+        if prior_count and stored < prior_count:
+            session.rollback()
+            logger.error(
+                "Team-style refresh short (%d of prior %d) — keeping previous snapshot",
+                stored,
+                prior_count,
+            )
+            return 0
         session.commit()  # atomic: the whole season refresh, or nothing
         logger.info("Stored team-style for %d teams", stored)
         return stored

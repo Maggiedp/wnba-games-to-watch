@@ -177,3 +177,91 @@ def test_og_style_png(client):
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
     assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_populate_team_style_aborts_short_refresh(env):
+    """A refresh covering fewer teams than the prior snapshot (a dropped/renamed
+    team) aborts wholesale — the previous complete snapshot stays live, not a
+    mixed old/new one."""
+    from scripts import daily_update
+
+    session = env.get_session()
+    try:
+        ny = upsert_team(session, "New York Liberty", 3.0, abbreviation="NY")
+        lv = upsert_team(session, "Las Vegas Aces", 4.0, abbreviation="LV")
+        for tid, pace in ((ny.id, 80.0), (lv.id, 81.0)):
+            upsert_team_style(
+                session,
+                season=2026,
+                team_id=tid,
+                pace=pace,
+                three_pa_rate=0.30,
+                ft_rate=0.20,
+                oreb_pct=25.0,
+                assist_rate=0.55,
+                def_pressure=0.14,
+                opp_3pa_rate=0.35,
+                games_played=20,
+            )
+        # Next run returns only NY (LV dropped from the feed) -> short -> abort.
+        short = [
+            {
+                "team": "New York Liberty",
+                "pace": 99.0,
+                "three_pa_rate": 0.40,
+                "ft_rate": 0.25,
+                "oreb_pct": 28.0,
+                "assist_rate": 0.60,
+                "def_pressure": 0.16,
+                "opp_3pa_rate": 0.34,
+                "games_played": 25,
+            }
+        ]
+        with patch.object(daily_update, "fetch_team_style_stats", return_value=short):
+            assert daily_update.populate_team_style(session, 2026) == 0
+        session.expire_all()
+        paces = {r.team_id: r.pace for r in get_team_styles(session, 2026)}
+        assert paces == {ny.id: 80.0, lv.id: 81.0}  # prior intact; NY not advanced
+    finally:
+        session.close()
+
+
+def test_team_style_endpoint_falls_back_from_sparse_newer_season(client, env):
+    """The endpoint doesn't default to a sparse newest season: if 2026 has fewer
+    teams than 2025, it serves the complete 2025."""
+    session = env.get_session()
+    try:
+        ny = upsert_team(session, "New York Liberty", 1.0, abbreviation="NY")
+        lv = upsert_team(session, "Las Vegas Aces", 1.0, abbreviation="LV")
+        for tid in (ny.id, lv.id):  # 2025 complete: 2 teams
+            upsert_team_style(
+                session,
+                season=2025,
+                team_id=tid,
+                pace=80.0,
+                three_pa_rate=0.30,
+                ft_rate=0.20,
+                oreb_pct=25.0,
+                assist_rate=0.55,
+                def_pressure=0.14,
+                opp_3pa_rate=0.35,
+                games_played=20,
+            )
+        upsert_team_style(  # 2026 sparse: 1 team
+            session,
+            season=2026,
+            team_id=ny.id,
+            pace=85.0,
+            three_pa_rate=0.30,
+            ft_rate=0.20,
+            oreb_pct=25.0,
+            assist_rate=0.55,
+            def_pressure=0.14,
+            opp_3pa_rate=0.35,
+            games_played=20,
+        )
+    finally:
+        session.close()
+    r = client.get("/api/team-style")
+    assert r.status_code == 200
+    assert r.json()["season"] == 2025  # fell back from the sparse 2026
