@@ -1238,3 +1238,12 @@ def get_team_style_season_counts(session: Session) -> dict[int, int]:
     for (season,) in session.query(TeamStyle.season).all():
         counts[season] = counts.get(season, 0) + 1
     return counts
+
+
+def delete_team_style_season(session: Session, season: int) -> None:
+    """Delete all team_style rows for a season (no commit). The daily refresh
+    replaces the whole season in one transaction so a team absent from the feed
+    (a rename/remap/drop) can't leave a stale row poisoning the league view."""
+    session.query(TeamStyle).filter(TeamStyle.season == season).delete(
+        synchronize_session=False
+    )

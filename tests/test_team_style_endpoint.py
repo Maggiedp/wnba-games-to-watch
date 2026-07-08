@@ -23,7 +23,7 @@ def test_populate_team_style_upserts_rows(env):
                 "games_played": 30,
             },
             {
-                "team": "Unknown Team",
+                "team": "Las Vegas Aces",
                 "pace": 80.0,
                 "three_pa_rate": 0.30,
                 "ft_rate": 0.20,
@@ -35,11 +35,48 @@ def test_populate_team_style_upserts_rows(env):
             },
         ]
         with patch.object(daily_update, "fetch_team_style_stats", return_value=fake):
-            daily_update.populate_team_style(session, 2026)
-        rows = get_team_styles(session, 2026)
-        # Only the resolvable team is stored; the unknown name is skipped.
-        assert len(rows) == 1
-        assert rows[0].pace == 84.0
+            assert daily_update.populate_team_style(session, 2026) == 2
+        paces = sorted(r.pace for r in get_team_styles(session, 2026))
+        assert paces == [80.0, 84.0]
+    finally:
+        session.close()
+
+
+def test_populate_team_style_aborts_on_unmapped_team(env):
+    """An unmapped byteam name (rename / missing alias) fails the whole refresh
+    closed rather than silently dropping a team — even on the first refresh."""
+    from scripts import daily_update
+
+    session = env.get_session()
+    try:
+        upsert_team(session, "New York Liberty", 3.0, abbreviation="NY")
+        fake = [
+            {
+                "team": "New York Liberty",
+                "pace": 84.0,
+                "three_pa_rate": 0.34,
+                "ft_rate": 0.22,
+                "oreb_pct": 27.0,
+                "assist_rate": 0.62,
+                "def_pressure": 0.15,
+                "opp_3pa_rate": 0.36,
+                "games_played": 30,
+            },
+            {
+                "team": "Unknown Team",  # doesn't map to a team row
+                "pace": 80.0,
+                "three_pa_rate": 0.30,
+                "ft_rate": 0.20,
+                "oreb_pct": 25.0,
+                "assist_rate": 0.55,
+                "def_pressure": 0.14,
+                "opp_3pa_rate": 0.34,
+                "games_played": 30,
+            },
+        ]
+        with patch.object(daily_update, "fetch_team_style_stats", return_value=fake):
+            assert daily_update.populate_team_style(session, 2026) == 0
+        assert get_team_styles(session, 2026) == []  # nothing committed
     finally:
         session.close()
 
@@ -265,3 +302,53 @@ def test_team_style_endpoint_falls_back_from_sparse_newer_season(client, env):
     r = client.get("/api/team-style")
     assert r.status_code == 200
     assert r.json()["season"] == 2025  # fell back from the sparse 2026
+
+
+def test_populate_team_style_replaces_stale_on_equal_count_drift(env):
+    """Equal-count drift: a team remapped to a new id, with its old row still
+    present, must NOT leave a stale row — the season is replaced wholesale, so
+    the count guard passing (same team count) doesn't hide a mixed snapshot."""
+    from scripts import daily_update
+
+    session = env.get_session()
+    try:
+        a = upsert_team(session, "Team A", 1.0, abbreviation="AA")
+        b_old = upsert_team(session, "Team B", 1.0, abbreviation="BB")
+        for tid, pace in ((a.id, 80.0), (b_old.id, 70.0)):  # prior snapshot: A, B
+            upsert_team_style(
+                session,
+                season=2026,
+                team_id=tid,
+                pace=pace,
+                three_pa_rate=0.30,
+                ft_rate=0.20,
+                oreb_pct=25.0,
+                assist_rate=0.55,
+                def_pressure=0.14,
+                opp_3pa_rate=0.35,
+                games_played=20,
+            )
+        # ESPN remaps B -> a new team row C; the feed returns A + C (same count).
+        c_new = upsert_team(session, "Team C", 1.0, abbreviation="CC")
+
+        def _row(team, pace):
+            return {
+                "team": team,
+                "pace": pace,
+                "three_pa_rate": 0.40,
+                "ft_rate": 0.25,
+                "oreb_pct": 28.0,
+                "assist_rate": 0.60,
+                "def_pressure": 0.16,
+                "opp_3pa_rate": 0.34,
+                "games_played": 25,
+            }
+
+        drift = [_row("Team A", 88.0), _row("Team C", 72.0)]
+        with patch.object(daily_update, "fetch_team_style_stats", return_value=drift):
+            assert daily_update.populate_team_style(session, 2026) == 2
+        session.expire_all()
+        ids = {r.team_id for r in get_team_styles(session, 2026)}
+        assert ids == {a.id, c_new.id}  # old B row replaced out, not left stale
+    finally:
+        session.close()

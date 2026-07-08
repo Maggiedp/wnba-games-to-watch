@@ -27,6 +27,7 @@ from src.data.wnba_schedule import (
 )
 from src.db.queries import (
     delete_importance_ceilings_before,
+    delete_team_style_season,
     get_all_teams,
     get_completed_games,
     get_completed_games_missing_excitement,
@@ -154,25 +155,46 @@ def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
 
 def populate_team_style(session, season: int) -> int:
     """Fetch ESPN byteam stats and refresh per-team play-style metrics for the
-    /style gallery. Atomic AND fail-closed on an incomplete refresh: the batch is
-    staged and committed once, but if it covers FEWER teams than the prior
-    snapshot (a dropped/renamed/unresolved team), or any error occurs, it rolls
-    back and returns 0 — the previous complete snapshot stays live rather than a
-    mixed old/new league-relative one. Non-fatal: never takes down the daily job."""
+    /style gallery. Atomically REPLACES the whole season (delete + insert in one
+    transaction) so a team absent from the feed can't leave a stale row. Fails
+    closed: a short batch (fewer teams than the prior snapshot) or any error keeps
+    the previous complete snapshot rather than publish a partial/mixed league-
+    relative one. Non-fatal: never takes down the daily job."""
     logger.info("Fetching team-style stats from ESPN...")
     try:
         stats = fetch_team_style_stats(season)
         resolve = _make_team_id_resolver(session)
         prior_count = get_team_style_season_counts(session).get(season, 0)
-        stored = 0
+        resolved = []
         for s in stats:
             team_id = resolve(s["team"])
             if team_id is None:
-                # A byteam name that doesn't map to a team row silently drops
-                # that team; log loudly. The short-batch guard below then keeps
-                # the previous complete snapshot instead of a partial one.
-                logger.error("Team-style: no team row for %r — dropped", s["team"])
-                continue
+                # An unmapped byteam name (a rename / missing alias) would drop a
+                # team from the snapshot. Fail closed rather than publish an
+                # incomplete league — including on the season's first refresh,
+                # which has no prior-count baseline to catch the shortfall.
+                logger.error(
+                    "Team-style: unmapped team %r — aborting refresh", s["team"]
+                )
+                return 0
+            resolved.append((team_id, s))
+        stored = len(resolved)
+        # Fail closed on a short refresh (a dropped/renamed/unresolved team):
+        # keep the previous complete snapshot rather than a partial one. Nothing
+        # has been staged yet, so the prior rows are untouched. (prior_count == 0
+        # is the season's first refresh — bootstrap, accept whatever ESPN has.)
+        if prior_count and stored < prior_count:
+            logger.error(
+                "Team-style refresh short (%d of prior %d) — keeping previous snapshot",
+                stored,
+                prior_count,
+            )
+            return 0
+        # Replace the whole season in one transaction so a team absent from this
+        # run (rename/remap/drop) can't leave a stale row — the served snapshot
+        # is exactly this refresh, never a mixed old/new one (equal-count drift).
+        delete_team_style_season(session, season)
+        for team_id, s in resolved:
             upsert_team_style(
                 session,
                 season=season,
@@ -187,20 +209,7 @@ def populate_team_style(session, season: int) -> int:
                 games_played=s["games_played"],
                 commit=False,
             )
-            stored += 1
-        # Fail closed on an incomplete refresh: fewer teams than last time means
-        # a dropped/renamed team, and committing would publish a mixed old/new
-        # league-relative snapshot. Keep the previous complete one. (prior_count
-        # == 0 is the season's first refresh — bootstrap, accept whatever ESPN has.)
-        if prior_count and stored < prior_count:
-            session.rollback()
-            logger.error(
-                "Team-style refresh short (%d of prior %d) — keeping previous snapshot",
-                stored,
-                prior_count,
-            )
-            return 0
-        session.commit()  # atomic: the whole season refresh, or nothing
+        session.commit()  # atomic: the whole season replaced, or nothing
         logger.info("Stored team-style for %d teams", stored)
         return stored
     except Exception as e:  # fetch outage/shape change, malformed row, or DB error
