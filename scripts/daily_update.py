@@ -153,37 +153,43 @@ def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
 
 def populate_team_style(session, season: int) -> int:
     """Fetch ESPN byteam stats and upsert per-team play-style metrics for the
-    /style gallery. Non-fatal: a fetch failure logs and returns 0 (the page
-    degrades to 'styles unavailable'); the rest of the daily job continues."""
+    /style gallery. Fully non-fatal AND atomic for the season: the whole batch is
+    staged and committed once, and ANY failure (fetch, a malformed row, or a DB
+    write) rolls back and returns 0 — leaving the previous complete snapshot
+    intact. A secondary style feature must never take down the daily job, nor
+    publish a mixed old/new league-relative snapshot from a half-finished run."""
     logger.info("Fetching team-style stats from ESPN...")
     try:
         stats = fetch_team_style_stats(season)
-    except Exception as e:  # ESPN outage / shape change must not fail the job
-        logger.warning("Team-style fetch failed (non-fatal): %s", e)
+        resolve = _make_team_id_resolver(session)
+        stored = 0
+        for s in stats:
+            team_id = resolve(s["team"])
+            if team_id is None:
+                logger.warning("Team-style: no team row for %r — skipping", s["team"])
+                continue
+            upsert_team_style(
+                session,
+                season=season,
+                team_id=team_id,
+                pace=s["pace"],
+                three_pa_rate=s["three_pa_rate"],
+                ft_rate=s["ft_rate"],
+                oreb_pct=s["oreb_pct"],
+                assist_rate=s["assist_rate"],
+                def_pressure=s["def_pressure"],
+                opp_3pa_rate=s["opp_3pa_rate"],
+                games_played=s["games_played"],
+                commit=False,
+            )
+            stored += 1
+        session.commit()  # atomic: the whole season refresh, or nothing
+        logger.info("Stored team-style for %d teams", stored)
+        return stored
+    except Exception as e:  # fetch outage/shape change, malformed row, or DB error
+        session.rollback()
+        logger.warning("Team-style populate failed (non-fatal): %s", e)
         return 0
-    resolve = _make_team_id_resolver(session)
-    stored = 0
-    for s in stats:
-        team_id = resolve(s["team"])
-        if team_id is None:
-            logger.warning("Team-style: no team row for %r — skipping", s["team"])
-            continue
-        upsert_team_style(
-            session,
-            season=season,
-            team_id=team_id,
-            pace=s["pace"],
-            three_pa_rate=s["three_pa_rate"],
-            ft_rate=s["ft_rate"],
-            oreb_pct=s["oreb_pct"],
-            assist_rate=s["assist_rate"],
-            def_pressure=s["def_pressure"],
-            opp_3pa_rate=s["opp_3pa_rate"],
-            games_played=s["games_played"],
-        )
-        stored += 1
-    logger.info("Stored team-style for %d teams", stored)
-    return stored
 
 
 def fetch_and_store_games(session) -> list[dict]:

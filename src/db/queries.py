@@ -1187,9 +1187,11 @@ def upsert_team_style(
     def_pressure: float,
     opp_3pa_rate: float,
     games_played: int,
+    commit: bool = True,
 ) -> TeamStyle:
-    """Insert or update the team_style row for (season, team_id). Idempotent;
-    commits per row (mirrors upsert_team — the daily job is single-instance)."""
+    """Insert or update the team_style row for (season, team_id). Idempotent.
+    Commits by default (mirrors upsert_team); pass commit=False to stage the row
+    in the caller's transaction so a whole-season refresh can commit atomically."""
     row = (
         session.query(TeamStyle)
         .filter(TeamStyle.season == season, TeamStyle.team_id == team_id)
@@ -1206,7 +1208,8 @@ def upsert_team_style(
     row.def_pressure = def_pressure
     row.opp_3pa_rate = opp_3pa_rate
     row.games_played = games_played
-    session.commit()
+    if commit:
+        session.commit()
     return row
 
 
