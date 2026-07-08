@@ -67,6 +67,8 @@ def test_fetch_team_style_stats_derives_metrics():
     # pace = (79.6 + 82.16)/2 = 80.88 ; def_pressure = 16/82.16
     assert abs(r["pace"] - 80.88) < 1e-6
     assert abs(r["def_pressure"] - 16 / 82.16) < 1e-9
+    # opp 3PA rate = opponent 3PA / opponent FGA = 18 / 68
+    assert abs(r["opp_3pa_rate"] - 18 / 68) < 1e-9
 
 
 def test_fetch_team_style_stats_skips_incomplete_team():

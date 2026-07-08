@@ -1185,6 +1185,7 @@ def upsert_team_style(
     oreb_pct: float,
     assist_rate: float,
     def_pressure: float,
+    opp_3pa_rate: float,
     games_played: int,
 ) -> TeamStyle:
     """Insert or update the team_style row for (season, team_id). Idempotent;
@@ -1203,6 +1204,7 @@ def upsert_team_style(
     row.oreb_pct = oreb_pct
     row.assist_rate = assist_rate
     row.def_pressure = def_pressure
+    row.opp_3pa_rate = opp_3pa_rate
     row.games_played = games_played
     session.commit()
     return row

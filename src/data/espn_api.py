@@ -215,6 +215,7 @@ def fetch_team_style_stats(season: int) -> list[dict]:
         o_fta = _stat(opp, off_idx, "avgFreeThrowsAttempted")
         o_tov = _stat(opp, off_idx, "avgTurnovers")
         o_oreb = _stat(opp, off_idx, "avgOffensiveRebounds")
+        o_3pa = _stat(opp, off_idx, "avgThreePointFieldGoalsAttempted")
         gp = _stat(gen, gen_idx, "gamesPlayed")
         required = [
             name,
@@ -230,6 +231,7 @@ def fetch_team_style_stats(season: int) -> list[dict]:
             o_fta,
             o_tov,
             o_oreb,
+            o_3pa,
             gp,
         ]
         if any(x is None or x == "" for x in required) or fga <= 0 or fgm <= 0:
@@ -253,6 +255,10 @@ def fetch_team_style_stats(season: int) -> list[dict]:
                 "oreb_pct": oreb_pct * 100.0,
                 "assist_rate": ast / fgm,
                 "def_pressure": o_tov / poss_opp,
+                # Opponent 3-point attempt rate — how 3-heavy opponents' shots
+                # are against this team (perimeter-defense identity: concede vs
+                # limit the arc). A defensive-STYLE axis, not quality.
+                "opp_3pa_rate": o_3pa / o_fga,
                 "games_played": int(gp),
             }
         )

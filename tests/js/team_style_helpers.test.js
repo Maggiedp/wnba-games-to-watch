@@ -37,3 +37,15 @@ test('buildRadarSvg pushes higher norms further from center', () => {
   // Top vertex (i=0, angle -90deg) sits higher (smaller y) when norm is larger.
   assert.ok(yTopFar < yTopNear);
 });
+
+test('buildRadarSvg labels each spoke from the axis key', () => {
+  const axes = [
+    { key: 'pace', norm: 50 }, { key: 'three_pa_rate', norm: 50 },
+    { key: 'ft_rate', norm: 50 }, { key: 'oreb_pct', norm: 50 },
+    { key: 'assist_rate', norm: 50 }, { key: 'def_pressure', norm: 50 },
+  ];
+  const svg = buildRadarSvg(axes);
+  for (const label of ['Pace', '3PA', 'FT', 'OREB', 'AST', 'Def']) {
+    assert.ok(svg.includes(`>${label}</text>`), `has ${label} label`);
+  }
+});

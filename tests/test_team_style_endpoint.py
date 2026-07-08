@@ -19,6 +19,7 @@ def test_populate_team_style_upserts_rows(env):
                 "oreb_pct": 27.0,
                 "assist_rate": 0.62,
                 "def_pressure": 0.15,
+                "opp_3pa_rate": 0.36,
                 "games_played": 30,
             },
             {
@@ -29,6 +30,7 @@ def test_populate_team_style_upserts_rows(env):
                 "oreb_pct": 25.0,
                 "assist_rate": 0.55,
                 "def_pressure": 0.14,
+                "opp_3pa_rate": 0.34,
                 "games_played": 30,
             },
         ]
@@ -81,6 +83,7 @@ def _seed_style(env, season=2026):
                 oreb_pct=25.0,
                 assist_rate=0.55,
                 def_pressure=0.14,
+                opp_3pa_rate=0.35,
                 games_played=30,
             )
     finally:
@@ -96,7 +99,7 @@ def test_team_style_endpoint_shape(client, env):
     assert len(data["teams"]) == 4
     ny = next(t for t in data["teams"] if t["abbr"] == "NY")
     assert ny["low_confidence"] is False
-    assert len(ny["axes"]) == 6
+    assert len(ny["axes"]) == 7
     assert ny["descriptor"]
     assert ny["plays_like"]
     # W-L attached on a today (default) request even with no games -> 0-0.

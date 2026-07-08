@@ -195,6 +195,7 @@ class TeamStyle(Base):
     oreb_pct = Column(Float, nullable=False)
     assist_rate = Column(Float, nullable=False)
     def_pressure = Column(Float, nullable=False)
+    opp_3pa_rate = Column(Float, nullable=False)
     games_played = Column(Integer, nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 

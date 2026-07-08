@@ -35,10 +35,11 @@
             .style-team img { width: 22px; height: 22px; object-fit: contain; }
             .style-name { font-family: var(--display); font-weight: 600; color: var(--navy); }
             .style-record { color: var(--text-subtle); font-size: .8rem; }
-            .radar { display: block; margin: 6px auto; }
+            .radar { display: block; width: 100%; max-width: 210px; height: auto; margin: 6px auto; }
             .radar-grid { fill: none; stroke: var(--line); }
             .radar-mid { stroke-dasharray: 2 3; }
             .radar-shape { fill: var(--orange); fill-opacity: .18; stroke: var(--orange-deep); stroke-width: 2; }
+            .radar-axis { font-size: 8.5px; fill: var(--text-subtle); }
             .style-descriptor { color: var(--orange-deep); font-weight: 600; font-size: .82rem; margin: 4px 0 8px; }
             .style-chips { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-bottom: 8px; }
             .chip { background: var(--surface-2, #f2f4f7); color: var(--text-muted); border-radius: 999px; padding: 2px 10px; font-size: .72rem; }
@@ -53,11 +54,11 @@
   <h1>Team Style</h1>
   <p class="sub">How every WNBA team plays — a fingerprint of tempo, shot profile, ball movement and defense.</p>
   <div class="style-key">
-    Each spoke is scaled <strong>0–100 vs the league</strong> (further out = more). The six axes:
+    Each spoke is scaled <strong>0–100 vs the league</strong> (further out = more). The seven axes — five offense, two defense:
     <ul>
-      <li><strong>Pace</strong> — possessions per game · <strong>3PA rate</strong> — how much they shoot threes</li>
-      <li><strong>FT rate</strong> — how much they get to the line · <strong>OREB%</strong> — crashing the offensive glass</li>
-      <li><strong>Assist rate</strong> — ball movement · <strong>Def. pressure</strong> — forcing turnovers</li>
+      <li><strong>Pace</strong> — possessions/game · <strong>3PA</strong> — how much they shoot threes · <strong>FT</strong> — how much they get to the line</li>
+      <li><strong>OREB</strong> — crashing the offensive glass · <strong>AST</strong> — share of baskets assisted (ball movement)</li>
+      <li><strong>Def</strong> — forcing opponent turnovers · <strong>3sAl</strong> — how many threes opponents attempt (concede vs limit the arc)</li>
     </ul>
   </div>
 
@@ -81,6 +82,9 @@
   }
 
   function playsLikeHtml(t) {
+    // Additive: only shown when there's a confident single comp (server gates
+    // it); otherwise nothing, so most cards stay clean rather than reading "no
+    // twin" on half the league.
     if (!t.plays_like.length) return '';
     const names = t.plays_like.map(p => escapeHtml(p.abbr)).join(' · ');
     return `<div class="plays-like">Plays like: <strong>${names}</strong></div>`;

@@ -768,6 +768,7 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
                     "oreb_pct": s.oreb_pct,
                     "assist_rate": s.assist_rate,
                     "def_pressure": s.def_pressure,
+                    "opp_3pa_rate": s.opp_3pa_rate,
                     "games_played": s.games_played,
                 }
             )

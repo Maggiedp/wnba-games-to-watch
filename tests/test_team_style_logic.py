@@ -19,6 +19,7 @@ def _row(team, abbr, gp, **metrics):
         oreb_pct=25.0,
         assist_rate=0.55,
         def_pressure=0.14,
+        opp_3pa_rate=0.35,
         games_played=gp,
     )
     base.update(metrics)
@@ -53,6 +54,21 @@ def test_compute_style_view_low_confidence_gate():
     assert view["Vet"]["low_confidence"] is True
 
 
+def test_neighbor_gate_hides_ambiguous_twin():
+    # Only pace varies. Target sits exactly between Low and High (equidistant),
+    # so it has no single clear nearest -> plays_like empty. High and Twin are a
+    # clear pair -> High shows Twin.
+    rows = [
+        _row("Target", "TGT", 30, pace=80.0),
+        _row("Low", "LOW", 30, pace=60.0),
+        _row("High", "HIG", 30, pace=100.0),
+        _row("Twin", "TWN", 30, pace=99.0),
+    ]
+    view = {t["team"]: t for t in compute_style_view(rows)}
+    assert view["Target"]["plays_like"] == []
+    assert view["High"]["plays_like"][0]["abbr"] == "TWN"
+
+
 def test_upsert_and_read_team_style(env):
     session = env.get_session()
     try:
@@ -67,6 +83,7 @@ def test_upsert_and_read_team_style(env):
             oreb_pct=27.5,
             assist_rate=0.62,
             def_pressure=0.15,
+            opp_3pa_rate=0.30,
             games_played=30,
         )
         # Idempotent: second upsert updates, does not duplicate.
@@ -80,6 +97,7 @@ def test_upsert_and_read_team_style(env):
             oreb_pct=27.5,
             assist_rate=0.62,
             def_pressure=0.15,
+            opp_3pa_rate=0.30,
             games_played=31,
         )
         rows = get_team_styles(session, 2026)
