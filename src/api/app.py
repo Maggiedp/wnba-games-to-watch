@@ -41,12 +41,16 @@ from src.db.queries import (
     get_shape_seasons,
     get_team_abbrev_map,
     get_team_records,
+    get_team_style_season_counts,
+    get_team_style_seasons,
+    get_team_styles,
     get_teams_by_ids,
     get_upcoming_rankings,
 )
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
 from src.scoring.game_shape import compute_live_shape
+from src.scoring.team_style import compute_style_view
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +115,13 @@ async def replay_page():
     from src.api.routes import render_replay
 
     return HTMLResponse(render_replay())
+
+
+@app.get("/style", response_class=HTMLResponse)
+async def style_page():
+    from src.api.routes import render_style
+
+    return HTMLResponse(render_style())
 
 
 @app.get("/game/{espn_id}", response_class=HTMLResponse)
@@ -195,6 +206,13 @@ def og_replay_image():
     from src.api.og_image import render_replay_card
 
     return _png_response(render_replay_card(), _OG_STATIC_CACHE_S)
+
+
+@app.api_route("/og-style.png", methods=["GET", "HEAD"])
+def og_style_image():
+    from src.api.og_image import render_style_card
+
+    return _png_response(render_style_card(), _OG_STATIC_CACHE_S)
 
 
 @app.get("/api/games/today", response_model=list[GameResponse])
@@ -716,6 +734,72 @@ async def get_replay_endpoint(season: int = Query(default=None)):
                 }
             )
         return {"season": season, "seasons": seasons, "games": games}
+    finally:
+        session.close()
+
+
+@app.get("/api/team-style")
+async def get_team_style_endpoint(season: int = Query(default=None)):
+    """Per-team play-style fingerprints for a season (DB-only). Normalizes the
+    raw team_style metrics league-relative and returns axes/chips/descriptor/
+    neighbors. Defaults to the newest POPULATED season (mirrors /api/replay).
+    W-L is attached only on a today request (current-season-to-date)."""
+    session = get_session()
+    try:
+        today = today_et()
+        seasons = get_team_style_seasons(session)
+        if season is None:
+            if not seasons:
+                season = int(today[:4])
+            else:
+                season = seasons[0]
+                # Don't default to a sparse newest season (e.g. a bootstrap
+                # refresh early in a new season): if it has fewer teams than the
+                # previous season, fall back to that previous complete season.
+                if len(seasons) >= 2:
+                    counts = get_team_style_season_counts(session)
+                    if counts.get(seasons[0], 0) < counts.get(seasons[1], 0):
+                        season = seasons[1]
+        style_rows = get_team_styles(session, season)
+        if not style_rows:
+            return {"season": season, "teams": []}
+        teams = get_teams_by_ids(session, {s.team_id for s in style_rows})
+        rows = []
+        for s in style_rows:
+            t = teams.get(s.team_id)
+            if t is None:
+                continue
+            rows.append(
+                {
+                    "team_id": s.team_id,
+                    "team": t.name,
+                    "abbr": t.abbreviation or "",
+                    "pace": s.pace,
+                    "three_pa_rate": s.three_pa_rate,
+                    "ft_rate": s.ft_rate,
+                    "oreb_pct": s.oreb_pct,
+                    "assist_rate": s.assist_rate,
+                    "def_pressure": s.def_pressure,
+                    "opp_3pa_rate": s.opp_3pa_rate,
+                    "games_played": s.games_played,
+                }
+            )
+        view = compute_style_view(rows)
+        # Attach logo + W-L (today only) and sort by standings.
+        is_today = season == int(today[:4])
+        records = get_team_records(session, season) if is_today else None
+        for v in view:
+            t = teams.get(v["team_id"])
+            v["logo_url"] = (t.logo_url or "") if t else ""
+            if records is not None:
+                v["wins"], v["losses"] = records.get(v["team_id"], (0, 0))
+            else:
+                v["wins"], v["losses"] = None, None
+        if records is not None:
+            view.sort(key=lambda v: (-(v["wins"] or 0), (v["losses"] or 0), v["team"]))
+        else:
+            view.sort(key=lambda v: v["team"])
+        return {"season": season, "teams": view}
     finally:
         session.close()
 

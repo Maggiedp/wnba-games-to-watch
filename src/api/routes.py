@@ -429,6 +429,10 @@ _LINE_CHART_JS = _load_template("js/line_chart.js")
 # %%SHAPE_CHART_JS%% (pure/numeric — no shared.js dependency).
 _SHAPE_CHART_JS = _load_template("js/shape_chart.js")
 
+# 6-axis radar "fingerprint" for the /style gallery (buildRadarSvg + ordinal),
+# pure/numeric, Node-tested; injected via %%TEAM_STYLE_JS%%.
+_TEAM_STYLE_JS = _load_template("js/team_style_helpers.js")
+
 # Primary site views, promoted out of the footer into a top nav shared by every
 # page (homepage masthead + inner pages + detail). Each page marks its own entry
 # active; `in_masthead` is the homepage variant that nests inside the navy
@@ -438,6 +442,7 @@ _SITE_NAV_ITEMS = (
     ("games", "/", "Games"),
     ("rankings", "/rankings", "Power rankings"),
     ("replay", "/replay", "Replay value"),
+    ("style", "/style", "Team style"),
     ("transparency", "/transparency", "Behind the numbers"),
 )
 
@@ -497,6 +502,16 @@ _REPLAY_HTML = (
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
     .replace("%%SHAPE_CHART_JS%%", _SHAPE_CHART_JS)
+)
+
+_STYLE_HTML = (
+    _load_template("style.html")
+    .replace("%%SITE_NAV%%", _site_nav("style"))
+    .replace("%%SITE_TITLE%%", _SITE_TITLE)
+    .replace("%%SITE_URL%%", _SITE_URL)
+    .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
+    .replace("%%SHARED_JS%%", _SHARED_JS)
+    .replace("%%TEAM_STYLE_JS%%", _TEAM_STYLE_JS)
 )
 
 
@@ -1166,3 +1181,9 @@ def render_replay() -> str:
     gallery is fetched client-side from /api/replay, so it carries no
     per-request data (same import-frozen caveat as the homepage)."""
     return _REPLAY_HTML
+
+
+def render_style() -> str:
+    """Render the /style fingerprint gallery shell. STATIC — team data is
+    fetched client-side from /api/team-style (same import-frozen caveat)."""
+    return _STYLE_HTML

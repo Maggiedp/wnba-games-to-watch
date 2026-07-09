@@ -18,6 +18,7 @@ from src.data.espn_api import (
     fetch_live_win_probability,
     fetch_schedule_and_results,
     fetch_team_details,
+    fetch_team_style_stats,
     today_et,
 )
 from src.data.wnba_schedule import (
@@ -26,6 +27,7 @@ from src.data.wnba_schedule import (
 )
 from src.db.queries import (
     delete_importance_ceilings_before,
+    delete_team_style_season,
     get_all_teams,
     get_completed_games,
     get_completed_games_missing_excitement,
@@ -36,6 +38,7 @@ from src.db.queries import (
     get_team_abbrev_map,
     get_team_by_id,
     get_team_by_name,
+    get_team_style_season_counts,
     get_teams_by_ids,
     replace_elo_history,
     save_importance_max_swing,
@@ -44,6 +47,7 @@ from src.db.queries import (
     upsert_game_shape,
     upsert_playoff_probability,
     upsert_team,
+    upsert_team_style,
 )
 from scripts.backfill_legacy_espn_ids import backfill_legacy_espn_ids
 from scripts.backfill_preseason_season_type import backfill_legacy_preseason
@@ -147,6 +151,72 @@ def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
 
     logger.info(f"Stored {len(team_details)} teams")
     return ratings
+
+
+def populate_team_style(session, season: int) -> int:
+    """Fetch ESPN byteam stats and refresh per-team play-style metrics for the
+    /style gallery. Atomically REPLACES the whole season (delete + insert in one
+    transaction) so a team absent from the feed can't leave a stale row. Fails
+    closed: a short batch (fewer teams than the prior snapshot) or any error keeps
+    the previous complete snapshot rather than publish a partial/mixed league-
+    relative one. Non-fatal: never takes down the daily job."""
+    logger.info("Fetching team-style stats from ESPN...")
+    try:
+        stats = fetch_team_style_stats(season)
+        resolve = _make_team_id_resolver(session)
+        prior_count = get_team_style_season_counts(session).get(season, 0)
+        resolved = []
+        for s in stats:
+            team_id = resolve(s["team"])
+            if team_id is None:
+                # s["team"] is already a canonical /teams name (the parser
+                # resolves byteam rows by ESPN id), so a miss here means the team
+                # isn't in our teams table yet — a DB-consistency gap, not a name
+                # mismatch. Fail closed rather than publish an incomplete league
+                # (incl. the first refresh, which has no count baseline).
+                logger.error(
+                    "Team-style: %r not in teams table — aborting refresh", s["team"]
+                )
+                return 0
+            resolved.append((team_id, s))
+        stored = len(resolved)
+        # Fail closed on a short refresh (a dropped/renamed/unresolved team):
+        # keep the previous complete snapshot rather than a partial one. Nothing
+        # has been staged yet, so the prior rows are untouched. (prior_count == 0
+        # is the season's first refresh — bootstrap, accept whatever ESPN has.)
+        if prior_count and stored < prior_count:
+            logger.error(
+                "Team-style refresh short (%d of prior %d) — keeping previous snapshot",
+                stored,
+                prior_count,
+            )
+            return 0
+        # Replace the whole season in one transaction so a team absent from this
+        # run (rename/remap/drop) can't leave a stale row — the served snapshot
+        # is exactly this refresh, never a mixed old/new one (equal-count drift).
+        delete_team_style_season(session, season)
+        for team_id, s in resolved:
+            upsert_team_style(
+                session,
+                season=season,
+                team_id=team_id,
+                pace=s["pace"],
+                three_pa_rate=s["three_pa_rate"],
+                ft_rate=s["ft_rate"],
+                oreb_pct=s["oreb_pct"],
+                assist_rate=s["assist_rate"],
+                def_pressure=s["def_pressure"],
+                opp_3pa_rate=s["opp_3pa_rate"],
+                games_played=s["games_played"],
+                commit=False,
+            )
+        session.commit()  # atomic: the whole season replaced, or nothing
+        logger.info("Stored team-style for %d teams", stored)
+        return stored
+    except Exception as e:  # fetch outage/shape change, malformed row, or DB error
+        session.rollback()
+        logger.warning("Team-style populate failed (non-fatal): %s", e)
+        return 0
 
 
 def fetch_and_store_games(session) -> list[dict]:
@@ -1194,6 +1264,7 @@ def main() -> int:
         session = get_session()
         try:
             fetch_and_store_bpi_ratings(session)
+            populate_team_style(session, int(today_et()[:4]))
             games = fetch_and_store_games(session)
             # Recover espn_id for legacy regular-season rows (the 2026 opener
             # through 2026-05-12, ingested before the espn_id column landed).

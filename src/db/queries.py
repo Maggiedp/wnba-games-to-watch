@@ -16,6 +16,7 @@ from src.db.schema import (
     PlayoffProbability,
     SeasonConfig,
     Team,
+    TeamStyle,
 )
 
 
@@ -1171,3 +1172,78 @@ def get_shapes_by_espn_ids(
         return {}
     rows = session.query(GameShape).filter(GameShape.espn_id.in_(list(espn_ids))).all()
     return {row.espn_id: row for row in rows}
+
+
+def upsert_team_style(
+    session: Session,
+    *,
+    season: int,
+    team_id: int,
+    pace: float,
+    three_pa_rate: float,
+    ft_rate: float,
+    oreb_pct: float,
+    assist_rate: float,
+    def_pressure: float,
+    opp_3pa_rate: float,
+    games_played: int,
+    commit: bool = True,
+) -> TeamStyle:
+    """Insert or update the team_style row for (season, team_id). Idempotent.
+    Commits by default (mirrors upsert_team); pass commit=False to stage the row
+    in the caller's transaction so a whole-season refresh can commit atomically."""
+    row = (
+        session.query(TeamStyle)
+        .filter(TeamStyle.season == season, TeamStyle.team_id == team_id)
+        .first()
+    )
+    if row is None:
+        row = TeamStyle(season=season, team_id=team_id)
+        session.add(row)
+    row.pace = pace
+    row.three_pa_rate = three_pa_rate
+    row.ft_rate = ft_rate
+    row.oreb_pct = oreb_pct
+    row.assist_rate = assist_rate
+    row.def_pressure = def_pressure
+    row.opp_3pa_rate = opp_3pa_rate
+    row.games_played = games_played
+    if commit:
+        session.commit()
+    return row
+
+
+def get_team_styles(session: Session, season: int) -> list[TeamStyle]:
+    """All team_style rows for a season (DB-only reader for /api/team-style)."""
+    return session.query(TeamStyle).filter(TeamStyle.season == season).all()
+
+
+def get_team_style_seasons(session: Session) -> list[int]:
+    """Distinct seasons present in team_style, newest first — lets the endpoint
+    default to the newest POPULATED season (mirrors get_shape_seasons)."""
+    rows = (
+        session.query(TeamStyle.season)
+        .distinct()
+        .order_by(TeamStyle.season.desc())
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
+def get_team_style_season_counts(session: Session) -> dict[int, int]:
+    """Row (team) count per season in team_style — a completeness proxy. The
+    daily refresh fails closed when a batch covers fewer teams than the prior
+    snapshot, and the endpoint avoids defaulting to a sparse newest season."""
+    counts: dict[int, int] = {}
+    for (season,) in session.query(TeamStyle.season).all():
+        counts[season] = counts.get(season, 0) + 1
+    return counts
+
+
+def delete_team_style_season(session: Session, season: int) -> None:
+    """Delete all team_style rows for a season (no commit). The daily refresh
+    replaces the whole season in one transaction so a team absent from the feed
+    (a rename/remap/drop) can't leave a stale row poisoning the league view."""
+    session.query(TeamStyle).filter(TeamStyle.season == season).delete(
+        synchronize_session=False
+    )
