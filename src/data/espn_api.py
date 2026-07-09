@@ -197,9 +197,24 @@ def fetch_team_style_stats(season: int) -> list[dict]:
     idx = _index_maps(data.get("categories", []))
     off_idx = idx.get("offensive", {})
     gen_idx = idx.get("general", {})
+    # Resolve each team by its stable ESPN id -> canonical /teams name (the same
+    # source our teams table is built from), NOT byteam's displayName string,
+    # which can vary in capitalization/spelling across ESPN endpoints.
+    id_to_name = fetch_team_id_map()
     rows = []
     for team in data.get("teams", []):
-        name = _canonical_name(team.get("team", {}).get("displayName", ""))
+        team_meta = team.get("team", {})
+        try:
+            espn_id = int(team_meta.get("id"))
+        except (TypeError, ValueError):
+            espn_id = None
+        name = id_to_name.get(espn_id)
+        if name is None:
+            logger.warning(
+                "Team-style: byteam id %r not in team map — skipping",
+                team_meta.get("id"),
+            )
+            continue
         own = _split_values(team, "offensive", "0")
         opp = _split_values(team, "offensive", "900")
         gen = _split_values(team, "general", "0")

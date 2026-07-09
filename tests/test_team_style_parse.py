@@ -29,9 +29,10 @@ def _off_vals(fgm, fga, tpa, fta, tov, oreb, ast, orebpct):
     return [fgm, fga, tpa, fta, tov, oreb, ast, orebpct]
 
 
-def _make_team(name, own, opp, gp):
+def _make_team(espn_id, own, opp, gp):
+    # displayName is deliberately junk — resolution is by ESPN id, not name.
     return {
-        "team": {"displayName": name},
+        "team": {"id": espn_id, "displayName": "ignored"},
         "categories": [
             _team_cat("general", "0", [gp]),
             _team_cat("offensive", "0", own),
@@ -45,14 +46,19 @@ def test_fetch_team_style_stats_derives_metrics():
         "categories": [_cat("general", _GEN), _cat("offensive", _OFF)],
         "teams": [
             _make_team(
-                "New York Liberty",
+                5,
                 own=_off_vals(30, 70, 20, 15, 12, 9, 20, 0.25),
                 opp=_off_vals(28, 68, 18, 14, 16, 8, 18, 0.24),
                 gp=30,
             )
         ],
     }
-    with patch("src.data.espn_api._get", return_value=payload):
+    with (
+        patch("src.data.espn_api._get", return_value=payload),
+        patch(
+            "src.data.espn_api.fetch_team_id_map", return_value={5: "New York Liberty"}
+        ),
+    ):
         rows = fetch_team_style_stats(2026)
     assert len(rows) == 1
     r = rows[0]
@@ -76,13 +82,41 @@ def test_fetch_team_style_stats_skips_incomplete_team():
         "categories": [_cat("general", _GEN), _cat("offensive", _OFF)],
         "teams": [
             {
-                "team": {"displayName": "Broken"},
+                "team": {"id": 5},
                 "categories": [
                     _team_cat("offensive", "0", _off_vals(0, 0, 0, 0, 0, 0, 0, 0.0)),
                 ],
-            },  # no opponent split, no general -> skipped
+            },  # resolves by id but has no opponent/general split -> skipped
         ],
     }
-    with patch("src.data.espn_api._get", return_value=payload):
+    with (
+        patch("src.data.espn_api._get", return_value=payload),
+        patch("src.data.espn_api.fetch_team_id_map", return_value={5: "Broken"}),
+    ):
         rows = fetch_team_style_stats(2026)
     assert rows == []
+
+
+def test_fetch_team_style_stats_skips_unmapped_id():
+    """A byteam team whose ESPN id isn't in the /teams map is skipped —
+    resolution is by id, so an unknown id never reaches our teams table."""
+    payload = {
+        "categories": [_cat("general", _GEN), _cat("offensive", _OFF)],
+        "teams": [
+            _make_team(
+                999,
+                own=_off_vals(30, 70, 20, 15, 12, 9, 20, 0.25),
+                opp=_off_vals(28, 68, 18, 14, 16, 8, 18, 0.24),
+                gp=30,
+            )
+        ],
+    }
+    with (
+        patch("src.data.espn_api._get", return_value=payload),
+        patch(
+            "src.data.espn_api.fetch_team_id_map",
+            return_value={5: "New York Liberty"},
+        ),
+    ):
+        rows = fetch_team_style_stats(2026)
+    assert rows == []  # id 999 not in the map
