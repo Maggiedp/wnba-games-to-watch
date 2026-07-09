@@ -169,12 +169,13 @@ def populate_team_style(session, season: int) -> int:
         for s in stats:
             team_id = resolve(s["team"])
             if team_id is None:
-                # An unmapped byteam name (a rename / missing alias) would drop a
-                # team from the snapshot. Fail closed rather than publish an
-                # incomplete league — including on the season's first refresh,
-                # which has no prior-count baseline to catch the shortfall.
+                # s["team"] is already a canonical /teams name (the parser
+                # resolves byteam rows by ESPN id), so a miss here means the team
+                # isn't in our teams table yet — a DB-consistency gap, not a name
+                # mismatch. Fail closed rather than publish an incomplete league
+                # (incl. the first refresh, which has no count baseline).
                 logger.error(
-                    "Team-style: unmapped team %r — aborting refresh", s["team"]
+                    "Team-style: %r not in teams table — aborting refresh", s["team"]
                 )
                 return 0
             resolved.append((team_id, s))

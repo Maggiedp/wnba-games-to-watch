@@ -42,11 +42,10 @@ function buildRadarSvg(axes, opts) {
   const dataPts = [];
   for (let i = 0; i < n; i++) {
     const norm = Math.max(0, Math.min(100, (axes[i] && axes[i].norm) || 0));
-    dataPts.push(pt(i, (R * norm) / 100));
+    const p = pt(i, (R * norm) / 100);
+    dataPts.push(`${p[0].toFixed(1)},${p[1].toFixed(1)}`);
   }
-  const dataStr = dataPts
-    .map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`)
-    .join(' ');
+  const dataStr = dataPts.join(' ');
   let labels = '';
   for (let i = 0; i < n; i++) {
     const short = _AXIS_SHORT[(axes[i] && axes[i].key) || ''] || '';

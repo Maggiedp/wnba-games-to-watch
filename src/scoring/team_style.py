@@ -93,7 +93,8 @@ def _chips(ranks: dict[str, int], m: int) -> list[dict]:
     """The 2 axes whose rank is furthest from the league middle (most
     distinctive). Ties broken by AXES order."""
     mid = (m + 1) / 2.0
-    ordered = sorted(AXES, key=lambda kl: (-abs(ranks[kl[0]] - mid), AXES.index(kl)))
+    # sorted() is stable, so ties keep AXES order — no explicit tiebreak needed.
+    ordered = sorted(AXES, key=lambda kl: -abs(ranks[kl[0]] - mid))
     return [{"label": label, "rank": ranks[key], "of": m} for key, label in ordered[:2]]
 
 
@@ -133,6 +134,19 @@ def _base(row: dict) -> dict:
     }
 
 
+def _muted(row: dict) -> dict:
+    """A low-confidence team: identity only, no derived style (below the
+    games gate, or too few qualifying teams to normalize against)."""
+    return {
+        **_base(row),
+        "low_confidence": True,
+        "axes": [],
+        "chips": [],
+        "descriptor": [],
+        "plays_like": [],
+    }
+
+
 def compute_style_view(
     rows: list[dict], min_games: int = MIN_STYLE_GAMES
 ) -> list[dict]:
@@ -142,17 +156,7 @@ def compute_style_view(
     sorts. Low-confidence teams (< min_games) are returned muted."""
     qualifying = [r for r in rows if r["games_played"] >= min_games]
     if len(qualifying) < 2:
-        return [
-            {
-                **_base(r),
-                "low_confidence": True,
-                "axes": [],
-                "chips": [],
-                "descriptor": [],
-                "plays_like": [],
-            }
-            for r in rows
-        ]
+        return [_muted(r) for r in rows]
 
     q_names = [r["team"] for r in qualifying]
     abbrevs = {r["team"]: r["abbr"] for r in rows}
@@ -169,16 +173,7 @@ def compute_style_view(
     for r in rows:
         name = r["team"]
         if r["games_played"] < min_games:
-            out.append(
-                {
-                    **_base(r),
-                    "low_confidence": True,
-                    "axes": [],
-                    "chips": [],
-                    "descriptor": [],
-                    "plays_like": [],
-                }
-            )
+            out.append(_muted(r))
             continue
         ranks_here = {k: rank_map[k][name] for k, _ in AXES}
         axes = [

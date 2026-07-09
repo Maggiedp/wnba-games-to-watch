@@ -233,7 +233,6 @@ def fetch_team_style_stats(season: int) -> list[dict]:
         o_3pa = _stat(opp, off_idx, "avgThreePointFieldGoalsAttempted")
         gp = _stat(gen, gen_idx, "gamesPlayed")
         required = [
-            name,
             fgm,
             fga,
             tpa,
@@ -249,8 +248,8 @@ def fetch_team_style_stats(season: int) -> list[dict]:
             o_3pa,
             gp,
         ]
-        if any(x is None or x == "" for x in required) or fga <= 0 or fgm <= 0:
-            logger.warning("Skipping team-style row (incomplete): %r", name or "?")
+        if any(x is None for x in required) or fga <= 0 or fgm <= 0:
+            logger.warning("Skipping team-style row (incomplete): %r", name)
             continue
         poss_own = fga + 0.44 * fta - oreb + tov
         poss_opp = o_fga + 0.44 * o_fta - o_oreb + o_tov

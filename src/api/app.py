@@ -746,20 +746,20 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
     W-L is attached only on a today request (current-season-to-date)."""
     session = get_session()
     try:
+        today = today_et()
         seasons = get_team_style_seasons(session)
         if season is None:
             if not seasons:
-                season = int(today_et()[:4])
+                season = int(today[:4])
             else:
                 season = seasons[0]
                 # Don't default to a sparse newest season (e.g. a bootstrap
                 # refresh early in a new season): if it has fewer teams than the
                 # previous season, fall back to that previous complete season.
-                counts = get_team_style_season_counts(session)
-                if len(seasons) >= 2 and counts.get(seasons[0], 0) < counts.get(
-                    seasons[1], 0
-                ):
-                    season = seasons[1]
+                if len(seasons) >= 2:
+                    counts = get_team_style_season_counts(session)
+                    if counts.get(seasons[0], 0) < counts.get(seasons[1], 0):
+                        season = seasons[1]
         style_rows = get_team_styles(session, season)
         if not style_rows:
             return {"season": season, "teams": []}
@@ -786,7 +786,7 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
             )
         view = compute_style_view(rows)
         # Attach logo + W-L (today only) and sort by standings.
-        is_today = season == int(today_et()[:4])
+        is_today = season == int(today[:4])
         records = get_team_records(session, season) if is_today else None
         for v in view:
             t = teams.get(v["team_id"])
