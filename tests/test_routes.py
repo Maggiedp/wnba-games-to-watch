@@ -1913,3 +1913,26 @@ def test_homepage_ships_playoff_view_toggle(client):
     assert 'data-playoff-view="rounds"' in html
     assert 'data-playoff-view="seeds"' in html
     assert 'id="playoff-thead"' in html
+
+
+def test_playoff_rounds_table_fits_mobile_viewports():
+    """Full team names gave the Rounds-view playoff table a min-content width
+    wider than phone viewports -> page-level horizontal scroll. Containment:
+    abbr span always rendered, <=480px name->abbr swap + padding trim, and an
+    overflow-x net on the wrapper (rationale in homepage.html's comments)."""
+    from src.api.routes import render_homepage
+
+    src = render_homepage()
+    assert "teamCell(t, false)" not in src  # rounds rows emit the abbr span now
+    # Empty abbreviation ('' is a supported state) falls back to the full name;
+    # the fixed-layout Seeds view tags it .is-fallback and ellipsizes it.
+    assert "escapeHtml(t.abbreviation || t.team)" in src
+    assert "t.abbreviation ? '' : ' is-fallback'" in src
+    assert ".playoff-team-abbr.is-fallback" in src
+    # Phone-width condensing applies to both views (no .view-seeds gate).
+    assert "@media (max-width: 480px)" in src
+    assert ".playoff-table .playoff-team-name { display: none; }" in src
+    assert ".playoff-table .playoff-team-abbr { display: inline; }" in src
+    # The overflow net must live on the table's wrapper rule specifically.
+    inner_rule = src.split(".playoff-picture-inner", 1)[1].split("}", 1)[0]
+    assert "overflow-x: auto" in inner_rule
