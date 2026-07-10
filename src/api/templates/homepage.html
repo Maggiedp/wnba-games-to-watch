@@ -1521,7 +1521,11 @@
                     const logoHtml = t.logo_url
                         ? `<img class="playoff-logo" src="${escapeHtml(t.logo_url)}" alt="" aria-hidden="true">`
                         : `<span class="playoff-logo"></span>`;
-                    const abbr = `<span class="playoff-team-abbr">${escapeHtml(t.abbreviation || '')}</span>`;
+                    // Abbreviation may legitimately be '' (schema default; ESPN
+                    // ingestion fallback) — fall back to the full name so a
+                    // phone-width row never loses its label. The wide fallback
+                    // is contained by the wrapper's overflow-x safety net.
+                    const abbr = `<span class="playoff-team-abbr">${escapeHtml(t.abbreviation || t.team)}</span>`;
                     return `<td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span>${abbr}</td>`;
                 };
 

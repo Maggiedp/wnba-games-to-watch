@@ -1927,8 +1927,12 @@ def test_playoff_rounds_table_fits_mobile_viewports():
     from src.api.routes import render_homepage
 
     src = render_homepage()
-    # Rounds rows must render the abbr span (teamCell's second arg).
+    # Rounds rows must render the abbr span (teamCell always emits it now).
     assert "teamCell(t, false)" not in src
+    # An empty abbreviation (schema default '', ESPN ingestion fallback '')
+    # must not leave a phone-width row label-less: the abbr span falls back
+    # to the full team name (contained by the wrapper's overflow-x net).
+    assert "escapeHtml(t.abbreviation || t.team)" in src
     # Phone-width condensing applies to both views (no .view-seeds gate).
     assert "@media (max-width: 480px)" in src
     assert ".playoff-table .playoff-team-name { display: none; }" in src
