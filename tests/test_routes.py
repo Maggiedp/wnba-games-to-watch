@@ -1933,6 +1933,10 @@ def test_playoff_rounds_table_fits_mobile_viewports():
     # must not leave a phone-width row label-less: the abbr span falls back
     # to the full team name (contained by the wrapper's overflow-x net).
     assert "escapeHtml(t.abbreviation || t.team)" in src
+    # The fixed-layout Seeds view can't widen for that fallback — it must be
+    # tagged and ellipsized there instead of painting over the seed cells.
+    assert "t.abbreviation ? '' : ' is-fallback'" in src
+    assert ".playoff-team-abbr.is-fallback" in src
     # Phone-width condensing applies to both views (no .view-seeds gate).
     assert "@media (max-width: 480px)" in src
     assert ".playoff-table .playoff-team-name { display: none; }" in src

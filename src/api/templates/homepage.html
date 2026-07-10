@@ -206,6 +206,16 @@
                 #playoff-table.view-seeds td.miss-cell,
                 #playoff-table.view-seeds th.seed-col,
                 #playoff-table.view-seeds th.miss-col { padding: 5px 4px; }
+                /* A full-name fallback label (empty abbreviation) can't widen a
+                   fixed-layout column — ellipsize it inside the team cell so it
+                   never paints over the seed cells. Scoped to .is-fallback: real
+                   abbreviations must never clamp (at 320px they'd ellipsize). */
+                #playoff-table.view-seeds .playoff-team-abbr.is-fallback {
+                    min-width: 0;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
             }
             /* Phone widths: the Rounds view gets the same name->abbr swap the
                Seeds view gets at <=768px, plus tighter cell padding — with
@@ -1523,9 +1533,12 @@
                         : `<span class="playoff-logo"></span>`;
                     // Abbreviation may legitimately be '' (schema default; ESPN
                     // ingestion fallback) — fall back to the full name so a
-                    // phone-width row never loses its label. The wide fallback
-                    // is contained by the wrapper's overflow-x safety net.
-                    const abbr = `<span class="playoff-team-abbr">${escapeHtml(t.abbreviation || t.team)}</span>`;
+                    // phone-width row never loses its label. In the auto-layout
+                    // Rounds view the wide fallback is contained by the wrapper's
+                    // overflow-x safety net; the fixed-layout Seeds view instead
+                    // ellipsizes it via .is-fallback (a fixed column can't widen,
+                    // so an unclamped long label would paint over the seed cells).
+                    const abbr = `<span class="playoff-team-abbr${t.abbreviation ? '' : ' is-fallback'}">${escapeHtml(t.abbreviation || t.team)}</span>`;
                     return `<td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span>${abbr}</td>`;
                 };
 
