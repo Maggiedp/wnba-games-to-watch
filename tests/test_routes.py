@@ -1916,31 +1916,23 @@ def test_homepage_ships_playoff_view_toggle(client):
 
 
 def test_playoff_rounds_table_fits_mobile_viewports():
-    """The Rounds-view Playoff Picture table's min-content width (~396px with
-    full team names + the Rec column) exceeded phone viewports, and with no
-    scrollable ancestor it forced page-level horizontal scroll on mobile.
-    Three-part containment: the rounds branch renders the (default-hidden)
-    abbr span too, a <=480px media block swaps name->abbr + trims cell
-    padding (mirroring the Seeds view's <=768px condensing), and the wrapper
-    gets an overflow-x safety net so any future min-content growth scrolls
-    the table internally, never the page."""
+    """Full team names gave the Rounds-view playoff table a min-content width
+    wider than phone viewports -> page-level horizontal scroll. Containment:
+    abbr span always rendered, <=480px name->abbr swap + padding trim, and an
+    overflow-x net on the wrapper (rationale in homepage.html's comments)."""
     from src.api.routes import render_homepage
 
     src = render_homepage()
-    # Rounds rows must render the abbr span (teamCell always emits it now).
-    assert "teamCell(t, false)" not in src
-    # An empty abbreviation (schema default '', ESPN ingestion fallback '')
-    # must not leave a phone-width row label-less: the abbr span falls back
-    # to the full team name (contained by the wrapper's overflow-x net).
+    assert "teamCell(t, false)" not in src  # rounds rows emit the abbr span now
+    # Empty abbreviation ('' is a supported state) falls back to the full name;
+    # the fixed-layout Seeds view tags it .is-fallback and ellipsizes it.
     assert "escapeHtml(t.abbreviation || t.team)" in src
-    # The fixed-layout Seeds view can't widen for that fallback — it must be
-    # tagged and ellipsized there instead of painting over the seed cells.
     assert "t.abbreviation ? '' : ' is-fallback'" in src
     assert ".playoff-team-abbr.is-fallback" in src
     # Phone-width condensing applies to both views (no .view-seeds gate).
     assert "@media (max-width: 480px)" in src
     assert ".playoff-table .playoff-team-name { display: none; }" in src
     assert ".playoff-table .playoff-team-abbr { display: inline; }" in src
-    # Safety net lives on the table's wrapper, scoped to that rule block.
+    # The overflow net must live on the table's wrapper rule specifically.
     inner_rule = src.split(".playoff-picture-inner", 1)[1].split("}", 1)[0]
     assert "overflow-x: auto" in inner_rule

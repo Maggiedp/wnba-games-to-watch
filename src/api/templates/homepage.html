@@ -211,6 +211,9 @@
                    never paints over the seed cells. Scoped to .is-fallback: real
                    abbreviations must never clamp (at 320px they'd ellipsize). */
                 #playoff-table.view-seeds .playoff-team-abbr.is-fallback {
+                    /* Explicit display: the clamp must not depend on the flex
+                       team cell blockifying this otherwise-inline span. */
+                    display: block;
                     min-width: 0;
                     overflow: hidden;
                     text-overflow: ellipsis;
@@ -1532,12 +1535,9 @@
                         ? `<img class="playoff-logo" src="${escapeHtml(t.logo_url)}" alt="" aria-hidden="true">`
                         : `<span class="playoff-logo"></span>`;
                     // Abbreviation may legitimately be '' (schema default; ESPN
-                    // ingestion fallback) — fall back to the full name so a
-                    // phone-width row never loses its label. In the auto-layout
-                    // Rounds view the wide fallback is contained by the wrapper's
-                    // overflow-x safety net; the fixed-layout Seeds view instead
-                    // ellipsizes it via .is-fallback (a fixed column can't widen,
-                    // so an unclamped long label would paint over the seed cells).
+                    // ingestion fallback) — fall back to the full name, tagged
+                    // .is-fallback so the CSS can contain it (see the
+                    // .playoff-picture-inner and .is-fallback rule comments).
                     const abbr = `<span class="playoff-team-abbr${t.abbreviation ? '' : ' is-fallback'}">${escapeHtml(t.abbreviation || t.team)}</span>`;
                     return `<td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span>${abbr}</td>`;
                 };
