@@ -1913,3 +1913,26 @@ def test_homepage_ships_playoff_view_toggle(client):
     assert 'data-playoff-view="rounds"' in html
     assert 'data-playoff-view="seeds"' in html
     assert 'id="playoff-thead"' in html
+
+
+def test_playoff_rounds_table_fits_mobile_viewports():
+    """The Rounds-view Playoff Picture table's min-content width (~396px with
+    full team names + the Rec column) exceeded phone viewports, and with no
+    scrollable ancestor it forced page-level horizontal scroll on mobile.
+    Three-part containment: the rounds branch renders the (default-hidden)
+    abbr span too, a <=480px media block swaps name->abbr + trims cell
+    padding (mirroring the Seeds view's <=768px condensing), and the wrapper
+    gets an overflow-x safety net so any future min-content growth scrolls
+    the table internally, never the page."""
+    from src.api.routes import render_homepage
+
+    src = render_homepage()
+    # Rounds rows must render the abbr span (teamCell's second arg).
+    assert "teamCell(t, false)" not in src
+    # Phone-width condensing applies to both views (no .view-seeds gate).
+    assert "@media (max-width: 480px)" in src
+    assert ".playoff-table .playoff-team-name { display: none; }" in src
+    assert ".playoff-table .playoff-team-abbr { display: inline; }" in src
+    # Safety net lives on the table's wrapper, scoped to that rule block.
+    inner_rule = src.split(".playoff-picture-inner", 1)[1].split("}", 1)[0]
+    assert "overflow-x: auto" in inner_rule

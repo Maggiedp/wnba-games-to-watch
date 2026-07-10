@@ -84,6 +84,10 @@
             }
             .playoff-picture-inner {
                 padding: 0;
+                /* Safety net: a table can't shrink below min-content, so if
+                   columns ever outgrow a narrow viewport again, scroll the
+                   table inside this wrapper — never the whole page. */
+                overflow-x: auto;
             }
             .playoff-picture-header {
                 font-family: 'Fraunces', Georgia, serif;
@@ -202,6 +206,16 @@
                 #playoff-table.view-seeds td.miss-cell,
                 #playoff-table.view-seeds th.seed-col,
                 #playoff-table.view-seeds th.miss-col { padding: 5px 4px; }
+            }
+            /* Phone widths: the Rounds view gets the same name->abbr swap the
+               Seeds view gets at <=768px, plus tighter cell padding — with
+               full team names the 6-column table's min-content width (~396px)
+               exceeds the viewport and forces page-level horizontal scroll.
+               481-768px keeps full names (the table fits there). */
+            @media (max-width: 480px) {
+                .playoff-table .playoff-team-name { display: none; }
+                .playoff-table .playoff-team-abbr { display: inline; }
+                .playoff-table th, .playoff-table td { padding: 5px 4px; }
             }
 
             /* ---------- Inline team playoff probability ---------- */
@@ -1500,15 +1514,14 @@
                 table.classList.toggle('view-seeds', seeds);
                 if (caption) caption.hidden = !seeds;
 
-                // Logo + team name (+ abbreviation in the seeds view) — shared by
-                // both branches so the logo markup lives in one place.
-                const teamCell = (t, withAbbr) => {
+                // Logo + team name + default-hidden abbreviation (shown at
+                // phone widths by CSS) — shared by both branches so the logo
+                // markup lives in one place.
+                const teamCell = (t) => {
                     const logoHtml = t.logo_url
                         ? `<img class="playoff-logo" src="${escapeHtml(t.logo_url)}" alt="" aria-hidden="true">`
                         : `<span class="playoff-logo"></span>`;
-                    const abbr = withAbbr
-                        ? `<span class="playoff-team-abbr">${escapeHtml(t.abbreviation || '')}</span>`
-                        : '';
+                    const abbr = `<span class="playoff-team-abbr">${escapeHtml(t.abbreviation || '')}</span>`;
                     return `<td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span>${abbr}</td>`;
                 };
 
@@ -1535,7 +1548,7 @@
                         const missCell = `<td class="miss-cell" style="background: rgba(124,114,102,${missAlpha})"${missText ? ` aria-label="${missText} chance to miss the playoffs"` : ''}>${missText}</td>`;
                         return `
                         <tr${eliminated ? ' class="eliminated"' : ''}>
-                            ${teamCell(t, true)}
+                            ${teamCell(t)}
                             ${cells}
                             ${missCell}
                         </tr>`;
@@ -1565,7 +1578,7 @@
                             : `<td class="record-cell" aria-label="${t.wins} wins, ${t.losses} losses">${t.wins}-${t.losses}</td>`;
                         return `
                         <tr${eliminated ? ' class="eliminated"' : ''}>
-                            ${teamCell(t, false)}
+                            ${teamCell(t)}
                             ${recordCell}
                             ${cell(t.make_playoffs_prob, 'chance to make the playoffs')}
                             ${cell(t.reach_semis_prob, 'chance to reach the semifinals')}
