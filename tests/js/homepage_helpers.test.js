@@ -7,7 +7,7 @@ const {
   excitementLabelFor, winProbText, elapsedSeconds,
   excitementScore, computeExcitement, completedEntryFromLiveWp,
   buildSeedRow, seedsViewAvailable, seedPctText, heatAlpha,
-  curveFromPlays,
+  curveFromPlays, sortCompleted,
 } = loadHelpers('shared.js', 'homepage_helpers.js');
 
 // --- elapsedSeconds (mirrors tests/test_excitement.py for the Python port) ---
@@ -213,4 +213,53 @@ test('seedsViewAvailable: only when every displayed team has non-null seed_distr
   // Nothing to show.
   assert.equal(seedsViewAvailable([]), false);
   assert.equal(seedsViewAvailable(null), false);
+});
+
+// --- sortCompleted (completed-section sort) ---
+
+// Mid-day-UTC timestamps: the local calendar day matches the UTC day in any
+// timezone from UTC-8 to UTC+3, so localDateISO's grouping is deterministic
+// on both CI (UTC) and dev machines without pinning process.env.TZ.
+function completedGame(espnId, dateIso, hourUtc, excitement) {
+  return {
+    espn_id: espnId,
+    date: dateIso,
+    time_utc: `${dateIso}T${String(hourUtc).padStart(2, '0')}:00:00Z`,
+    excitement_index: excitement,
+  };
+}
+
+test('sortCompleted date mode: within a day, most recent tip first (not excitement)', () => {
+  const early = completedGame('e1', '2026-07-10', 16, 9.9);  // most exciting, earliest tip
+  const mid = completedGame('e2', '2026-07-10', 18, 5.0);
+  const late = completedGame('e3', '2026-07-10', 20, 1.0);   // least exciting, latest tip
+  const sorted = sortCompleted([early, late, mid], 'date');
+  // Strictly reverse-chronological: excitement must not reorder a day's games.
+  assert.deepEqual(sorted.map(g => g.espn_id), ['e3', 'e2', 'e1']);
+});
+
+test('sortCompleted date mode: newer days come first', () => {
+  const older = completedGame('e1', '2026-07-08', 18, 9.9);
+  const newer = completedGame('e2', '2026-07-10', 16, 1.0);
+  const sorted = sortCompleted([older, newer], 'date');
+  assert.deepEqual(sorted.map(g => g.espn_id), ['e2', 'e1']);
+});
+
+test('sortCompleted excitement mode: excitement desc, date desc tiebreak', () => {
+  const thriller = completedGame('e1', '2026-07-08', 18, 9.9);
+  const dudNewer = completedGame('e2', '2026-07-10', 16, 1.0);
+  const dudOlder = completedGame('e3', '2026-07-09', 16, 1.0);
+  const sorted = sortCompleted([dudOlder, dudNewer, thriller], 'excitement');
+  assert.deepEqual(sorted.map(g => g.espn_id), ['e1', 'e2', 'e3']);
+});
+
+test('sortCompleted date mode: missing time_utc sorts last within its day', () => {
+  // A real repo state, not hypothetical: ESPN withdrawing a tip time clears
+  // time_utc (upsert_game's combined TBD signal), and the column is nullable.
+  const early = completedGame('e1', '2026-07-10', 16, 1.0);
+  const tbd = { espn_id: 'e2', date: '2026-07-10', time_utc: null, excitement_index: 9.9 };
+  const late = completedGame('e3', '2026-07-10', 20, 5.0);
+  const sorted = sortCompleted([tbd, early, late], 'date');
+  // Known times win: desc within the day, unknown-time rows sink to its end.
+  assert.deepEqual(sorted.map(g => g.espn_id), ['e3', 'e1', 'e2']);
 });

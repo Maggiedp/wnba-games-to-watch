@@ -147,3 +147,59 @@ function seedsViewAvailable(odds) {
     return Array.isArray(odds) && odds.length > 0
         && odds.every(t => t && t.seed_distribution != null);
 }
+
+// Same-day sort key: UTC epoch millis, never a lexicographic compare on the
+// time string ("10:00 PM" < "8:00 PM"). Missing/unparseable time_utc → Infinity —
+// an asc-oriented sentinel (TBD sinks last in `timeKey(a) - timeKey(b)`); a desc
+// sort must handle it explicitly or TBD floats first (see sortCompleted's byTimeDesc).
+function timeKey(g) {
+    const t = g.time_utc ? Date.parse(g.time_utc) : NaN;
+    return isNaN(t) ? Infinity : t;
+}
+
+// Local-tz Date derived from time_utc, or null if unavailable.
+// Shared by localDateISO and formatLocalDate. Both fall back to
+// the ET schedule date when this returns null (transient during
+// the first daily-update cycle after deploy).
+function gameLocalDate(g) {
+    if (!g.time_utc) return null;
+    const d = new Date(g.time_utc);
+    return isNaN(d) ? null : d;
+}
+
+function localDateISO(g) {
+    const d = gameLocalDate(g);
+    if (!d) return g.date;
+    return d.getFullYear() + '-' +
+        String(d.getMonth() + 1).padStart(2, '0') + '-' +
+        String(d.getDate()).padStart(2, '0');
+}
+
+// Completed-section sort. mode: 'date' | 'excitement'.
+// Date mode is strictly reverse-chronological (day desc, then tip time desc
+// within a day) — the section is labeled "Sorted by date", so excitement must
+// not reorder a day's games; the dedicated Excitement toggle covers that.
+function sortCompleted(games, mode) {
+    const byDateDesc = (a, b) => {
+        const da = localDateISO(a), db = localDateISO(b);
+        return da < db ? 1 : da > db ? -1 : 0;
+    };
+    const byExciteDesc = (a, b) =>
+        (b.excitement_index ?? -Infinity) - (a.excitement_index ?? -Infinity);
+    // timeKey's missing-time sentinel is Infinity, which a plain desc subtraction
+    // would surface FIRST within the day. Known times must win: unknown-time rows
+    // (ESPN withdrew the tip time → time_utc cleared) sink to the end of their day,
+    // matching the upcoming list's asc sort where the sentinel sinks naturally.
+    const byTimeDesc = (a, b) => {
+        const ta = timeKey(a), tb = timeKey(b);
+        const aKnown = isFinite(ta), bKnown = isFinite(tb);
+        if (!aKnown && !bKnown) return 0;
+        if (!aKnown) return 1;
+        if (!bKnown) return -1;
+        return tb - ta;
+    };
+    const cmp = mode === 'date'
+        ? (a, b) => byDateDesc(a, b) || byTimeDesc(a, b)
+        : (a, b) => byExciteDesc(a, b) || byDateDesc(a, b);
+    return games.slice().sort(cmp);
+}
