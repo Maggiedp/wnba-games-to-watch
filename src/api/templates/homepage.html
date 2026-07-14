@@ -1839,24 +1839,11 @@
                     + (label === 'Thriller' ? ' thriller' : label === 'Close game' ? ' close' : '');
             }
 
-            function sortCompleted(games) {
-                const byDateDesc = (a, b) => {
-                    const da = localDateISO(a), db = localDateISO(b);
-                    return da < db ? 1 : da > db ? -1 : 0;
-                };
-                const byExciteDesc = (a, b) =>
-                    (b.excitement_index ?? -Infinity) - (a.excitement_index ?? -Infinity);
-                const cmp = completedSortMode === 'date'
-                    ? (a, b) => byDateDesc(a, b) || byExciteDesc(a, b)
-                    : (a, b) => byExciteDesc(a, b) || byDateDesc(a, b);
-                return games.slice().sort(cmp);
-            }
-
             function renderCompleted() {
                 const container = document.getElementById('completed-games-container');
                 if (!container) return;
                 const team = document.getElementById('team-filter').value;
-                const filtered = sortCompleted(allCompleted.filter(g => matchesScope(g, team)));
+                const filtered = sortCompleted(allCompleted.filter(g => matchesScope(g, team)), completedSortMode);
                 renderGames(filtered, null, 'completed-games-container', SCORE_MODES.EXCITEMENT);
                 filtered.forEach(g => {
                     if (!g.espn_id) return;
@@ -1978,29 +1965,6 @@
                     minute: '2-digit',
                     timeZoneName: 'short',
                 });
-            }
-
-            function timeKey(g) {
-                const t = g.time_utc ? Date.parse(g.time_utc) : NaN;
-                return isNaN(t) ? Infinity : t;
-            }
-
-            // Local-tz Date derived from time_utc, or null if unavailable.
-            // Shared by localDateISO and formatLocalDate. Both fall back to
-            // the ET schedule date when this returns null (transient during
-            // the first daily-update cycle after deploy).
-            function gameLocalDate(g) {
-                if (!g.time_utc) return null;
-                const d = new Date(g.time_utc);
-                return isNaN(d) ? null : d;
-            }
-
-            function localDateISO(g) {
-                const d = gameLocalDate(g);
-                if (!d) return g.date;
-                return d.getFullYear() + '-' +
-                    String(d.getMonth() + 1).padStart(2, '0') + '-' +
-                    String(d.getDate()).padStart(2, '0');
             }
 
             function formatLocalDate(g, opts) {
