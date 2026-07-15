@@ -269,6 +269,7 @@ def test_main_default_mode_fills_nulls_only(env, monkeypatch):
 def test_main_recompute_overwrites_and_exits_zero(env, monkeypatch):
     session = env.get_session()
     _seed_game(env, session, "stale", excitement_index=9.9)
+    _seed_game(env, session, "hole")  # NULL -> recompute mode still fills it
     session.commit()
     session.close()
 
@@ -288,6 +289,10 @@ def test_main_recompute_overwrites_and_exits_zero(env, monkeypatch):
         assert (
             session.query(env.Game).filter_by(espn_id="stale").one().excitement_index
             != 9.9
+        )
+        assert (
+            session.query(env.Game).filter_by(espn_id="hole").one().excitement_index
+            is not None
         )
     finally:
         session.close()
