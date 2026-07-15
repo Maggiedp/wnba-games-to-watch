@@ -504,25 +504,39 @@ def populate_game_shapes_for_recent_completions(
 
 def refresh_recent_excitement_scores(
     session,
-    window_days: int = EXCITEMENT_REFRESH_WINDOW_DAYS,
+    window_days: int | None = EXCITEMENT_REFRESH_WINDOW_DAYS,
     limit: int | None = EXCITEMENT_REFRESH_CAP,
     timeout: int = BACKFILL_ESPN_TIMEOUT_S,
-) -> None:
+) -> list[str]:
     """Re-fetch already-scored games within a bounded freshness window so
     late ESPN PBP refinements can correct an early STATUS_FINAL compute.
 
     Without this, the first FINAL response becomes the eternal sort key
     even if ESPN later adds/fixes plays. After `window_days` past compute
     time the value is treated as locked.
+
+    `window_days=None` drops the window entirely — every completed 2026 game
+    with a stored excitement_index is re-fetched, including legacy rows whose
+    excitement_computed_at is NULL. That's the batch-recompute path
+    (`backfill_excitement.py --recompute`); the daily job keeps the bounded
+    window + cap defaults.
+
+    Returns the espn_ids that could NOT be refreshed (fetch/compute error,
+    non-FINAL feed, insufficient plays) — their stored values were left
+    as-is. The daily caller ignores this; the recompute script fails closed
+    on a non-empty list.
     """
 
-    cutoff = datetime.now() - timedelta(days=window_days)
+    cutoff = (
+        None if window_days is None else datetime.now() - timedelta(days=window_days)
+    )
     games = get_games_for_excitement_refresh(
         session, cutoff=cutoff, season_year=2026, limit=limit
     )
+    failed: list[str] = []
     if not games:
         logger.info("No recent games eligible for excitement refresh")
-        return
+        return failed
     logger.info(f"Refreshing excitement for {len(games)} recent games")
     now = datetime.now()
     rechecked = 0
@@ -538,11 +552,13 @@ def refresh_recent_excitement_scores(
             logger.warning(
                 f"Refresh fetch failed for game {game.id} (espn_id={game.espn_id}): {e}"
             )
+            failed.append(game.espn_id)
             continue
         except Exception as e:
             logger.warning(
                 f"Refresh failed for game {game.id} (espn_id={game.espn_id}): {e}"
             )
+            failed.append(game.espn_id)
             continue
         if status != GameStatus.FINAL:
             # The refresh path only updates excitement — it must not
@@ -550,8 +566,10 @@ def refresh_recent_excitement_scores(
             # The schedule path (fetch_and_store_games) is the source of
             # truth for completion state; a transient non-final summary
             # response here could otherwise erase real archive entries.
+            failed.append(game.espn_id)
             continue
         if score is None:
+            failed.append(game.espn_id)
             continue
         if score != game.excitement_index:
             logger.info(
@@ -566,6 +584,7 @@ def refresh_recent_excitement_scores(
         rechecked += 1
     session.commit()
     logger.info(f"Re-checked {rechecked} games; updated {updated}")
+    return failed
 
 
 def compute_elo_ratings() -> EloReplay:

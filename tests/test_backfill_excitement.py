@@ -95,9 +95,137 @@ def test_refresh_query_dated_cutoff_unchanged(env):
             excitement_index=7.0,
             excitement_computed_at=now - timedelta(days=1),
         )
+        _seed_game(
+            env,
+            session,
+            None,
+            excitement_index=4.0,
+            excitement_computed_at=now - timedelta(days=1),
+        )  # no espn_id -> excluded even inside the window
         session.commit()
 
         got = get_games_for_excitement_refresh(session, cutoff=now - timedelta(days=2))
         assert {g.espn_id for g in got} == {"recent"}
+    finally:
+        session.close()
+
+
+GOOD_PLAYS = [
+    {"period": 1, "clock": "10:00", "home_pct": 0.5},
+    {"period": 4, "clock": "0:00", "home_pct": 0.9},
+]
+
+
+def test_refresh_unbounded_reaches_legacy_and_old_rows(env, monkeypatch):
+    """window_days=None re-derives rows the daily window can never touch,
+    overwrites on diff, returns [] on full convergence — and leaves
+    excitement_computed_at untouched (legacy rows stay NULL, so they don't
+    enter the daily 2-day refresh window afterward)."""
+    session = env.get_session()
+    try:
+        now = datetime.now()
+        _seed_game(env, session, "legacy", excitement_index=9.9)
+        _seed_game(
+            env,
+            session,
+            "old",
+            excitement_index=9.9,
+            excitement_computed_at=now - timedelta(days=30),
+        )
+        session.commit()
+
+        import scripts.daily_update as du
+
+        monkeypatch.setattr(
+            du,
+            "fetch_live_win_probability",
+            lambda espn_id, timeout=10: {
+                "status": "STATUS_FINAL",
+                "plays": GOOD_PLAYS,
+            },
+        )
+        failed = du.refresh_recent_excitement_scores(
+            session, window_days=None, limit=None
+        )
+        assert failed == []
+        session.expire_all()
+        legacy = session.query(env.Game).filter_by(espn_id="legacy").one()
+        old = session.query(env.Game).filter_by(espn_id="old").one()
+        assert legacy.excitement_index != 9.9
+        assert old.excitement_index != 9.9
+        assert legacy.excitement_computed_at is None  # immutability held
+        assert old.excitement_computed_at == now - timedelta(days=30)
+    finally:
+        session.close()
+
+
+def test_refresh_returns_failed_espn_ids_and_keeps_stored_values(env, monkeypatch):
+    """Each can't-refresh path — fetch raised, non-FINAL feed, insufficient
+    plays — lands the espn_id in the returned list and keeps the stored
+    (stale) value."""
+    session = env.get_session()
+    try:
+        for espn_id in ("raises", "notfinal", "thin"):
+            _seed_game(env, session, espn_id, excitement_index=9.9)
+        session.commit()
+
+        import scripts.daily_update as du
+
+        def fake_wp(espn_id, timeout=10):
+            if espn_id == "raises":
+                raise RuntimeError("ESPN summary drift")
+            if espn_id == "notfinal":
+                return {"status": "STATUS_IN_PROGRESS", "plays": GOOD_PLAYS}
+            return {"status": "STATUS_FINAL", "plays": GOOD_PLAYS[:1]}  # <2 plays
+
+        monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
+        failed = du.refresh_recent_excitement_scores(
+            session, window_days=None, limit=None
+        )
+        assert set(failed) == {"raises", "notfinal", "thin"}
+        session.expire_all()
+        for espn_id in ("raises", "notfinal", "thin"):
+            game = session.query(env.Game).filter_by(espn_id=espn_id).one()
+            assert game.excitement_index == 9.9  # stale value kept, surfaced
+    finally:
+        session.close()
+
+
+def test_refresh_unchanged_score_is_success_not_failure(env, monkeypatch):
+    """A recompute that agrees with the stored value is a successful
+    recheck: no failure reported, value stable across runs."""
+    session = env.get_session()
+    try:
+        _seed_game(env, session, "stable", excitement_index=9.9)
+        session.commit()
+
+        import scripts.daily_update as du
+
+        monkeypatch.setattr(
+            du,
+            "fetch_live_win_probability",
+            lambda espn_id, timeout=10: {
+                "status": "STATUS_FINAL",
+                "plays": GOOD_PLAYS,
+            },
+        )
+        # First run converges the value; second run recomputes identically.
+        assert (
+            du.refresh_recent_excitement_scores(session, window_days=None, limit=None)
+            == []
+        )
+        session.expire_all()
+        converged = (
+            session.query(env.Game).filter_by(espn_id="stable").one().excitement_index
+        )
+        assert (
+            du.refresh_recent_excitement_scores(session, window_days=None, limit=None)
+            == []
+        )
+        session.expire_all()
+        assert (
+            session.query(env.Game).filter_by(espn_id="stable").one().excitement_index
+            == converged
+        )
     finally:
         session.close()
