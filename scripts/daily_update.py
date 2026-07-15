@@ -566,9 +566,17 @@ def refresh_recent_excitement_scores(
             # The schedule path (fetch_and_store_games) is the source of
             # truth for completion state; a transient non-final summary
             # response here could otherwise erase real archive entries.
+            logger.warning(
+                f"Game {game.id} (espn_id={game.espn_id}) has ESPN status "
+                f"{status!r}, not {GameStatus.FINAL} — keeping stored value"
+            )
             failed.append(game.espn_id)
             continue
         if score is None:
+            logger.warning(
+                f"ESPN returned insufficient play data for game {game.id} "
+                f"(espn_id={game.espn_id}) — keeping stored value"
+            )
             failed.append(game.espn_id)
             continue
         if score != game.excitement_index:

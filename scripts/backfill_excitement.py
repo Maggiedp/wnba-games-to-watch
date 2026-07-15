@@ -9,9 +9,10 @@ an ingest change alters the computed series — e.g. the PR #97 play-time sort).
 The overwrite pass runs BEFORE the NULL-fill, so a row filled this run is
 never re-fetched or false-failed. Fails closed: exits 1 listing espn_ids
 whose stored (stale) value could not be refreshed — successfully refreshed
-rows persist across a failing run (values are per-game independent; there is
-no cross-row invariant to roll back for), so a re-run only retries the
-failures and converges monotonically. Exit 0 means every stored value was
+rows persist across a gate-driven exit-1 run (values are per-game
+independent; there is no cross-row invariant to roll back for), so a re-run
+only retries the failures and converges monotonically. A mid-run crash loses
+that run's uncommitted refresh work — harmless, the re-run redoes it. Exit 0 means every stored value was
 re-derived this run; scored rows without an espn_id cannot exist — excitement
 is only ever written via an espn_id-keyed fetch (see
 get_games_for_excitement_refresh). NULL rows that still can't be computed
