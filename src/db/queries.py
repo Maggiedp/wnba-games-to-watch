@@ -537,7 +537,7 @@ def get_completed_games_missing_excitement(
 
 def get_games_for_excitement_refresh(
     session: Session,
-    cutoff: datetime,
+    cutoff: datetime | None,
     season_year: int = 2026,
     limit: int | None = None,
 ) -> list[Game]:
@@ -546,7 +546,15 @@ def get_games_for_excitement_refresh(
     handling late ESPN corrections to a STATUS_FINAL game.
 
     `cutoff` is a datetime; rows with `excitement_computed_at >= cutoff`
-    are eligible. Order: least-recently-touched first (NULL
+    are eligible. `cutoff=None` (the batch-recompute path) drops the
+    freshness window entirely: every completed game with a stored
+    excitement_index qualifies, including legacy rows whose
+    excitement_computed_at is NULL (the column shipped 2026-05-16 with no
+    backfill of earlier rows). An espn_id is required in every mode — a row
+    without one can never be re-fetched, and selecting it would permanently
+    wedge the recompute's fail-closed exit code.
+
+    Order: least-recently-touched first (NULL
     `excitement_last_attempt_at` first, then ASC), so when more eligible
     rows share the same `excitement_computed_at` than the per-run cap
     allows — e.g. right after the one-shot backfill stamps many rows
@@ -558,14 +566,17 @@ def get_games_for_excitement_refresh(
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
         .filter(Game.excitement_index.isnot(None))
-        .filter(Game.excitement_computed_at.isnot(None))
-        .filter(Game.excitement_computed_at >= cutoff)
+        .filter(Game.espn_id.isnot(None))
         .filter(_NOT_PRESEASON)
-        .order_by(
-            Game.excitement_last_attempt_at.isnot(None),
-            Game.excitement_last_attempt_at.asc(),
-            Game.excitement_computed_at.asc(),
+    )
+    if cutoff is not None:
+        q = q.filter(Game.excitement_computed_at.isnot(None)).filter(
+            Game.excitement_computed_at >= cutoff
         )
+    q = q.order_by(
+        Game.excitement_last_attempt_at.isnot(None),
+        Game.excitement_last_attempt_at.asc(),
+        Game.excitement_computed_at.asc(),
     )
     if limit is not None:
         q = q.limit(limit)
