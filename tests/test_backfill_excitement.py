@@ -324,3 +324,38 @@ def test_main_recompute_fails_closed_when_stored_row_unrefreshable(env, monkeypa
         )
     finally:
         session.close()
+
+
+def test_main_recompute_never_refetches_rows_filled_this_run(env, monkeypatch):
+    """Refresh runs BEFORE populate, so a row filled this run is fetched
+    exactly once — a would-be transient failure on a second fetch can't
+    false-fail the recompute (the value is fresh, not stale)."""
+    session = env.get_session()
+    _seed_game(env, session, "flaky")  # NULL -> populate fills it
+    session.commit()
+    session.close()
+
+    import scripts.backfill_excitement as bf
+    import scripts.daily_update as du
+
+    calls = {"n": 0}
+
+    def fake_wp(espn_id, timeout=10):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("transient blip on the second call")
+        return {"status": "STATUS_FINAL", "plays": GOOD_PLAYS}
+
+    monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
+    monkeypatch.setattr(bf.sys, "argv", ["backfill_excitement", "--recompute"])
+
+    assert bf.main() == 0
+    assert calls["n"] == 1  # fetched once by populate, never re-fetched by refresh
+    session = env.get_session()
+    try:
+        assert (
+            session.query(env.Game).filter_by(espn_id="flaky").one().excitement_index
+            is not None
+        )
+    finally:
+        session.close()

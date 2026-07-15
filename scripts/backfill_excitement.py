@@ -6,9 +6,11 @@ trailing edge fresh from then on.
 
 Pass --recompute to ALSO re-derive + overwrite every stored value (use after
 an ingest change alters the computed series — e.g. the PR #97 play-time sort).
-Fails closed: exits 1 listing espn_ids whose stored (stale) value could not
-be refreshed — re-run to converge. NULL rows that still can't be computed
-stay the populate's NULL-retry problem and do not gate the exit code.
+The overwrite pass runs BEFORE the NULL-fill, so a row filled this run is
+never re-fetched or false-failed. Fails closed: exits 1 listing espn_ids
+whose stored (stale) value could not be refreshed — re-run to converge. NULL
+rows that still can't be computed stay the populate's NULL-retry problem and
+do not gate the exit code.
 
 Usage:
     python -m scripts.backfill_excitement              # fill missing only
@@ -36,20 +38,25 @@ def main() -> int:
         init_db()
         session = get_session()
         try:
-            # No retry cap and the live-WP timeout — one-shot script,
-            # we want every backlog row attempted.
-            populate_excitement_for_recent_completions(session, limit=None, timeout=10)
+            # Recompute first: the refresh's query (excitement IS NOT NULL)
+            # and the populate's (IS NULL) are disjoint, so refreshing before
+            # filling means a row filled THIS run is never re-fetched — and a
+            # transient blip on a second fetch can't false-fail the exit code.
+            failed: list[str] = []
             if recompute:
                 failed = refresh_recent_excitement_scores(
                     session, window_days=None, limit=None, timeout=10
                 )
-                if failed:
-                    logger.error(
-                        f"Recompute INCOMPLETE: {len(failed)} stored game(s) could "
-                        f"not be refreshed (stale values kept): {failed}. "
-                        "Re-run to retry."
-                    )
-                    return 1
+            # No retry cap and the live-WP timeout — one-shot script,
+            # we want every backlog row attempted.
+            populate_excitement_for_recent_completions(session, limit=None, timeout=10)
+            if failed:
+                logger.error(
+                    f"Recompute INCOMPLETE: {len(failed)} stored game(s) could "
+                    f"not be refreshed (stale values kept): {failed}. "
+                    "Re-run to retry."
+                )
+                return 1
             logger.info("=== Backfill complete ===")
             return 0
         finally:
