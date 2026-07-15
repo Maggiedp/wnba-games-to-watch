@@ -218,6 +218,7 @@ def test_refresh_unchanged_score_is_success_not_failure(env, monkeypatch):
         converged = (
             session.query(env.Game).filter_by(espn_id="stable").one().excitement_index
         )
+        assert converged != 9.9  # run 1 really recomputed (0.4 from GOOD_PLAYS)
         assert (
             du.refresh_recent_excitement_scores(session, window_days=None, limit=None)
             == []
@@ -226,6 +227,95 @@ def test_refresh_unchanged_score_is_success_not_failure(env, monkeypatch):
         assert (
             session.query(env.Game).filter_by(espn_id="stable").one().excitement_index
             == converged
+        )
+    finally:
+        session.close()
+
+
+def test_main_default_mode_fills_nulls_only(env, monkeypatch):
+    """Without --recompute the script keeps its historical contract:
+    NULL rows get filled, stored values are never touched."""
+    session = env.get_session()
+    _seed_game(env, session, "hole")  # excitement NULL -> populate fills it
+    _seed_game(env, session, "keep", excitement_index=9.9)
+    session.commit()
+    session.close()
+
+    import scripts.backfill_excitement as bf
+    import scripts.daily_update as du
+
+    monkeypatch.setattr(
+        du,
+        "fetch_live_win_probability",
+        lambda espn_id, timeout=10: {"status": "STATUS_FINAL", "plays": GOOD_PLAYS},
+    )
+    monkeypatch.setattr(bf.sys, "argv", ["backfill_excitement"])
+
+    assert bf.main() == 0
+    session = env.get_session()
+    try:
+        assert (
+            session.query(env.Game).filter_by(espn_id="hole").one().excitement_index
+            is not None
+        )
+        assert (
+            session.query(env.Game).filter_by(espn_id="keep").one().excitement_index
+            == 9.9
+        )
+    finally:
+        session.close()
+
+
+def test_main_recompute_overwrites_and_exits_zero(env, monkeypatch):
+    session = env.get_session()
+    _seed_game(env, session, "stale", excitement_index=9.9)
+    session.commit()
+    session.close()
+
+    import scripts.backfill_excitement as bf
+    import scripts.daily_update as du
+
+    monkeypatch.setattr(
+        du,
+        "fetch_live_win_probability",
+        lambda espn_id, timeout=10: {"status": "STATUS_FINAL", "plays": GOOD_PLAYS},
+    )
+    monkeypatch.setattr(bf.sys, "argv", ["backfill_excitement", "--recompute"])
+
+    assert bf.main() == 0
+    session = env.get_session()
+    try:
+        assert (
+            session.query(env.Game).filter_by(espn_id="stale").one().excitement_index
+            != 9.9
+        )
+    finally:
+        session.close()
+
+
+def test_main_recompute_fails_closed_when_stored_row_unrefreshable(env, monkeypatch):
+    """A stored value the recompute couldn't refresh means stale data
+    persisted -> exit 1 (operator re-runs to converge), value untouched."""
+    session = env.get_session()
+    _seed_game(env, session, "stuck", excitement_index=9.9)
+    session.commit()
+    session.close()
+
+    import scripts.backfill_excitement as bf
+    import scripts.daily_update as du
+
+    def fake_wp(espn_id, timeout=10):
+        raise RuntimeError("ESPN summary drift")
+
+    monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
+    monkeypatch.setattr(bf.sys, "argv", ["backfill_excitement", "--recompute"])
+
+    assert bf.main() == 1
+    session = env.get_session()
+    try:
+        assert (
+            session.query(env.Game).filter_by(espn_id="stuck").one().excitement_index
+            == 9.9
         )
     finally:
         session.close()

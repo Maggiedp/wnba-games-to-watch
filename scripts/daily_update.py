@@ -516,10 +516,10 @@ def refresh_recent_excitement_scores(
     time the value is treated as locked.
 
     `window_days=None` drops the window entirely — every completed 2026 game
-    with a stored excitement_index is re-fetched, including legacy rows whose
-    excitement_computed_at is NULL. That's the batch-recompute path
-    (`backfill_excitement.py --recompute`); the daily job keeps the bounded
-    window + cap defaults.
+    with a stored excitement_index qualifies (pass limit=None to actually
+    reach them all), including legacy rows whose excitement_computed_at is
+    NULL — the batch-recompute path (`backfill_excitement.py --recompute`);
+    the daily job keeps the bounded window + cap defaults.
 
     Returns the espn_ids that could NOT be refreshed (fetch/compute error,
     non-FINAL feed, insufficient plays) — their stored values were left
