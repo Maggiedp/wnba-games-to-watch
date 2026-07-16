@@ -1,23 +1,26 @@
 """Compute the regular-season importance ceiling from a completed prior season.
 
-Walks the target season chronologically. For each date with games, builds
-standings + Elo as of that morning (everything strictly before the date), runs
-one 10k Monte Carlo over the remaining schedule, and reads each same-day game's
-corrected all-team swing from compute_importance_from_matrix — the SAME method
-the daily job uses live. A game's swing peaks on the day it's played (standings
-most developed), so recording same-day swings captures each game's peak.
+Walks the target season chronologically. For each date, seeds every season team
+at 0-0 and applies results strictly before that date — mirroring production
+daily_update.compute_standings — then runs one seeded 10k Monte Carlo over the
+full remaining schedule and reads each same-day game's corrected all-team swing
+from compute_importance_from_matrix, the same method the daily job uses live. A
+game's swing peaks on the day it's played (standings most developed), so
+recording same-day swings captures each game's peak.
 
-Reports the max + high percentiles of the swing distribution. Pin the max (or
-p99 if the max is a lone outlier) as REGULAR_SEASON_MAX_SWING in
-src/scoring/importance.py.
+The per-date RNG seed makes the pinned value reproducible (production seeds its
+Monte Carlo the same way). Reports the max + high percentiles of the swing
+distribution — pin the max (or p99 if the max is a lone outlier) as
+REGULAR_SEASON_MAX_SWING in src/scoring/importance.py.
 
 Offline, one-time per offseason. Re-run on the newest completed season. Takes
-~10-20 min (a 10k MC per game-date; early-season runs are slowest). Per-date
-progress is printed to stderr; the final distribution goes to stdout.
+~10-20 min (a 10k MC per game-date). Per-date progress -> stderr; final
+distribution -> stdout.
 """
 
 from __future__ import annotations
 
+import random
 import statistics
 import sys
 from datetime import date
@@ -52,15 +55,36 @@ def main() -> None:
         file=sys.stderr,
     )
 
+    # Full season team set, seeded 0-0 each date exactly like production
+    # daily_update.compute_standings (which initializes every known team before
+    # tallying results) — so the sim's team pool + schedule match the live
+    # ranking path, not just the subset that has already played.
+    all_season_teams = {
+        name for g in season_games for name in (g["team_a"], g["team_b"])
+    }
+
     peak_swing = 0.0
     peak_game = ""
     all_swings: list[float] = []
 
     for idx, d in enumerate(game_dates, start=1):
-        # Standings + Elo as of the morning of date d: everything strictly before d.
+        # Deterministic per-date RNG so the pinned ceiling is reproducible;
+        # production seeds its Monte Carlo before each run the same way.
+        random.seed(int(d.replace("-", "")))
+
+        # Standings + Elo as of the morning of date d: results strictly before d
+        # applied on top of an all-teams-0-0 seed (mirrors compute_standings).
         prior = [g for g in completed if g.get("date", "") < d]
         elo = replay_games(prior).final_ratings
-        standings: dict[str, dict] = {}
+        standings: dict[str, dict] = {
+            name: {
+                "wins": 0,
+                "losses": 0,
+                "h2h": {},
+                "elo": elo.get(name, INITIAL_RATING),
+            }
+            for name in sorted(all_season_teams)
+        }
         for g in prior:
             if not g.get("date", "").startswith(season):
                 continue
@@ -69,36 +93,18 @@ def main() -> None:
             loser = b if winner == a else a
             if not winner or not loser:
                 continue
-            for name in (winner, loser):
-                standings.setdefault(
-                    name,
-                    {
-                        "wins": 0,
-                        "losses": 0,
-                        "h2h": {},
-                        "elo": elo.get(name, INITIAL_RATING),
-                    },
-                )
             standings[winner]["wins"] += 1
             standings[loser]["losses"] += 1
             # h2h: {opponent: [wins, losses]} — required by resolve_seeding's
-            # tiebreakers (matches production compute_standings; without it the
-            # seeding fixed-point loop can't converge on ties).
+            # tiebreakers (matches production compute_standings).
             standings[winner]["h2h"].setdefault(loser, [0, 0])[0] += 1
             standings[loser]["h2h"].setdefault(winner, [0, 0])[1] += 1
 
-        # Remaining schedule from date d onward = the sim universe. Same-day
-        # games sort first, so swings[:len(todays)] line up with them.
-        remaining_rows = [
-            g
-            for g in season_games
-            if g.get("date", "") >= d
-            and g["team_a"] in standings
-            and g["team_b"] in standings
-        ]
+        # Full remaining schedule from date d onward = the sim universe (no
+        # membership filter — every season team is already seeded above).
+        remaining_rows = [g for g in season_games if g.get("date", "") >= d]
         remaining = [(g["team_a"], g["team_b"]) for g in remaining_rows]
         if not remaining:
-            print(f"  [{idx}/{len(game_dates)}] {d}: no sim universe", file=sys.stderr)
             continue
 
         _, matrix, playoff_sets, _, _ = run_monte_carlo_simulation(

@@ -3,14 +3,16 @@
 # Regular-season importance ceiling = the peak all-team playoff-odds swing
 # actually observed in the prior completed season, computed with the corrected
 # compute_importance_from_matrix method at 10k sims by
-# scripts/compute_importance_ceiling.py. Pinned so the 0-100 scale reads in
-# honest season-wide stakes: a moderate mid-season swing is moderate, and only
-# genuine stretch-run bubble games approach 100. Reviewed, season-boundary-
-# recalibrated constant (like DEFAULT_K and the BPI range) — re-run the scan and
-# bump it each offseason. Previously auto-derived from an equal-standings sim
-# (~0.29), which under-anchored and inflated mid-season games.
-# 2025 scan: max 0.5093 (Aug 9, Golden State Valkyries vs LA Sparks), p99 0.44.
-REGULAR_SEASON_MAX_SWING = 0.5093
+# scripts/compute_importance_ceiling.py (which mirrors production standings
+# construction — all teams seeded 0-0 — and seeds the RNG per date, so the value
+# is reproducible). Pinned so the 0-100 scale reads in honest season-wide stakes:
+# a moderate mid-season swing is moderate, and only genuine stretch-run bubble
+# games approach 100. Reviewed, season-boundary-recalibrated constant (like
+# DEFAULT_K and the BPI range) — re-run the scan and bump it each offseason.
+# Previously auto-derived from an equal-standings sim (~0.29), which
+# under-anchored and inflated mid-season games.
+# 2025 scan: max 0.5174 (Aug 9, Golden State Valkyries vs LA Sparks), p99 0.43.
+REGULAR_SEASON_MAX_SWING = 0.5174
 
 
 def normalize_importance_score(
