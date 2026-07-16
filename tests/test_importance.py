@@ -83,6 +83,32 @@ def test_normalize_explicit_max_swing_overrides_default():
     assert normalize_importance_score(0.375, max_swing=0.75) == 50.0
 
 
+def _overall(quality: float, raw_swing: float) -> float:
+    """Mirror daily_update's overall blend: 60% quality + 40% importance."""
+    importance = normalize_importance_score(raw_swing)  # new default ceiling
+    return quality * 0.6 + importance * 0.4
+
+
+def test_july_bubble_game_does_not_outrank_good_team_games():
+    """Regression: on the 2026-07-15 slate under the OLD 0.290 ceiling, a
+    Sky-Sparks (two weak/bubble teams) game outscored games involving good
+    teams. Raw swings are backed out from the observed importance (imp/100 *
+    0.290). With the re-anchored ceiling, the bubble game must rank BELOW the
+    good-team games on overall score.
+
+    If this fails, REGULAR_SEASON_MAX_SWING is too low to fix the inversion —
+    revisit the scan, do not relax this assertion.
+    """
+    sky_sparks = _overall(quality=49.3, raw_swing=0.603 * 0.290)
+    dallas_nyl = _overall(quality=78.0, raw_swing=0.093 * 0.290)
+    indiana_gs = _overall(quality=77.9, raw_swing=0.055 * 0.290)
+    dallas_atl = _overall(quality=76.3, raw_swing=0.049 * 0.290)
+
+    assert sky_sparks < dallas_nyl
+    assert sky_sparks < indiana_gs
+    assert sky_sparks < dallas_atl
+
+
 # --- run_monte_carlo_simulation directionality ---
 
 
