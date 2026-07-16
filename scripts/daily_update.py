@@ -26,7 +26,6 @@ from src.data.wnba_schedule import (
     fetch_wnba_schedule_broadcasters,
 )
 from src.db.queries import (
-    delete_importance_ceilings_before,
     delete_team_style_season,
     get_all_teams,
     get_completed_games,
@@ -34,14 +33,12 @@ from src.db.queries import (
     get_completed_games_missing_shape,
     get_completed_postseason_games,
     get_games_for_excitement_refresh,
-    get_importance_max_swing,
     get_team_abbrev_map,
     get_team_by_id,
     get_team_by_name,
     get_team_style_season_counts,
     get_teams_by_ids,
     replace_elo_history,
-    save_importance_max_swing,
     upsert_daily_ranking,
     upsert_game,
     upsert_game_shape,
@@ -63,6 +60,7 @@ from src.scoring.elo import (
 from src.scoring.excitement import compute_excitement
 from src.scoring.game_shape import compute_game_shape
 from src.scoring.importance import (
+    REGULAR_SEASON_MAX_SWING,
     normalize_importance_score,
     normalize_postseason_importance,
 )
@@ -662,35 +660,6 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
     return standings
 
 
-def _calibrate_season_max_swing(standings: dict, all_games: list[dict]) -> float:
-    """Return the expected peak importance swing for this season.
-
-    Runs a single 10k Monte Carlo from equal (0-0) standings over all
-    non-preseason games, then returns the max swing across every game.
-    Called once per season on the first daily-update run and cached in DB.
-    """
-    zero_standings = {
-        team: {**info, "wins": 0, "losses": 0, "h2h": {}}
-        for team, info in standings.items()
-    }
-    remaining = [
-        (g["team_a"], g["team_b"]) for g in all_games if g.get("season_type", 2) == 2
-    ]
-    _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
-        zero_standings, remaining, num_simulations=10000, return_matrix=True
-    )
-    team_names = list(zero_standings.keys())
-    swings = compute_importance_from_matrix(
-        outcome_matrix, playoff_sets, remaining, team_names
-    )
-    return max(swings) if swings else 0.75
-
-
-# Ceilings cached before this date used the pre-noise-floor-correction swing
-# formula; the probe in main() drops them so the next lookup recalibrates.
-_CEILING_CORRECTION_CUTOFF = datetime(2026, 6, 12)
-
-
 def _build_current_bracket_state(session, standings: dict):
     """Build the observed BracketState from current seeding and completed
     postseason games.
@@ -1092,18 +1061,10 @@ def compute_daily_scores(
     bpi_values = [s["bpi"] for s in standings.values()]
     bpi_min, bpi_max = min(bpi_values), max(bpi_values)
 
-    # Importance: normalize by the season-start ceiling (computed once from equal
-    # standings over the full schedule, then cached in DB). This keeps scores
-    # comparable all season — later games naturally score higher as swings grow.
-    season_year = int(today[:4])
-    importance_ceiling = get_importance_max_swing(session, season_year)
-    if importance_ceiling is None:
-        logger.info(
-            "First run of season — calibrating importance ceiling from equal standings..."
-        )
-        importance_ceiling = _calibrate_season_max_swing(standings, games)
-        save_importance_max_swing(session, season_year, importance_ceiling)
-        logger.info(f"Season importance ceiling: {importance_ceiling:.3f}")
+    # Importance: normalize by the pinned prior-season peak swing
+    # (REGULAR_SEASON_MAX_SWING). A reviewed constant, not recomputed live —
+    # see src/scoring/importance.py.
+    importance_ceiling = REGULAR_SEASON_MAX_SWING
 
     logger.info(
         f"Normalization: BPI=[{bpi_min:.2f}, {bpi_max:.2f}], "
@@ -1337,26 +1298,6 @@ def main() -> int:
                 # transaction or autoflush partially-staged mutations.
                 session.rollback()
                 logger.warning(f"Legacy preseason backfill failed (non-fatal): {e}")
-            # Drop importance ceilings cached with the pre-noise-floor-
-            # correction swing formula so compute_daily_scores recalibrates
-            # on the corrected scale this run. One-shot: recalibrated rows
-            # carry a fresh created_at past the cutoff, so this is a
-            # permanent no-op afterward. The helper self-commits.
-            try:
-                dropped = delete_importance_ceilings_before(
-                    session, _CEILING_CORRECTION_CUTOFF
-                )
-                for year, old_swing in dropped:
-                    logger.info(
-                        f"Dropped pre-correction importance ceiling for {year} "
-                        f"(was {old_swing:.3f}) — recalibrating this run"
-                    )
-            except Exception as e:
-                # Rollback so downstream queries don't inherit a failed
-                # transaction. Non-fatal: worst case is one more run on the
-                # old (slightly inflated) ceiling.
-                session.rollback()
-                logger.warning(f"Ceiling invalidation failed (non-fatal): {e}")
             replay = compute_elo_ratings()
             elo_ratings = replay.final_ratings
             standings = compute_standings(session, elo_ratings)
