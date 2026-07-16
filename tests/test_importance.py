@@ -2,7 +2,7 @@
 
 import random
 
-from src.scoring.importance import normalize_importance_score
+from src.scoring.importance import REGULAR_SEASON_MAX_SWING, normalize_importance_score
 from src.scoring.monte_carlo import run_monte_carlo_simulation
 
 # Real WNBA team names mapped to synthetic fixture roles (must be in TEAM_CONFERENCES).
@@ -64,17 +64,23 @@ def test_normalize_zero():
     assert normalize_importance_score(0.0) == 0.0
 
 
-def test_normalize_at_max():
-    assert normalize_importance_score(0.75) == 100.0
+def test_normalize_at_default_max():
+    # A swing equal to the pinned ceiling maps to 100 by default.
+    assert normalize_importance_score(REGULAR_SEASON_MAX_SWING) == 100.0
 
 
 def test_normalize_over_max_is_capped():
-    assert normalize_importance_score(1.0) == 100.0
+    assert normalize_importance_score(REGULAR_SEASON_MAX_SWING * 2) == 100.0
     assert normalize_importance_score(999.0) == 100.0
 
 
-def test_normalize_midpoint():
-    assert normalize_importance_score(0.375) == 50.0
+def test_normalize_default_midpoint():
+    assert normalize_importance_score(REGULAR_SEASON_MAX_SWING / 2) == 50.0
+
+
+def test_normalize_explicit_max_swing_overrides_default():
+    # Callers (daily_update, validate_bubble_swing) pass max_swing explicitly.
+    assert normalize_importance_score(0.375, max_swing=0.75) == 50.0
 
 
 # --- run_monte_carlo_simulation directionality ---
