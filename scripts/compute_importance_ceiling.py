@@ -33,6 +33,7 @@ from src.scoring.monte_carlo import (
     compute_importance_from_matrix,
     run_monte_carlo_simulation,
 )
+from src.scoring.tiebreakers import increment_h2h
 
 SEASON_YEAR = 2025
 NUM_SIMULATIONS = 10000
@@ -97,10 +98,10 @@ def main() -> None:
                 continue
             standings[winner]["wins"] += 1
             standings[loser]["losses"] += 1
-            # h2h: {opponent: [wins, losses]} — required by resolve_seeding's
-            # tiebreakers (matches production compute_standings).
-            standings[winner]["h2h"].setdefault(loser, [0, 0])[0] += 1
-            standings[loser]["h2h"].setdefault(winner, [0, 0])[1] += 1
+            # h2h ([wins, losses]) is required by resolve_seeding's tiebreakers;
+            # use the shared helper so this mirrors production compute_standings.
+            increment_h2h(standings[winner]["h2h"], loser, won=True)
+            increment_h2h(standings[loser]["h2h"], winner, won=False)
 
         # Full remaining schedule from date d onward = the sim universe (no
         # membership filter — every season team is already seeded above).
@@ -121,13 +122,13 @@ def main() -> None:
         )
 
         todays = [g for g in remaining_rows if g.get("date", "") == d]
-        for i in range(len(todays)):
-            s = swings[i]
+        day_swings = swings[: len(todays)]
+        for g, s in zip(todays, day_swings):
             all_swings.append(s)
             if s > peak_swing:
                 peak_swing = s
-                peak_game = f"{d}  {todays[i]['team_a']} vs {todays[i]['team_b']}"
-        day_max = max(swings[: len(todays)]) if todays else 0.0
+                peak_game = f"{d}  {g['team_a']} vs {g['team_b']}"
+        day_max = max(day_swings) if day_swings else 0.0
         print(
             f"  [{idx}/{len(game_dates)}] {d}: {len(todays)} games, "
             f"day_max={day_max:.4f}, peak_so_far={peak_swing:.4f}",
