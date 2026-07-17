@@ -1,18 +1,30 @@
 """Compute game importance score based on playoff impact."""
 
+# Regular-season importance ceiling = the peak all-team playoff-odds swing
+# actually observed in the prior completed season, computed with the corrected
+# compute_importance_from_matrix method at 10k sims by
+# scripts/compute_importance_ceiling.py (which mirrors production standings
+# construction — all teams seeded 0-0 — and seeds the RNG per date, so the value
+# is reproducible). Pinned so the 0-100 scale reads in honest season-wide stakes:
+# a moderate mid-season swing is moderate, and only genuine stretch-run bubble
+# games approach 100. Reviewed, season-boundary-recalibrated constant (like
+# DEFAULT_K and the BPI range) — re-run the scan and bump it each offseason.
+# Previously auto-derived from an equal-standings sim (~0.29), which
+# under-anchored and inflated mid-season games.
+# 2025 scan: max 0.5174 (Aug 9, Golden State Valkyries vs LA Sparks), p99 0.43.
+REGULAR_SEASON_MAX_SWING = 0.5174
 
-def normalize_importance_score(swing: float, max_swing: float = 0.75) -> float:
+
+def normalize_importance_score(
+    swing: float, max_swing: float = REGULAR_SEASON_MAX_SWING
+) -> float:
     """Normalize importance swing to 0-100 scale.
 
     Swing = sum across **all** teams of |P(makes playoffs | team_a wins) - P(makes playoffs | team_b wins)|.
     Captures bubble watchers, not just the two teams on the court.
 
-    Empirical scale on real 2025 data (scripts/validate_bubble_swing.py):
-        Aug 18 4-way bubble peak ~0.58, Aug 25 peak ~0.47, Sep 1 (bubble cleared) peak ~0.10.
-        max_swing=0.75 maps a hot late-season bubble game to ~77/100. Synthetic
-        4-way-tied fixture hits ~2.0 (saturates at 100 — extreme cases that don't
-        appear in real WNBA). Coincidentally matches the previous two-team-only
-        calibration: bubble watchers add ~what dilution between playing teams costs.
+    `max_swing` defaults to REGULAR_SEASON_MAX_SWING (the pinned prior-season
+    peak). Production and offline validators pass it explicitly.
     """
     clamped = min(max_swing, swing)
     return max(0.0, min(100.0, (clamped / max_swing) * 100))

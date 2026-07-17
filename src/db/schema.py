@@ -137,16 +137,6 @@ class PlayoffProbability(Base):
     )
 
 
-class SeasonConfig(Base):
-    """Per-season calibration values computed once at season open."""
-
-    __tablename__ = "season_config"
-
-    season_year = Column(Integer, primary_key=True)
-    importance_max_swing = Column(Float, nullable=False)
-    created_at = Column(DateTime, default=func.now())
-
-
 class GameShape(Base):
     """Self-contained per-game win-probability shape for the Replay Value
     archive. Keyed by espn_id (NOT FK'd to games) so it holds 2024-2026
