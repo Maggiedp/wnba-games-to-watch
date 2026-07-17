@@ -8,8 +8,10 @@ from compute_importance_from_matrix, the same method the daily job uses live. A
 game's swing peaks on the day it's played (standings most developed), so
 recording same-day swings captures each game's peak.
 
-The per-date RNG seed makes the pinned value reproducible (production seeds its
-Monte Carlo the same way). Reports the max + high percentiles of the swing
+The per-date RNG seed makes the pinned value reproducible (re-running yields an
+identical peak) — it is a determinism device for the calibration, not
+production's operational seed (which is the last completed date); the season
+peak is robust to the choice. Reports the max + high percentiles of the swing
 distribution — pin the max (or p99 if the max is a lone outlier) as
 REGULAR_SEASON_MAX_SWING in src/scoring/importance.py.
 
