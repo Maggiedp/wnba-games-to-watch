@@ -98,14 +98,46 @@ def test_downsample_preserves_endpoints_and_caps_count():
     assert curve[-1][1] == pytest.approx(299 / 300)
 
 
-def test_compute_game_shape_aggregates():
-    plays = [_play(1, "10:00", 0.50), _play(2, "5:00", 0.20), _play(4, "0:00", 0.80)]
+def test_compute_game_shape_aggregates(wp_plays):
+    # 0.55 → 0.20 → 0.85 keeps both 0.5-crossings strictly between samples
+    # (an exact-0.5 sample zeroes the sign product and hides the crossing).
+    plays = wp_plays([0.55, 0.20, 0.85])
     shape = compute_game_shape(plays, home_won=True)
     assert isinstance(shape, ShapeMetrics)
     assert shape.comeback == pytest.approx(0.30)
     assert shape.excitement > 0
-    assert shape.lead_changes == 1
-    assert len(shape.curve) == 3
+    assert shape.lead_changes == 2
+    assert len(shape.curve) == len(plays)
+
+
+def test_game_shape_none_for_clustered_sparse_feed():
+    # Replica of ESPN's broken feed for 2025-05-02 DAL@LV (401761558): three
+    # samples spanning ~2 seconds, all 0.0. Pre-gate this stored comeback=0.5
+    # (the winner "climbing" from a 2-second 0% sliver) and topped the /replay
+    # comeback sort. Must be rejected, not archived.
+    plays = [_play(2, "0:02", 0.0), _play(2, "0:00", 0.0), _play(2, "0:00", 0.0)]
+    assert compute_game_shape(plays, home_won=True) is None
+
+
+def test_game_shape_none_when_feed_spans_too_little(wp_plays):
+    # Plenty of samples, but all clustered in the final 90 seconds — the feed
+    # can't represent the game's shape even though every sample is valid.
+    plays = [_play(4, f"1:{30 - s:02d}", 0.5) for s in range(25)]
+    assert compute_game_shape(plays, home_won=True) is None
+
+
+def test_game_shape_none_when_too_few_plays():
+    # Full-game span but only 3 samples: too sparse to trust the time-weighted
+    # metrics or draw an honest curve.
+    plays = [_play(1, "10:00", 0.50), _play(2, "5:00", 0.20), _play(4, "0:00", 0.80)]
+    assert compute_game_shape(plays, home_won=True) is None
+
+
+def test_live_shape_has_no_coverage_gate(wp_plays):
+    # A live game is legitimately partial — compute_live_shape keeps the bare
+    # <2-plays contract so early-game strips still render.
+    plays = [_play(1, "10:00", 0.50), _play(1, "8:00", 0.55), _play(1, "5:00", 0.60)]
+    assert compute_live_shape(plays) is not None
 
 
 def _live_plays():

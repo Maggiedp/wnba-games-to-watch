@@ -27,7 +27,7 @@ def _seed_stale_shape(session, espn_id="STALE"):
     )
 
 
-def test_backfill_stores_completed_and_skips_existing(env, monkeypatch):
+def test_backfill_stores_completed_and_skips_existing(env, monkeypatch, wp_plays):
     session = env.get_session()
     upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
     upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
@@ -61,10 +61,7 @@ def test_backfill_stores_completed_and_skips_existing(env, monkeypatch):
             "away_team": "New York Liberty",
             "home_score": "80",
             "away_score": "70",
-            "plays": [
-                {"period": 1, "clock": "10:00", "home_pct": 0.5},
-                {"period": 4, "clock": "0:00", "home_pct": 0.9},
-            ],
+            "plays": wp_plays([0.55, 0.9]),
         }
 
     # _build_and_store_shape (imported from daily_update) resolves
@@ -97,7 +94,7 @@ def test_backfill_main_fails_closed_on_skipped_window(env, monkeypatch):
     assert bf.main() == 1
 
 
-def test_backfill_recompute_reprocesses_existing(env, monkeypatch):
+def test_backfill_recompute_reprocesses_existing(env, monkeypatch, wp_plays):
     session = env.get_session()
     upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
     upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
@@ -129,10 +126,7 @@ def test_backfill_recompute_reprocesses_existing(env, monkeypatch):
             "away_team": "New York Liberty",
             "home_score": "80",
             "away_score": "70",
-            "plays": [
-                {"period": 1, "clock": "10:00", "home_pct": 0.5},
-                {"period": 4, "clock": "0:00", "home_pct": pct},
-            ],
+            "plays": wp_plays([0.55, pct]),
         }
 
     monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
@@ -154,7 +148,9 @@ def test_backfill_recompute_reprocesses_existing(env, monkeypatch):
     session.close()
 
 
-def test_backfill_recompute_records_existing_row_misses_only(env, monkeypatch):
+def test_backfill_recompute_records_existing_row_misses_only(
+    env, monkeypatch, wp_plays
+):
     session = env.get_session()
     upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
     upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
@@ -198,10 +194,7 @@ def test_backfill_recompute_records_existing_row_misses_only(env, monkeypatch):
                 "away_team": "New York Liberty",
                 "home_score": "80",
                 "away_score": "70",
-                "plays": [
-                    {"period": 1, "clock": "10:00", "home_pct": 0.5},
-                    {"period": 4, "clock": "0:00", "home_pct": 0.9},
-                ],
+                "plays": wp_plays([0.55, 0.9]),
             }
         # STALE + NEW_BAD: a non-final feed -> _build_and_store_shape returns
         # False (no exception), exercising the False-return miss path.
