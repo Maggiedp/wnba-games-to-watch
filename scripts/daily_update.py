@@ -57,7 +57,7 @@ from src.scoring.elo import (
     expected_win_prob,
     replay_games,
 )
-from src.scoring.excitement import compute_excitement
+from src.scoring.excitement import compute_excitement, elapsed_seconds
 from src.scoring.game_shape import compute_game_shape
 from src.scoring.importance import (
     REGULAR_SEASON_MAX_SWING,
@@ -426,10 +426,22 @@ def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
         return False
     # Use the ACTUAL winner (final score), not the last WP sample — see
     # compute_game_shape; ESPN can finalize before the WP feed catches up.
-    metrics = compute_game_shape(
-        wp.get("plays") or [], home_won=home_score > away_score
-    )
+    plays = wp.get("plays") or []
+    metrics = compute_game_shape(plays, home_won=home_score > away_score)
     if metrics is None:
+        # A FINAL game whose feed failed the coverage gate (or <2 plays).
+        # Log the reason per game: a systemic ESPN feed change that starts
+        # failing many finals should be visible in the logs, not just a
+        # shrinking aggregate "Stored game_shapes for N games" count.
+        span = (
+            elapsed_seconds(plays[-1]) - elapsed_seconds(plays[0])
+            if len(plays) >= 2
+            else 0.0
+        )
+        logger.warning(
+            f"Shape rejected for insufficient feed coverage (espn_id={espn_id}): "
+            f"{len(plays)} plays, {span:.0f}s span — leaving row absent for retry"
+        )
         return False
     home_team = wp["home_team"]
     away_team = wp["away_team"]
