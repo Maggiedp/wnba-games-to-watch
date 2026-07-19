@@ -7,7 +7,7 @@
 //   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
 //     --headless --disable-gpu --no-first-run \
 //     --user-data-dir=/tmp/wnba-smoke-profile --remote-debugging-port=9222 about:blank &
-//   CHROME_URL=http://127.0.0.1:9222 node --test tests/browser/
+//   CHROME_URL=http://127.0.0.1:9222 node --test 'tests/browser/**/*.test.js'
 // Afterwards: pkill -f "remote-debugging-port=9222"
 
 'use strict';
