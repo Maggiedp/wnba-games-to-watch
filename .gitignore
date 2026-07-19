@@ -33,6 +33,7 @@ env/
 *~
 
 # Project
+node_modules/
 .env
 .env.local
 *.sqlite
