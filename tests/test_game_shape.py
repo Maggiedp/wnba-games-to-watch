@@ -110,13 +110,11 @@ def test_compute_game_shape_aggregates(wp_plays):
     assert len(shape.curve) == len(plays)
 
 
-def test_game_shape_none_for_clustered_sparse_feed():
-    # Replica of ESPN's broken feed for 2025-05-02 DAL@LV (401761558): three
-    # samples spanning ~2 seconds, all 0.0. Pre-gate this stored comeback=0.5
-    # (the winner "climbing" from a 2-second 0% sliver) and topped the /replay
-    # comeback sort. Must be rejected, not archived.
-    plays = [_play(2, "0:02", 0.0), _play(2, "0:00", 0.0), _play(2, "0:00", 0.0)]
-    assert compute_game_shape(plays, home_won=True) is None
+def test_game_shape_none_for_clustered_sparse_feed(degenerate_wp_plays):
+    # Pre-gate the DAL@LV replica stored comeback=0.5 (the winner "climbing"
+    # from a 2-second 0% sliver) and topped the /replay comeback sort. Must be
+    # rejected, not archived.
+    assert compute_game_shape(degenerate_wp_plays, home_won=True) is None
 
 
 def test_game_shape_none_when_feed_spans_too_little(wp_plays):

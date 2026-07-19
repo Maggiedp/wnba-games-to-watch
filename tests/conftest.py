@@ -63,6 +63,18 @@ def wp_plays():
     return make_wp_plays
 
 
+@pytest.fixture
+def degenerate_wp_plays():
+    """Replica of ESPN's broken feed for 2025-05-02 DAL@LV (401761558): three
+    valid samples clustered in ~2 seconds, all 0.0 — passes per-sample
+    sanitization but must fail the shape coverage gate."""
+    return [
+        {"period": 2, "clock": "0:02", "home_pct": 0.0},
+        {"period": 2, "clock": "0:00", "home_pct": 0.0},
+        {"period": 2, "clock": "0:00", "home_pct": 0.0},
+    ]
+
+
 def frozen_datetime_class(fake_utc: datetime):
     """Return a datetime stand-in whose .now(tz) returns the frozen instant."""
 

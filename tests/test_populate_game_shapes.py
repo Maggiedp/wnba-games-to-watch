@@ -42,7 +42,9 @@ def test_populate_game_shapes_stores_row(env, monkeypatch, wp_plays):
     session.close()
 
 
-def test_populate_logs_warning_when_coverage_gate_rejects(env, monkeypatch, caplog):
+def test_populate_logs_warning_when_coverage_gate_rejects(
+    env, monkeypatch, caplog, degenerate_wp_plays
+):
     # A FINAL feed failing the coverage gate must leave a per-game WARNING
     # naming the espn_id, play count, and span — a systemic ESPN feed change
     # should be visible in the logs, not just a shrinking stored count.
@@ -69,12 +71,7 @@ def test_populate_logs_warning_when_coverage_gate_rejects(env, monkeypatch, capl
         "away_team": "New York Liberty",
         "home_score": "88",
         "away_score": "86",
-        # Replica of the degenerate 2025-05-02 DAL@LV feed: 3 clustered samples.
-        "plays": [
-            {"period": 2, "clock": "0:02", "home_pct": 0.0},
-            {"period": 2, "clock": "0:00", "home_pct": 0.0},
-            {"period": 2, "clock": "0:00", "home_pct": 0.0},
-        ],
+        "plays": degenerate_wp_plays,
     }
     import scripts.daily_update as du
 

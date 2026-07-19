@@ -148,7 +148,9 @@ def test_backfill_recompute_reprocesses_existing(env, monkeypatch, wp_plays):
     session.close()
 
 
-def test_backfill_recompute_purges_row_rejected_by_coverage_gate(env, monkeypatch):
+def test_backfill_recompute_purges_row_rejected_by_coverage_gate(
+    env, monkeypatch, degenerate_wp_plays
+):
     # A stored row whose refetched FINAL feed is authoritatively unshapeable
     # (the coverage gate rejects it) is kept + recorded as a miss by default
     # (fail closed — recompute must never destroy rows unprompted), and PURGED
@@ -183,12 +185,7 @@ def test_backfill_recompute_purges_row_rejected_by_coverage_gate(env, monkeypatc
             "away_team": "New York Liberty",
             "home_score": "80",
             "away_score": "70",
-            # Degenerate clustered feed: valid samples, fails the coverage gate.
-            "plays": [
-                {"period": 2, "clock": "0:02", "home_pct": 0.0},
-                {"period": 2, "clock": "0:00", "home_pct": 0.0},
-                {"period": 2, "clock": "0:00", "home_pct": 0.0},
-            ],
+            "plays": degenerate_wp_plays,
         }
 
     monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
@@ -272,7 +269,7 @@ def test_backfill_recompute_records_existing_row_misses_only(
                 "plays": wp_plays([0.55, 0.9]),
             }
         # STALE + NEW_BAD: a non-final feed -> _build_and_store_shape returns
-        # False (no exception), exercising the False-return miss path.
+        # ShapeResult.RETRY (no exception), exercising the non-exception miss path.
         return {
             "status": "STATUS_IN_PROGRESS",
             "home_team": "Las Vegas Aces",

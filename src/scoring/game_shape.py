@@ -32,13 +32,20 @@ MIN_SHAPE_PLAYS = 20
 MIN_SHAPE_SPAN_SECONDS = REGULATION_SECONDS * 0.75
 
 
+def feed_span_seconds(plays: list[dict]) -> float:
+    """Game-time seconds a time-sorted feed covers (0.0 if <2 plays). Public
+    so rejection logging reports the same number the gate tested."""
+    if len(plays) < 2:
+        return 0.0
+    return elapsed_seconds(plays[-1]) - elapsed_seconds(plays[0])
+
+
 def _covers_game(plays: list[dict]) -> bool:
     """True when a time-sorted FINAL feed has enough samples and game-time
     span for the shape metrics + curve to honestly represent the game."""
     if len(plays) < MIN_SHAPE_PLAYS:
         return False
-    span = elapsed_seconds(plays[-1]) - elapsed_seconds(plays[0])
-    return span >= MIN_SHAPE_SPAN_SECONDS
+    return feed_span_seconds(plays) >= MIN_SHAPE_SPAN_SECONDS
 
 
 def compute_tension(plays: list[dict]) -> float | None:

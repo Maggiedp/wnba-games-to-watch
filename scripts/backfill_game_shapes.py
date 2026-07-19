@@ -22,7 +22,7 @@ import logging
 import sys
 from datetime import date
 
-from scripts.daily_update import _build_and_store_shape
+from scripts.daily_update import ShapeResult, _build_and_store_shape
 from src.constants import GameStatus
 from src.data.espn_api import fetch_games_for_range
 from src.db.queries import (
@@ -65,10 +65,9 @@ def backfill_range(
 
     `recompute=True` re-derives + overwrites shapes already stored (used after
     an ingest fix changes the computed curve/metrics); the default skips them.
-    `purge_unshapeable=True` (recompute only) deletes a stored row whose
-    refetched FINAL feed is authoritatively unshapeable instead of recording
-    it as a miss — the explicit-operator escape for a permanently degenerate
-    feed that would otherwise wedge every recompute run at exit 1."""
+    `purge_unshapeable=True` (recompute only) deletes a stored row on an
+    UNSHAPEABLE result instead of recording a miss — see the module
+    docstring."""
     events = fetch_games_for_range(start, end, failed_windows=failed_windows)
     completed = [e for e in events if e.get("event_id") and _is_completed(e)]
     existing = get_existing_shape_espn_ids(session, [e["event_id"] for e in completed])
@@ -86,40 +85,26 @@ def backfill_range(
             )
         except Exception as ex:  # one bad game must not abort the batch
             logger.warning(f"Skipping espn_id={espn_id}: {ex}")
-            result = "retry"
-        if result == "stored":
+            result = ShapeResult.RETRY
+        if result == ShapeResult.STORED:
             stored += 1
             if stored % 25 == 0:
                 # upsert_game_shape commits per row; this is just progress.
                 logger.info(f"  …{stored} stored")
         elif recompute and espn_id in existing:
-            if result == "unshapeable" and purge_unshapeable:
-                # Explicit operator escalation: the refetched feed is
-                # authoritatively unshapeable (FINAL, scores parse, coverage
-                # gate rejects), so the stored row was derived from data that
-                # can't honestly represent the game. Deleting is safe to get
-                # wrong: a healthy-feed game purged in error is re-stored by
-                # the next fill-missing/recompute run (2026 rows also by the
-                # daily populate).
+            if result == ShapeResult.UNSHAPEABLE and purge_unshapeable:
+                # Safe to get wrong: a healthy-feed game purged in error is
+                # re-stored by the next fill-missing/recompute run (2026 rows
+                # also by the daily populate).
                 delete_game_shape(session, espn_id)
                 logger.warning(f"Purged stale unshapeable row: espn_id={espn_id}")
             elif failed_games is not None:
-                # Recompute couldn't refresh a game that ALREADY has a stored
-                # row, so the stale pre-fix row persists — record it to fail
-                # closed. "unshapeable" misses name their remedy; the rest
-                # (fetch raised / non-final / unparseable) are possibly
-                # transient and a plain re-run may clear them. (A completed
-                # game with no existing row that can't be shaped is a benign
-                # miss, not a stale-data integrity problem, so it doesn't gate
-                # the exit code.)
-                remedy = (
-                    " — permanently unshapeable feed? re-run with "
-                    "--purge-unshapeable to remove the row"
-                    if result == "unshapeable"
-                    else ""
-                )
+                # The stale pre-existing row persists — record it to fail
+                # closed. (A completed game with no existing row that can't be
+                # shaped is a benign miss, not a stale-data integrity problem,
+                # so it doesn't gate the exit code.)
                 logger.warning(
-                    f"Recompute miss (stale row kept): espn_id={espn_id}{remedy}"
+                    f"Recompute miss (stale row kept): espn_id={espn_id} ({result})"
                 )
                 failed_games.append(espn_id)
     return stored
@@ -168,7 +153,8 @@ def main() -> int:
                 logger.error(
                     f"Recompute INCOMPLETE: {len(failed_games)} stored game(s) "
                     f"could not be refreshed (stale rows kept): {failed_games}. "
-                    "Re-run to retry."
+                    "Re-run to retry; a game that stays 'unshapeable' needs "
+                    "--recompute --purge-unshapeable to remove its row."
                 )
                 return 1
             logger.info(f"=== Backfill complete: {total} stored ===")
