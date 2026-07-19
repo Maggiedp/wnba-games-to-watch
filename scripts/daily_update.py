@@ -406,11 +406,17 @@ def populate_excitement_for_recent_completions(
     logger.info(f"Stored excitement_index for {stored} games")
 
 
-def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
+def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> str:
     """Fetch a completed game's WP series, compute its shape, upsert the
-    game_shapes row. Returns True if stored. Shared by the daily populate and
-    the backfill. Leaves the row absent (returns False) on a non-final feed,
-    insufficient plays, or unparseable scores — so it's retried next run.
+    game_shapes row. Shared by the daily populate and the backfill. Returns:
+
+    - "stored": shape computed and upserted.
+    - "retry": possibly-transient miss (non-final feed, unparseable scores) —
+      leave any existing row alone and retry next run.
+    - "unshapeable": authoritative rejection — the fetch succeeded, the game is
+      FINAL and its scores parse, but the WP feed fails the coverage gate (or
+      has <2 plays), so no honest shape can exist. The backfill's --recompute
+      purges a stored row on this result rather than keeping it stale.
 
     Commits the session on a successful store (via upsert_game_shape's per-row
     commit, which is load-bearing for its IntegrityError retry) — callers need a
@@ -418,12 +424,12 @@ def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
     attempt stamps on failed games), not for the shape rows themselves."""
     wp = fetch_live_win_probability(espn_id, timeout=timeout)
     if wp.get("status") != GameStatus.FINAL:
-        return False
+        return "retry"
     try:
         home_score = int(wp["home_score"])
         away_score = int(wp["away_score"])
     except (KeyError, ValueError, TypeError):
-        return False
+        return "retry"
     # Use the ACTUAL winner (final score), not the last WP sample — see
     # compute_game_shape; ESPN can finalize before the WP feed catches up.
     plays = wp.get("plays") or []
@@ -440,9 +446,9 @@ def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
         )
         logger.warning(
             f"Shape rejected for insufficient feed coverage (espn_id={espn_id}): "
-            f"{len(plays)} plays, {span:.0f}s span — leaving row absent for retry"
+            f"{len(plays)} plays, {span:.0f}s span — not storing a shape"
         )
-        return False
+        return "unshapeable"
     home_team = wp["home_team"]
     away_team = wp["away_team"]
     upsert_game_shape(
@@ -464,7 +470,7 @@ def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
         winner_low_wp=metrics.winner_low_wp,
         curve=metrics.curve,
     )
-    return True
+    return "stored"
 
 
 def populate_game_shapes_for_recent_completions(
@@ -496,8 +502,11 @@ def populate_game_shapes_for_recent_completions(
         # excitement populate).
         game.game_shape_last_attempt_at = now
         try:
-            if _build_and_store_shape(
-                session, game.espn_id, game.date, abbrev_map, timeout
+            if (
+                _build_and_store_shape(
+                    session, game.espn_id, game.date, abbrev_map, timeout
+                )
+                == "stored"
             ):
                 stored += 1
         except (ESPNAPIError, ESPNNotFoundError) as e:

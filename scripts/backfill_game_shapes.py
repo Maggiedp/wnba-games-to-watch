@@ -7,6 +7,8 @@ already stored. Safe to re-run.
 
 Pass --recompute to re-derive + overwrite shapes already stored (use after an
 ingest change alters the computed curve/metrics, e.g. the play-ordering fix).
+A stored row whose refetched FINAL feed is authoritatively unshapeable (fails
+the coverage gate) is PURGED by --recompute, not kept stale.
 
 Usage:
     python -m scripts.backfill_game_shapes              # fill missing only
@@ -20,7 +22,11 @@ from datetime import date
 from scripts.daily_update import _build_and_store_shape
 from src.constants import GameStatus
 from src.data.espn_api import fetch_games_for_range
-from src.db.queries import get_existing_shape_espn_ids, get_team_abbrev_map
+from src.db.queries import (
+    delete_game_shape,
+    get_existing_shape_espn_ids,
+    get_team_abbrev_map,
+)
 from src.db.schema import get_session, init_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -48,9 +54,11 @@ def backfill_range(
     failed_games: list[str] | None = None,
 ) -> int:
     """Backfill one date range. Returns the count stored. Skipped source
-    windows (transient ESPN failures) are appended to `failed_windows`; per-game
-    rebuild failures are appended to `failed_games` (so a `--recompute` run can
-    fail closed instead of silently leaving stale rows behind).
+    windows (transient ESPN failures) are appended to `failed_windows`;
+    possibly-transient per-game rebuild failures are appended to `failed_games`
+    (so a `--recompute` run can fail closed instead of silently leaving stale
+    rows behind). An authoritatively unshapeable stored row is purged instead
+    (see below) and does NOT count as failed.
 
     `recompute=True` re-derives + overwrites shapes already stored (used after
     an ingest fix changes the computed curve/metrics); the default skips them."""
@@ -66,26 +74,37 @@ def backfill_range(
         if espn_id in already:
             continue
         try:
-            stored_ok = _build_and_store_shape(
+            result = _build_and_store_shape(
                 session, espn_id, e["date"], abbrev_map, timeout=10
             )
         except Exception as ex:  # one bad game must not abort the batch
             logger.warning(f"Skipping espn_id={espn_id}: {ex}")
-            stored_ok = False
-        if stored_ok:
+            result = "retry"
+        if result == "stored":
             stored += 1
             if stored % 25 == 0:
                 # upsert_game_shape commits per row; this is just progress.
                 logger.info(f"  …{stored} stored")
-        elif recompute and espn_id in existing and failed_games is not None:
-            # Recompute couldn't refresh a game that ALREADY has a stored row —
-            # whether it raised or _build_and_store_shape returned False (non-
-            # final / insufficient / unparseable feed). The stale pre-fix row
-            # therefore persists, so record it to fail closed. (A completed game
-            # with no existing row that can't be shaped is a benign miss, not a
-            # stale-data integrity problem, so it doesn't gate the exit code.)
-            logger.warning(f"Recompute miss (stale row kept): espn_id={espn_id}")
-            failed_games.append(espn_id)
+        elif recompute and espn_id in existing:
+            if result == "unshapeable":
+                # The refetched feed is authoritatively unshapeable (FINAL,
+                # scores parse, coverage gate rejects): the stored row was
+                # derived from data that can't honestly represent the game, so
+                # purge it rather than keep it stale — a permanently degenerate
+                # feed (e.g. ESPN's 2025-05-02 DAL@LV) would otherwise wedge
+                # every future recompute at exit 1. A wrongly-purged row
+                # self-heals: the next run re-stores it if the feed recovers.
+                delete_game_shape(session, espn_id)
+                logger.warning(f"Purged stale unshapeable row: espn_id={espn_id}")
+            elif failed_games is not None:
+                # Possibly-transient recompute miss (fetch raised / non-final /
+                # unparseable) on a game that ALREADY has a stored row: the
+                # stale pre-fix row persists, so record it to fail closed. (A
+                # completed game with no existing row that can't be shaped is a
+                # benign miss, not a stale-data integrity problem, so it
+                # doesn't gate the exit code.)
+                logger.warning(f"Recompute miss (stale row kept): espn_id={espn_id}")
+                failed_games.append(espn_id)
     return stored
 
 

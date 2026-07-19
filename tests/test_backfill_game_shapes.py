@@ -148,6 +148,65 @@ def test_backfill_recompute_reprocesses_existing(env, monkeypatch, wp_plays):
     session.close()
 
 
+def test_backfill_recompute_purges_row_rejected_by_coverage_gate(env, monkeypatch):
+    # A stored row whose refetched FINAL feed is authoritatively unshapeable
+    # (the coverage gate rejects it) must be PURGED by recompute — kept stale,
+    # it would wedge every future --recompute run at exit 1, since a
+    # permanently degenerate feed (the 2025-05-02 DAL@LV case) never recovers.
+    session = env.get_session()
+    upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
+    upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    _seed_stale_shape(session)
+    session.commit()
+
+    import scripts.backfill_game_shapes as bf
+    import scripts.daily_update as du
+
+    events = [
+        {
+            "event_id": "STALE",
+            "date": "2024-08-15",
+            "status": GameStatus.FINAL,
+            "winner_team": "Las Vegas Aces",
+        }
+    ]
+    monkeypatch.setattr(
+        bf, "fetch_games_for_range", lambda s, e, failed_windows=None: events
+    )
+
+    def fake_wp(espn_id, timeout=10):
+        return {
+            "status": GameStatus.FINAL,
+            "home_team": "Las Vegas Aces",
+            "away_team": "New York Liberty",
+            "home_score": "80",
+            "away_score": "70",
+            # Degenerate clustered feed: valid samples, fails the coverage gate.
+            "plays": [
+                {"period": 2, "clock": "0:02", "home_pct": 0.0},
+                {"period": 2, "clock": "0:00", "home_pct": 0.0},
+                {"period": 2, "clock": "0:00", "home_pct": 0.0},
+            ],
+        }
+
+    monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
+
+    failed_games: list[str] = []
+    stored = bf.backfill_range(
+        session,
+        date(2024, 5, 1),
+        date(2024, 10, 31),
+        recompute=True,
+        failed_games=failed_games,
+    )
+    assert stored == 0
+    # The stale row is gone from the archive, and the purge is convergence,
+    # not a failure — recompute must not exit 1 forever on this game.
+    assert session.query(env.GameShape).filter_by(espn_id="STALE").count() == 0
+    assert failed_games == []
+    session.close()
+
+
 def test_backfill_recompute_records_existing_row_misses_only(
     env, monkeypatch, wp_plays
 ):
