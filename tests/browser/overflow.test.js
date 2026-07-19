@@ -144,3 +144,109 @@ test('inner pages: no horizontal overflow, no inline-script syntax errors', asyn
     }
   }
 });
+
+// Homepage states. Each apply() ASSERTS the toggle took effect (waits on the
+// resulting DOM state) so a renamed id/class fails loudly instead of letting
+// the walk pass vacuously against an untoggled page.
+async function openPlayoffPicture(page) {
+  await page.waitForSelector('#playoff-toggle:not([hidden])');
+  await page.click('#playoff-toggle');
+  await page.waitForFunction(() => !document.getElementById('playoff-content').hidden);
+  await page.waitForFunction(
+    () => document.querySelectorAll('#playoff-tbody tr').length > 0,
+  );
+}
+
+const HOMEPAGE_STATES = [
+  { name: 'default', apply: async () => {} },
+  {
+    name: 'filter-panel-open',
+    apply: async (page) => {
+      await page.click('#mobile-filter-toggle');
+      await page.waitForFunction(
+        () => document.getElementById('filter-panel').classList.contains('open'),
+      );
+    },
+  },
+  { name: 'playoff-rounds', apply: openPlayoffPicture },
+  {
+    name: 'playoff-seeds',
+    apply: async (page) => {
+      await openPlayoffPicture(page);
+      await page.waitForSelector('#playoff-view-toggle:not([hidden])');
+      await page.click('[data-playoff-view="seeds"]');
+      await page.waitForFunction(
+        () => document.getElementById('playoff-table').classList.contains('view-seeds'),
+      );
+    },
+  },
+  {
+    name: 'completed-open',
+    apply: async (page) => {
+      await page.waitForSelector('#completed-toggle:not([hidden])');
+      await page.click('#completed-toggle');
+      await page.waitForFunction(
+        () => !document.getElementById('completed-content').hidden,
+      );
+      await page.waitForFunction(
+        () => document.querySelectorAll('#completed-games-container tr').length > 0,
+      );
+    },
+  },
+];
+
+test('homepage states: no horizontal overflow, no inline-script syntax errors', async (t) => {
+  for (const state of HOMEPAGE_STATES) {
+    for (const width of WIDTHS) {
+      await t.test(`/ [${state.name}] @ ${width}px`, async () => {
+        const page = await browser.newPage();
+        try {
+          const syntaxErrors = collectSyntaxErrors(page);
+          await loadAt(page, '/', width, '#games-container table');
+          await state.apply(page);
+          assert.deepStrictEqual(syntaxErrors.map(String), []);
+          await assertNoOverflow(page, `/ [${state.name}] @ ${width}px`);
+        } finally {
+          await page.close();
+        }
+      });
+    }
+  }
+});
+
+// Regression: at 320px the filter date row overflowed its clipped container
+// (right edge ~337px), truncating the "to" date input — invisible to the
+// page-level scrollWidth walk above (the panel clips instead of scrolling
+// the page), so the fixed elements get a scoped bounding-rect assert.
+test('filter date inputs fit the viewport when the panel is open', async (t) => {
+  for (const width of WIDTHS) {
+    await t.test(`/ [filter-panel-open] date inputs @ ${width}px`, async () => {
+      const page = await browser.newPage();
+      try {
+        await loadAt(page, '/', width, '#games-container table');
+        await page.click('#mobile-filter-toggle');
+        await page.waitForFunction(
+          () => document.getElementById('filter-panel').classList.contains('open'),
+        );
+        const m = await page.evaluate(() => {
+          const rect = (id) => {
+            const r = document.getElementById(id).getBoundingClientRect();
+            return { id, left: r.left, right: r.right };
+          };
+          return {
+            innerWidth: window.innerWidth,
+            inputs: [rect('from-date'), rect('to-date')],
+          };
+        });
+        for (const r of m.inputs) {
+          assert.ok(
+            r.right <= m.innerWidth && r.left >= 0,
+            `#${r.id} @ ${width}px: [${r.left}, ${r.right}] outside viewport 0..${m.innerWidth}`,
+          );
+        }
+      } finally {
+        await page.close();
+      }
+    });
+  }
+});

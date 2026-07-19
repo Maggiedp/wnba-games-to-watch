@@ -324,6 +324,14 @@
             }
             .filter-group select:focus, .filter-group input[type="date"]:focus { outline: none; border-color: var(--navy); }
             .date-arrow { color: var(--text-subtle); font-size: 0.9em; }
+            @media (max-width: 360px) {
+                /* 320px-class phones: the date row's min-content (two date
+                   inputs + arrow) exceeds the viewport even with the filter
+                   panel collapsed (0fr hides height, not width) — let the
+                   inputs shrink below their intrinsic width. */
+                .filter-group { min-width: 0; }
+                .filter-group input[type="date"] { min-width: 0; flex: 1 1 0; }
+            }
             .pill-group { display: flex; gap: 6px; flex-wrap: wrap; }
             .pill {
                 padding: 5px 12px;
