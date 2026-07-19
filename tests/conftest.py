@@ -31,6 +31,50 @@ def client(env):
     return TestClient(app)
 
 
+def make_wp_plays(anchors: list[float], n: int = 41) -> list[dict]:
+    """n WP plays evenly spanning t=0..2400s (periods 1-4), home_pct linearly
+    interpolated through `anchors` (first at tipoff, last at the final whistle).
+    Default n=41 puts a sample exactly at each quarter fraction of the anchor
+    path, so anchor values are hit exactly (e.g. a 0.20 midpoint anchor)."""
+    plays = []
+    for i in range(n):
+        frac = i / (n - 1)
+        pos = frac * (len(anchors) - 1)
+        lo = int(pos)
+        hi = min(lo + 1, len(anchors) - 1)
+        pct = anchors[lo] + (anchors[hi] - anchors[lo]) * (pos - lo)
+        t = frac * 2400
+        period = min(int(t // 600) + 1, 4)
+        remaining = 600 - (t - (period - 1) * 600)
+        minutes, seconds = divmod(int(round(remaining)), 60)
+        plays.append(
+            {
+                "period": period,
+                "clock": f"{minutes}:{seconds:02d}",
+                "home_pct": round(pct, 4),
+            }
+        )
+    return plays
+
+
+@pytest.fixture
+def wp_plays():
+    """Factory fixture for realistic full-game WP feeds (see make_wp_plays)."""
+    return make_wp_plays
+
+
+@pytest.fixture
+def degenerate_wp_plays():
+    """Replica of ESPN's broken feed for 2025-05-02 DAL@LV (401761558): three
+    valid samples clustered in ~2 seconds, all 0.0 — passes per-sample
+    sanitization but must fail the shape coverage gate."""
+    return [
+        {"period": 2, "clock": "0:02", "home_pct": 0.0},
+        {"period": 2, "clock": "0:00", "home_pct": 0.0},
+        {"period": 2, "clock": "0:00", "home_pct": 0.0},
+    ]
+
+
 def frozen_datetime_class(fake_utc: datetime):
     """Return a datetime stand-in whose .now(tz) returns the frozen instant."""
 

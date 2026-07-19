@@ -1056,6 +1056,14 @@ def upsert_game_shape(
     return row
 
 
+def delete_game_shape(session: Session, espn_id: str) -> bool:
+    """Delete the game_shapes row for `espn_id` (commits). True if a row was
+    removed. Caller: the backfill's --recompute --purge-unshapeable mode."""
+    deleted = session.query(GameShape).filter(GameShape.espn_id == espn_id).delete()
+    session.commit()
+    return bool(deleted)
+
+
 def get_existing_shape_espn_ids(session: Session, espn_ids: list[str]) -> set[str]:
     """The subset of `espn_ids` that already have a game_shapes row (backfill
     skip-set). Empty input -> empty set (avoids an empty IN clause)."""

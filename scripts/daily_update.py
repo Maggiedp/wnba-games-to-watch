@@ -58,7 +58,7 @@ from src.scoring.elo import (
     replay_games,
 )
 from src.scoring.excitement import compute_excitement
-from src.scoring.game_shape import compute_game_shape
+from src.scoring.game_shape import compute_game_shape, feed_span_seconds
 from src.scoring.importance import (
     REGULAR_SEASON_MAX_SWING,
     normalize_importance_score,
@@ -406,11 +406,19 @@ def populate_excitement_for_recent_completions(
     logger.info(f"Stored excitement_index for {stored} games")
 
 
-def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
+class ShapeResult:
+    """Outcomes of _build_and_store_shape (string constants, GameStatus-style)."""
+
+    STORED = "stored"
+    RETRY = "retry"  # possibly-transient miss: leave any row alone, retry later
+    UNSHAPEABLE = "unshapeable"  # authoritative: FINAL + parseable, gate rejects
+
+
+def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> str:
     """Fetch a completed game's WP series, compute its shape, upsert the
-    game_shapes row. Returns True if stored. Shared by the daily populate and
-    the backfill. Leaves the row absent (returns False) on a non-final feed,
-    insufficient plays, or unparseable scores — so it's retried next run.
+    game_shapes row. Shared by the daily populate and the backfill. Returns a
+    ShapeResult constant; UNSHAPEABLE means no honest shape can exist for this
+    game (the backfill's purge flag may then remove a stored row).
 
     Commits the session on a successful store (via upsert_game_shape's per-row
     commit, which is load-bearing for its IntegrityError retry) — callers need a
@@ -418,19 +426,27 @@ def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
     attempt stamps on failed games), not for the shape rows themselves."""
     wp = fetch_live_win_probability(espn_id, timeout=timeout)
     if wp.get("status") != GameStatus.FINAL:
-        return False
+        return ShapeResult.RETRY
     try:
         home_score = int(wp["home_score"])
         away_score = int(wp["away_score"])
     except (KeyError, ValueError, TypeError):
-        return False
+        return ShapeResult.RETRY
     # Use the ACTUAL winner (final score), not the last WP sample — see
     # compute_game_shape; ESPN can finalize before the WP feed catches up.
-    metrics = compute_game_shape(
-        wp.get("plays") or [], home_won=home_score > away_score
-    )
+    plays = wp.get("plays") or []
+    metrics = compute_game_shape(plays, home_won=home_score > away_score)
     if metrics is None:
-        return False
+        # A FINAL game whose feed failed the coverage gate (or <2 plays).
+        # Log the reason per game: a systemic ESPN feed change that starts
+        # failing many finals should be visible in the logs, not just a
+        # shrinking aggregate "Stored game_shapes for N games" count.
+        logger.warning(
+            f"Shape rejected for insufficient feed coverage (espn_id={espn_id}): "
+            f"{len(plays)} plays, {feed_span_seconds(plays):.0f}s span — "
+            "not storing a shape"
+        )
+        return ShapeResult.UNSHAPEABLE
     home_team = wp["home_team"]
     away_team = wp["away_team"]
     upsert_game_shape(
@@ -452,7 +468,7 @@ def _build_and_store_shape(session, espn_id, date, abbrev_map, timeout) -> bool:
         winner_low_wp=metrics.winner_low_wp,
         curve=metrics.curve,
     )
-    return True
+    return ShapeResult.STORED
 
 
 def populate_game_shapes_for_recent_completions(
@@ -469,7 +485,13 @@ def populate_game_shapes_for_recent_completions(
     excitement refresh machinery isn't worth it for a watchability archive, and
     the main late-correction risk (a winner flip before the WP feed catches up)
     is already neutralized by deriving winner-based metrics from the final score
-    (see _build_and_store_shape / compute_game_shape), not the last WP sample."""
+    (see _build_and_store_shape / compute_game_shape), not the last WP sample.
+
+    Also deliberate: an UNSHAPEABLE game stays in the candidate set and is
+    re-fetched every run for the rest of the season (one wasted fetch + one
+    WARNING per run). ESPN occasionally firms up pbp days late, historical
+    rate is ~1 game per 768, and the alternative is a schema column — not
+    worth it; expect the recurring warning for a truly degenerate feed."""
     games = get_completed_games_missing_shape(session, season_year=2026, limit=limit)
     if not games:
         logger.info("No completed games need game-shape backfill")
@@ -484,9 +506,10 @@ def populate_game_shapes_for_recent_completions(
         # excitement populate).
         game.game_shape_last_attempt_at = now
         try:
-            if _build_and_store_shape(
+            result = _build_and_store_shape(
                 session, game.espn_id, game.date, abbrev_map, timeout
-            ):
+            )
+            if result == ShapeResult.STORED:
                 stored += 1
         except (ESPNAPIError, ESPNNotFoundError) as e:
             logger.warning(

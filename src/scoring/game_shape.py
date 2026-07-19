@@ -21,6 +21,32 @@ from src.scoring.excitement import (
 
 CURVE_POINTS = 100  # downsampled sparkline resolution
 
+# Coverage gate for FINAL games only (compute_live_shape keeps the bare
+# <2-plays contract — a live feed is legitimately partial). A feed that is
+# individually-valid but collectively degenerate (ESPN's 2025-05-02 DAL@LV
+# feed: 3 samples spanning 2 seconds, all 0.0) otherwise archives garbage
+# metrics — a flat sliver at 0% scored comeback=0.5 and topped the /replay
+# comeback sort. Healthy feeds have ~100+ samples spanning 2400-2700s, so
+# both thresholds sit far below every legitimate row observed (768/768).
+MIN_SHAPE_PLAYS = 20
+MIN_SHAPE_SPAN_SECONDS = REGULATION_SECONDS * 0.75
+
+
+def feed_span_seconds(plays: list[dict]) -> float:
+    """Game-time seconds a time-sorted feed covers (0.0 if <2 plays). Public
+    so rejection logging reports the same number the gate tested."""
+    if len(plays) < 2:
+        return 0.0
+    return elapsed_seconds(plays[-1]) - elapsed_seconds(plays[0])
+
+
+def _covers_game(plays: list[dict]) -> bool:
+    """True when a time-sorted FINAL feed has enough samples and game-time
+    span for the shape metrics + curve to honestly represent the game."""
+    if len(plays) < MIN_SHAPE_PLAYS:
+        return False
+    return feed_span_seconds(plays) >= MIN_SHAPE_SPAN_SECONDS
+
 
 def compute_tension(plays: list[dict]) -> float | None:
     """Late-weighted time-average of in-doubt-ness, in [0, 1] (None if <2 plays).
@@ -110,12 +136,16 @@ class ShapeMetrics:
 
 
 def compute_game_shape(plays: list[dict], home_won: bool) -> ShapeMetrics | None:
-    """All archive metrics + the downsampled curve, or None if the feed has
-    <2 usable plays (caller leaves the row absent and retries next run).
+    """All archive metrics + the downsampled curve, or None if the feed can't
+    honestly represent the game — fewer than MIN_SHAPE_PLAYS samples or less
+    than MIN_SHAPE_SPAN_SECONDS of game-time covered (see _covers_game). The
+    caller leaves the row absent and retries next run.
 
     `home_won` is the ACTUAL result from the final score (not inferred from the
     last WP sample) so the winner-dependent metrics stay consistent with the
     stored `winner` column even when ESPN's WP feed lags the final whistle."""
+    if not _covers_game(plays):
+        return None
     excitement = compute_excitement(plays, final=True)
     tension = compute_tension(plays)
     comeback = compute_comeback(plays, home_won)
