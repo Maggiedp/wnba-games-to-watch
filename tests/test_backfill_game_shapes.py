@@ -150,9 +150,11 @@ def test_backfill_recompute_reprocesses_existing(env, monkeypatch, wp_plays):
 
 def test_backfill_recompute_purges_row_rejected_by_coverage_gate(env, monkeypatch):
     # A stored row whose refetched FINAL feed is authoritatively unshapeable
-    # (the coverage gate rejects it) must be PURGED by recompute — kept stale,
-    # it would wedge every future --recompute run at exit 1, since a
-    # permanently degenerate feed (the 2025-05-02 DAL@LV case) never recovers.
+    # (the coverage gate rejects it) is kept + recorded as a miss by default
+    # (fail closed — recompute must never destroy rows unprompted), and PURGED
+    # only under the explicit --purge-unshapeable operator flag — the escape
+    # for a permanently degenerate feed (the 2025-05-02 DAL@LV case) that
+    # would otherwise wedge every future --recompute run at exit 1.
     session = env.get_session()
     upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
     upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
@@ -191,6 +193,7 @@ def test_backfill_recompute_purges_row_rejected_by_coverage_gate(env, monkeypatc
 
     monkeypatch.setattr(du, "fetch_live_win_probability", fake_wp)
 
+    # Default recompute: fail closed — row kept, miss recorded.
     failed_games: list[str] = []
     stored = bf.backfill_range(
         session,
@@ -200,8 +203,21 @@ def test_backfill_recompute_purges_row_rejected_by_coverage_gate(env, monkeypatc
         failed_games=failed_games,
     )
     assert stored == 0
-    # The stale row is gone from the archive, and the purge is convergence,
-    # not a failure — recompute must not exit 1 forever on this game.
+    assert session.query(env.GameShape).filter_by(espn_id="STALE").count() == 1
+    assert failed_games == ["STALE"]
+
+    # Explicit purge flag: the stale row is removed, and the purge is
+    # convergence, not a failure — recompute must not exit 1 on this game.
+    failed_games = []
+    stored = bf.backfill_range(
+        session,
+        date(2024, 5, 1),
+        date(2024, 10, 31),
+        recompute=True,
+        failed_games=failed_games,
+        purge_unshapeable=True,
+    )
+    assert stored == 0
     assert session.query(env.GameShape).filter_by(espn_id="STALE").count() == 0
     assert failed_games == []
     session.close()

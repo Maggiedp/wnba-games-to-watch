@@ -1058,9 +1058,10 @@ def upsert_game_shape(
 
 def delete_game_shape(session: Session, espn_id: str) -> bool:
     """Delete the game_shapes row for `espn_id` (commits). True if a row was
-    removed. Used by the backfill's --recompute purge: a stored row whose
-    refetched FINAL feed now fails the coverage gate is authoritatively
-    unshapeable and must leave the archive rather than wedge recompute."""
+    removed. Used by the backfill's explicit --recompute --purge-unshapeable
+    mode: a stored row whose refetched FINAL feed now fails the coverage gate
+    is authoritatively unshapeable and must leave the archive rather than
+    wedge recompute."""
     deleted = session.query(GameShape).filter(GameShape.espn_id == espn_id).delete()
     session.commit()
     return bool(deleted)

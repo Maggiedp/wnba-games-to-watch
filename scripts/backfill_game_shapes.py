@@ -8,11 +8,14 @@ already stored. Safe to re-run.
 Pass --recompute to re-derive + overwrite shapes already stored (use after an
 ingest change alters the computed curve/metrics, e.g. the play-ordering fix).
 A stored row whose refetched FINAL feed is authoritatively unshapeable (fails
-the coverage gate) is PURGED by --recompute, not kept stale.
+the coverage gate) is recorded as a miss and keeps recompute failing closed at
+exit 1; add --purge-unshapeable to explicitly delete such rows instead —
+destruction is an operator decision, never the default.
 
 Usage:
     python -m scripts.backfill_game_shapes              # fill missing only
     python -m scripts.backfill_game_shapes --recompute  # re-derive + overwrite all
+    python -m scripts.backfill_game_shapes --recompute --purge-unshapeable
 """
 
 import logging
@@ -52,16 +55,20 @@ def backfill_range(
     failed_windows: list[str] | None = None,
     recompute: bool = False,
     failed_games: list[str] | None = None,
+    purge_unshapeable: bool = False,
 ) -> int:
     """Backfill one date range. Returns the count stored. Skipped source
     windows (transient ESPN failures) are appended to `failed_windows`;
-    possibly-transient per-game rebuild failures are appended to `failed_games`
-    (so a `--recompute` run can fail closed instead of silently leaving stale
-    rows behind). An authoritatively unshapeable stored row is purged instead
-    (see below) and does NOT count as failed.
+    per-game recompute misses are appended to `failed_games` (so a
+    `--recompute` run fails closed instead of silently leaving stale rows
+    behind).
 
     `recompute=True` re-derives + overwrites shapes already stored (used after
-    an ingest fix changes the computed curve/metrics); the default skips them."""
+    an ingest fix changes the computed curve/metrics); the default skips them.
+    `purge_unshapeable=True` (recompute only) deletes a stored row whose
+    refetched FINAL feed is authoritatively unshapeable instead of recording
+    it as a miss — the explicit-operator escape for a permanently degenerate
+    feed that would otherwise wedge every recompute run at exit 1."""
     events = fetch_games_for_range(start, end, failed_windows=failed_windows)
     completed = [e for e in events if e.get("event_id") and _is_completed(e)]
     existing = get_existing_shape_espn_ids(session, [e["event_id"] for e in completed])
@@ -86,31 +93,48 @@ def backfill_range(
                 # upsert_game_shape commits per row; this is just progress.
                 logger.info(f"  …{stored} stored")
         elif recompute and espn_id in existing:
-            if result == "unshapeable":
-                # The refetched feed is authoritatively unshapeable (FINAL,
-                # scores parse, coverage gate rejects): the stored row was
-                # derived from data that can't honestly represent the game, so
-                # purge it rather than keep it stale — a permanently degenerate
-                # feed (e.g. ESPN's 2025-05-02 DAL@LV) would otherwise wedge
-                # every future recompute at exit 1. A wrongly-purged row
-                # self-heals: the next run re-stores it if the feed recovers.
+            if result == "unshapeable" and purge_unshapeable:
+                # Explicit operator escalation: the refetched feed is
+                # authoritatively unshapeable (FINAL, scores parse, coverage
+                # gate rejects), so the stored row was derived from data that
+                # can't honestly represent the game. Deleting is safe to get
+                # wrong: a healthy-feed game purged in error is re-stored by
+                # the next fill-missing/recompute run (2026 rows also by the
+                # daily populate).
                 delete_game_shape(session, espn_id)
                 logger.warning(f"Purged stale unshapeable row: espn_id={espn_id}")
             elif failed_games is not None:
-                # Possibly-transient recompute miss (fetch raised / non-final /
-                # unparseable) on a game that ALREADY has a stored row: the
-                # stale pre-fix row persists, so record it to fail closed. (A
-                # completed game with no existing row that can't be shaped is a
-                # benign miss, not a stale-data integrity problem, so it
-                # doesn't gate the exit code.)
-                logger.warning(f"Recompute miss (stale row kept): espn_id={espn_id}")
+                # Recompute couldn't refresh a game that ALREADY has a stored
+                # row, so the stale pre-fix row persists — record it to fail
+                # closed. "unshapeable" misses name their remedy; the rest
+                # (fetch raised / non-final / unparseable) are possibly
+                # transient and a plain re-run may clear them. (A completed
+                # game with no existing row that can't be shaped is a benign
+                # miss, not a stale-data integrity problem, so it doesn't gate
+                # the exit code.)
+                remedy = (
+                    " — permanently unshapeable feed? re-run with "
+                    "--purge-unshapeable to remove the row"
+                    if result == "unshapeable"
+                    else ""
+                )
+                logger.warning(
+                    f"Recompute miss (stale row kept): espn_id={espn_id}{remedy}"
+                )
                 failed_games.append(espn_id)
     return stored
 
 
 def main() -> int:
-    recompute = "--recompute" in sys.argv[1:]
+    args = sys.argv[1:]
+    recompute = "--recompute" in args
+    purge_unshapeable = "--purge-unshapeable" in args
+    if purge_unshapeable and not recompute:
+        logger.error("--purge-unshapeable requires --recompute")
+        return 1
     mode = "RECOMPUTE (overwrite existing)" if recompute else "fill missing"
+    if purge_unshapeable:
+        mode += " + purge unshapeable"
     logger.info(f"=== Backfilling game_shapes (2024-2026) — {mode} ===")
     try:
         init_db()
@@ -128,6 +152,7 @@ def main() -> int:
                     failed_windows,
                     recompute=recompute,
                     failed_games=failed_games,
+                    purge_unshapeable=purge_unshapeable,
                 )
             if failed_windows:
                 logger.error(
