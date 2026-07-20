@@ -40,27 +40,28 @@ _TEAMS = [
 _BROADCASTERS = ["ESPN", "CBS", "ION", ""]
 
 
-def _curve() -> str:
-    """A 21-point zig-zag WP curve, JSON-encoded like game_shapes.curve."""
-    pts = [
+def _curve() -> list:
+    """A 21-point zig-zag WP curve (upsert_game_shape JSON-encodes it)."""
+    return [
         [i * 120, round(0.5 + (0.35 if i % 2 else -0.25) * min(i / 10, 1.0), 3)]
         for i in range(21)
     ]
-    return json.dumps(pts)
 
 
 def seed(session) -> None:
     """Populate every table the walked pages read. Dates are relative to
     today_et() so the walk never goes stale. Commits."""
     from src.data.espn_api import today_et
+    from src.db.queries import (
+        upsert_game_shape,
+        upsert_playoff_probability,
+        upsert_team_style,
+    )
     from src.db.schema import (
         DailyRanking,
         EloHistory,
         Game,
-        GameShape,
-        PlayoffProbability,
         Team,
-        TeamStyle,
     )
 
     today = date.fromisoformat(today_et())
@@ -165,25 +166,24 @@ def seed(session) -> None:
             )
         )
         if k < 8:
-            session.add(
-                GameShape(
-                    espn_id=espn_id,
-                    season=season,
-                    date=gdate,
-                    home_team=a.name,
-                    away_team=b.name,
-                    home_abbr=a.abbreviation,
-                    away_abbr=b.abbreviation,
-                    home_score=home_score,
-                    away_score=away_score,
-                    winner="home" if winner is a else "away",
-                    excitement=excitement,
-                    tension=0.4 + 0.05 * k,
-                    comeback=0.2,
-                    lead_changes=3 + k,
-                    winner_low_wp=0.18,
-                    curve=_curve(),
-                )
+            upsert_game_shape(
+                session,
+                espn_id=espn_id,
+                season=season,
+                date=gdate,
+                home_team=a.name,
+                away_team=b.name,
+                home_abbr=a.abbreviation,
+                away_abbr=b.abbreviation,
+                home_score=home_score,
+                away_score=away_score,
+                winner="home" if winner is a else "away",
+                excitement=excitement,
+                tension=0.4 + 0.05 * k,
+                comeback=0.2,
+                lead_changes=3 + k,
+                winner_low_wp=0.18,
+                curve=_curve(),
             )
 
     # --- Playoff odds for today: every team non-null seed_distribution
@@ -192,16 +192,15 @@ def seed(session) -> None:
     for i, t in enumerate(teams):
         make = max(0.0, round(1.0 - i * 0.075, 3))
         seed_dist = {str(s): round(make / 8, 3) for s in range(1, 9)} if make else {}
-        session.add(
-            PlayoffProbability(
-                date=today.isoformat(),
-                team_id=t.id,
-                probability=make,
-                reach_semis_prob=make * 0.5,
-                reach_finals_prob=make * 0.25,
-                win_championship_prob=make * 0.12,
-                seed_distribution=json.dumps(seed_dist),
-            )
+        upsert_playoff_probability(
+            session,
+            date=today.isoformat(),
+            team_id=t.id,
+            probability=make,
+            reach_semis_prob=make * 0.5,
+            reach_finals_prob=make * 0.25,
+            win_championship_prob=make * 0.12,
+            seed_distribution=json.dumps(seed_dist),
         )
 
     # --- Elo history: 10 weekly points per team (for /rankings).
@@ -217,19 +216,19 @@ def seed(session) -> None:
 
     # --- Team style: one row per team (for /style).
     for i, t in enumerate(teams):
-        session.add(
-            TeamStyle(
-                season=season,
-                team_id=t.id,
-                pace=78.0 + 0.5 * i,
-                three_pa_rate=0.24 + 0.01 * i,
-                ft_rate=0.18 + 0.008 * i,
-                oreb_pct=0.20 + 0.007 * i,
-                assist_rate=0.55 + 0.01 * i,
-                def_pressure=0.14 + 0.006 * i,
-                opp_3pa_rate=0.40 - 0.01 * i,
-                games_played=20,
-            )
+        upsert_team_style(
+            session,
+            season=season,
+            team_id=t.id,
+            pace=78.0 + 0.5 * i,
+            three_pa_rate=0.24 + 0.01 * i,
+            ft_rate=0.18 + 0.008 * i,
+            oreb_pct=0.20 + 0.007 * i,
+            assist_rate=0.55 + 0.01 * i,
+            def_pressure=0.14 + 0.006 * i,
+            opp_3pa_rate=0.40 - 0.01 * i,
+            games_played=20,
+            commit=False,
         )
 
     session.commit()

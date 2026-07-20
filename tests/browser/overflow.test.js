@@ -43,7 +43,6 @@ const PAGES = [
 
 let server;
 let browser;
-let usingConnect = false;
 
 async function waitForServer(url, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
@@ -72,7 +71,6 @@ before(async () => {
   await waitForServer(`${BASE}/api/games/upcoming`, 30_000);
 
   if (process.env.CHROME_URL) {
-    usingConnect = true;
     browser = await puppeteer.connect({ browserURL: process.env.CHROME_URL });
   } else if (process.platform === 'darwin') {
     throw new Error(
@@ -92,7 +90,7 @@ after(async () => {
   if (browser) {
     // disconnect (not close) when attached to a shared local Chrome — close
     // would kill it for subsequent runs.
-    if (usingConnect) await browser.disconnect();
+    if (process.env.CHROME_URL) await browser.disconnect();
     else await browser.close();
   }
   if (server) server.kill();
@@ -127,23 +125,44 @@ async function assertNoOverflow(page, label) {
   );
 }
 
-test('inner pages: no horizontal overflow, no inline-script syntax errors', async (t) => {
-  for (const { path: urlPath, readySelector } of PAGES) {
-    for (const width of WIDTHS) {
-      await t.test(`${urlPath} @ ${width}px`, async () => {
-        const page = await browser.newPage();
-        try {
-          const syntaxErrors = collectSyntaxErrors(page);
-          await loadAt(page, urlPath, width, readySelector);
-          assert.deepStrictEqual(syntaxErrors.map(String), []);
-          await assertNoOverflow(page, `${urlPath} @ ${width}px`);
-        } finally {
-          await page.close();
-        }
-      });
-    }
+// One walked subtest: fresh page → load → optional state build → parse-error
+// and overflow asserts → optional scoped extra assert → close.
+async function checkPage(label, width, { path: urlPath, readySelector, apply, extraAssert }) {
+  const page = await browser.newPage();
+  try {
+    const syntaxErrors = collectSyntaxErrors(page);
+    await loadAt(page, urlPath, width, readySelector);
+    if (apply) await apply(page);
+    assert.deepStrictEqual(syntaxErrors.map(String), []);
+    await assertNoOverflow(page, label);
+    if (extraAssert) await extraAssert(page, label);
+  } finally {
+    await page.close();
   }
-});
+}
+
+// Regression (PR #112): the date row's ~337px min-content used to truncate the
+// "to" date input at 320px — invisible to the page-level scrollWidth assert
+// (the collapsed/open panel CLIPS instead of scrolling the page), so the fixed
+// inputs get a scoped bounding-rect assert in the filter-panel-open state.
+async function assertDateInputsFit(page, label) {
+  const m = await page.evaluate(() => {
+    const rect = (id) => {
+      const r = document.getElementById(id).getBoundingClientRect();
+      return { id, left: r.left, right: r.right };
+    };
+    return {
+      innerWidth: window.innerWidth,
+      inputs: [rect('from-date'), rect('to-date')],
+    };
+  });
+  for (const r of m.inputs) {
+    assert.ok(
+      r.right <= m.innerWidth && r.left >= 0,
+      `${label}: #${r.id} [${r.left}, ${r.right}] outside viewport 0..${m.innerWidth}`,
+    );
+  }
+}
 
 // Homepage states. Each apply() ASSERTS the toggle took effect (waits on the
 // resulting DOM state) so a renamed id/class fails loudly instead of letting
@@ -158,7 +177,7 @@ async function openPlayoffPicture(page) {
 }
 
 const HOMEPAGE_STATES = [
-  { name: 'default', apply: async () => {} },
+  { name: 'default' },
   {
     name: 'filter-panel-open',
     apply: async (page) => {
@@ -167,6 +186,7 @@ const HOMEPAGE_STATES = [
         () => document.getElementById('filter-panel').classList.contains('open'),
       );
     },
+    extraAssert: assertDateInputsFit,
   },
   { name: 'playoff-rounds', apply: openPlayoffPicture },
   {
@@ -195,58 +215,45 @@ const HOMEPAGE_STATES = [
   },
 ];
 
-test('homepage states: no horizontal overflow, no inline-script syntax errors', async (t) => {
-  for (const state of HOMEPAGE_STATES) {
+test('inner pages: no horizontal overflow, no inline-script syntax errors', async (t) => {
+  for (const pageDef of PAGES) {
     for (const width of WIDTHS) {
-      await t.test(`/ [${state.name}] @ ${width}px`, async () => {
-        const page = await browser.newPage();
-        try {
-          const syntaxErrors = collectSyntaxErrors(page);
-          await loadAt(page, '/', width, '#games-container table');
-          await state.apply(page);
-          assert.deepStrictEqual(syntaxErrors.map(String), []);
-          await assertNoOverflow(page, `/ [${state.name}] @ ${width}px`);
-        } finally {
-          await page.close();
-        }
-      });
+      const label = `${pageDef.path} @ ${width}px`;
+      await t.test(label, () => checkPage(label, width, pageDef));
     }
   }
 });
 
-// Regression: at 320px the filter date row overflowed its clipped container
-// (right edge ~337px), truncating the "to" date input — invisible to the
-// page-level scrollWidth walk above (the panel clips instead of scrolling
-// the page), so the fixed elements get a scoped bounding-rect assert.
-test('filter date inputs fit the viewport when the panel is open', async (t) => {
-  for (const width of WIDTHS) {
-    await t.test(`/ [filter-panel-open] date inputs @ ${width}px`, async () => {
-      const page = await browser.newPage();
-      try {
-        await loadAt(page, '/', width, '#games-container table');
-        await page.click('#mobile-filter-toggle');
-        await page.waitForFunction(
-          () => document.getElementById('filter-panel').classList.contains('open'),
-        );
-        const m = await page.evaluate(() => {
-          const rect = (id) => {
-            const r = document.getElementById(id).getBoundingClientRect();
-            return { id, left: r.left, right: r.right };
-          };
-          return {
-            innerWidth: window.innerWidth,
-            inputs: [rect('from-date'), rect('to-date')],
-          };
-        });
-        for (const r of m.inputs) {
-          assert.ok(
-            r.right <= m.innerWidth && r.left >= 0,
-            `#${r.id} @ ${width}px: [${r.left}, ${r.right}] outside viewport 0..${m.innerWidth}`,
-          );
-        }
-      } finally {
-        await page.close();
-      }
-    });
+test('homepage states: no horizontal overflow, no inline-script syntax errors', async (t) => {
+  for (const state of HOMEPAGE_STATES) {
+    for (const width of WIDTHS) {
+      const label = `/ [${state.name}] @ ${width}px`;
+      await t.test(label, () => checkPage(label, width, {
+        path: '/',
+        readySelector: '#games-container table',
+        apply: state.apply,
+        extraAssert: state.extraAssert,
+      }));
+    }
+  }
+});
+
+// The site nav is the page inventory (_SITE_NAV_ITEMS in src/api/routes.py),
+// and the repo's convention is "new top-level page → new nav entry" — so every
+// nav destination must be in the walk, or adding a page would silently leave
+// it uncovered while the suite stays green.
+test('every site-nav page is covered by the walk', async () => {
+  const page = await browser.newPage();
+  try {
+    await loadAt(page, '/', 390, '#games-container table');
+    const hrefs = await page.$$eval('.site-nav-link', (els) =>
+      els.map((el) => el.getAttribute('href')));
+    assert.ok(hrefs.length >= 5, `expected a populated site nav, got [${hrefs}]`);
+    const walked = new Set(['/', ...PAGES.map((p) => p.path)]);
+    for (const href of hrefs) {
+      assert.ok(walked.has(href), `nav page ${href} is not in the walk's PAGES list`);
+    }
+  } finally {
+    await page.close();
   }
 });
