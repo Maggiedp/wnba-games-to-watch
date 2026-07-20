@@ -310,6 +310,7 @@
                 align-items: center;
                 gap: 8px;
                 font-size: 0.9em;
+                min-width: 0; /* allow shrink below content when the row compresses */
             }
             .filter-group select, .filter-group input[type="date"] {
                 padding: 6px 10px;
@@ -324,6 +325,12 @@
             }
             .filter-group select:focus, .filter-group input[type="date"]:focus { outline: none; border-color: var(--navy); }
             .date-arrow { color: var(--text-subtle); font-size: 0.9em; }
+            /* Paired with .filter-group's min-width: 0 — flex floors items at
+               intrinsic content width (min-width: auto) at both nesting levels,
+               so without these the date row's ~337px min-content clips on
+               320px-class phones even with the panel collapsed (0fr hides
+               height, not width). Inert whenever content already fits. */
+            .filter-group input[type="date"] { min-width: 0; }
             .pill-group { display: flex; gap: 6px; flex-wrap: wrap; }
             .pill {
                 padding: 5px 12px;

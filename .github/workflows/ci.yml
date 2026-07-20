@@ -33,5 +33,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
       - name: JS helper tests
         run: node --test 'tests/js/**/*.test.js'
+      - name: Install browser test deps
+        run: npm ci
+      - name: Browser smoke tests
+        # Spawns the seeded ESPN-stubbed server (tests/browser/smoke_server.py)
+        # and launches the runner's preinstalled Chrome (--headless --no-sandbox).
+        run: node --test 'tests/browser/**/*.test.js'
