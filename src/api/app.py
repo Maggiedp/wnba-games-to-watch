@@ -479,23 +479,26 @@ _replay_live_cache_lock = threading.Lock()
 _replay_live_build_lock = threading.Lock()
 
 
-def _build_replay_live() -> dict:
-    """Compute the live slate: statuses -> known live games -> per-game shape.
-
-    Uncached; get_replay_live() wraps this with the response cache. Raises
-    HTTPException(502) if the primary (today) scoreboard call fails.
+def _detect_live_shapes(raise_on_today_failure: bool):
+    """Shared detection: today+yesterday statuses -> DB-known live ids -> per-game
+    live shape dicts, plus has_pending. If raise_on_today_failure, a failed today
+    scoreboard fetch raises HTTPException(502) (user-facing /api/replay-live);
+    otherwise it's swallowed and returns ([], False) (best-effort
+    /internal/thriller-poll).
     """
-    # Today primary (502 on failure, like /api/games/live-status); yesterday
-    # best-effort for late-ET games past the UTC-midnight boundary.
+    # Today primary; yesterday best-effort for late-ET games past the UTC-midnight
+    # boundary.
     try:
         statuses = fetch_today_game_statuses(today_et())
     except ESPNAPIError as e:
-        logger.warning("replay-live: today statuses failed: %s", e)
-        raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
+        logger.warning("detect-live: today statuses failed: %s", e)
+        if raise_on_today_failure:
+            raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
+        return [], False
     try:
         statuses = {**fetch_today_game_statuses(yesterday_et()), **statuses}
     except ESPNAPIError as e:
-        logger.warning("replay-live: yesterday statuses failed (non-fatal): %s", e)
+        logger.warning("detect-live: yesterday statuses failed (non-fatal): %s", e)
 
     # Gate to DB-known ids BEFORE any ESPN fetch — _fetch_live_wp_cached does not
     # gate (the /api/live-wp endpoint does), so this endpoint must re-apply it.
@@ -509,7 +512,7 @@ def _build_replay_live() -> dict:
             (pending if eid in known else dropped).append(eid)
     if dropped:
         logger.warning(
-            "replay-live: %d live/scheduled scoreboard id(s) absent from the DB "
+            "detect-live: %d live/scheduled scoreboard id(s) absent from the DB "
             "allowlist (schedule drift?): %s",
             len(dropped),
             dropped,
@@ -519,7 +522,7 @@ def _build_replay_live() -> dict:
         eid for eid, s in statuses.items() if is_live_status(s) and eid in known
     ]
     if not live_ids:
-        return {"games": [], "has_pending": has_pending}
+        return [], has_pending
 
     session = get_session()
     try:
@@ -538,7 +541,7 @@ def _build_replay_live() -> dict:
                 espn_id, timeout=_REPLAY_LIVE_TIMEOUT_S
             )
         except ESPNAPIError as e:  # incl. ESPNNotFoundError (subclass)
-            logger.warning("replay-live: live-wp failed for %s: %s", espn_id, e)
+            logger.warning("detect-live: live-wp failed for %s: %s", espn_id, e)
             return espn_id, None
 
     payloads = dict(_replay_live_pool.map(_fetch_one, live_ids))
@@ -569,6 +572,13 @@ def _build_replay_live() -> dict:
                 "live": True,
             }
         )
+    return games, has_pending
+
+
+def _build_replay_live() -> dict:
+    """Compute the live slate for /api/replay-live (raises 502 on today failure).
+    get_replay_live() wraps this with the response cache."""
+    games, has_pending = _detect_live_shapes(raise_on_today_failure=True)
     return {"games": games, "has_pending": has_pending}
 
 
