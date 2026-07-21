@@ -8,6 +8,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from secrets import compare_digest
 from contextlib import asynccontextmanager
 
@@ -36,6 +37,7 @@ from src.db.queries import (
     get_daily_rankings,
     get_elo_history,
     get_game_shapes,
+    get_games_by_date,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
@@ -46,6 +48,14 @@ from src.db.queries import (
     get_team_styles,
     get_teams_by_ids,
     get_upcoming_rankings,
+    has_alerted,
+    record_alert,
+)
+from src.notify.telegram import send_telegram, telegram_configured
+from src.notify.thriller import (
+    classify_excitement,
+    compose_alert,
+    filter_recent_tipoffs,
 )
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
@@ -478,24 +488,33 @@ _replay_live_cache: "tuple[float, dict] | None" = None
 _replay_live_cache_lock = threading.Lock()
 _replay_live_build_lock = threading.Lock()
 
+# Serializes the thriller poll's per-game check-send-record critical section so
+# two overlapping polls (a slow poll still running at the next 5-min fire, or a
+# manual replay) can't both pass the has_alerted check and double-send. One
+# in-process lock suffices because --max-instances=1 pins us to a single
+# container; record_alert is also idempotent as belt-and-suspenders.
+_thriller_alert_lock = threading.Lock()
 
-def _build_replay_live() -> dict:
-    """Compute the live slate: statuses -> known live games -> per-game shape.
 
-    Uncached; get_replay_live() wraps this with the response cache. Raises
-    HTTPException(502) if the primary (today) scoreboard call fails.
+def _detect_live_shapes():
+    """Shared detection: today+yesterday statuses -> DB-known live ids -> per-game
+    live shape dicts, plus has_pending. A failed today-scoreboard fetch raises
+    HTTPException(502): /api/replay-live surfaces it to the client, and the
+    thriller poll lets it 502 the run so an ESPN outage during games is an
+    observable/retriable failure rather than a fake-quiet success (the poll only
+    reaches here after its DB self-gate confirmed a game just tipped off).
     """
-    # Today primary (502 on failure, like /api/games/live-status); yesterday
-    # best-effort for late-ET games past the UTC-midnight boundary.
+    # Today primary; yesterday best-effort for late-ET games past the UTC-midnight
+    # boundary.
     try:
         statuses = fetch_today_game_statuses(today_et())
     except ESPNAPIError as e:
-        logger.warning("replay-live: today statuses failed: %s", e)
+        logger.warning("detect-live: today statuses failed: %s", e)
         raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
     try:
         statuses = {**fetch_today_game_statuses(yesterday_et()), **statuses}
     except ESPNAPIError as e:
-        logger.warning("replay-live: yesterday statuses failed (non-fatal): %s", e)
+        logger.warning("detect-live: yesterday statuses failed (non-fatal): %s", e)
 
     # Gate to DB-known ids BEFORE any ESPN fetch — _fetch_live_wp_cached does not
     # gate (the /api/live-wp endpoint does), so this endpoint must re-apply it.
@@ -509,7 +528,7 @@ def _build_replay_live() -> dict:
             (pending if eid in known else dropped).append(eid)
     if dropped:
         logger.warning(
-            "replay-live: %d live/scheduled scoreboard id(s) absent from the DB "
+            "detect-live: %d live/scheduled scoreboard id(s) absent from the DB "
             "allowlist (schedule drift?): %s",
             len(dropped),
             dropped,
@@ -519,7 +538,7 @@ def _build_replay_live() -> dict:
         eid for eid, s in statuses.items() if is_live_status(s) and eid in known
     ]
     if not live_ids:
-        return {"games": [], "has_pending": has_pending}
+        return [], has_pending
 
     session = get_session()
     try:
@@ -538,7 +557,7 @@ def _build_replay_live() -> dict:
                 espn_id, timeout=_REPLAY_LIVE_TIMEOUT_S
             )
         except ESPNAPIError as e:  # incl. ESPNNotFoundError (subclass)
-            logger.warning("replay-live: live-wp failed for %s: %s", espn_id, e)
+            logger.warning("detect-live: live-wp failed for %s: %s", espn_id, e)
             return espn_id, None
 
     payloads = dict(_replay_live_pool.map(_fetch_one, live_ids))
@@ -569,6 +588,13 @@ def _build_replay_live() -> dict:
                 "live": True,
             }
         )
+    return games, has_pending
+
+
+def _build_replay_live() -> dict:
+    """Compute the live slate for /api/replay-live (raises 502 on today failure).
+    get_replay_live() wraps this with the response cache."""
+    games, has_pending = _detect_live_shapes()
     return {"games": games, "has_pending": has_pending}
 
 
@@ -847,3 +873,74 @@ async def trigger_daily_update(x_trigger_secret: str = Header(default="")):
     if result != 0:
         raise HTTPException(status_code=500, detail="Daily update job failed")
     return {"status": "ok"}
+
+
+def _run_thriller_poll() -> dict:
+    """Self-gate on recent tipoffs (no ESPN if nothing's plausibly live), detect
+    live shapes, and ping Telegram once per game that's Close/Thriller."""
+    # Fail closed on missing Telegram config: a transient send failure stays soft
+    # (retries next poll), but an unset token/chat_id is a permanent deploy/secret
+    # error — surface it as a hard 500 so a misconfigured deploy can't masquerade
+    # as healthy quiet runs. Mirrors the TRIGGER_SECRET fail-closed posture.
+    if not telegram_configured():
+        raise HTTPException(status_code=500, detail="Telegram not configured")
+
+    now_utc = datetime.now(timezone.utc)
+    session = get_session()
+    try:
+        candidates = get_games_by_date(session, today_et()) + get_games_by_date(
+            session, yesterday_et()
+        )
+        date_by_id = {g.espn_id: g.date for g in candidates if g.espn_id}
+    finally:
+        session.close()
+
+    # This gate is a COST gate, not an eligibility filter: it only decides whether
+    # anything is plausibly live so we can skip the ESPN call on quiet nights. We
+    # deliberately alert on ALL live Close/Thriller games below, not just the
+    # recent-tipoff subset — intersecting with this 4h window would suppress a
+    # legit long multi-OT thriller (tipoff >4h ago but still live).
+    if not filter_recent_tipoffs(candidates, now_utc):
+        return {"checked": 0, "alerted": 0}
+
+    # A game just tipped (self-gate passed), so a today-scoreboard failure here is
+    # a real failure: let _detect_live_shapes' 502 propagate → the poll run fails
+    # loudly (Scheduler-retriable/observable) instead of a fake-quiet 200.
+    games, _ = _detect_live_shapes()
+    alerted = 0
+    for g in games:
+        label = classify_excitement(g.get("excitement"))
+        if label is None:
+            continue
+        espn_id = g["espn_id"]
+        # Lock the whole claim so overlapping polls can't slip between the
+        # has_alerted check and record_alert and double-send. Use a short session
+        # per DB op so no pooled connection is held across the blocking Telegram
+        # POST (the repo's close-the-session-before-network-I/O pattern).
+        with _thriller_alert_lock:
+            session = get_session()
+            try:
+                already = has_alerted(session, espn_id)
+            finally:
+                session.close()
+            if already or not send_telegram(compose_alert(g, label)):
+                continue
+            session = get_session()
+            try:
+                record_alert(
+                    session, espn_id, date_by_id.get(espn_id, today_et()), label
+                )
+            finally:
+                session.close()
+            alerted += 1
+    return {"checked": len(games), "alerted": alerted}
+
+
+@app.post("/internal/thriller-poll")
+async def trigger_thriller_poll(x_trigger_secret: str = Header(default="")):
+    """Every-5-min Cloud Scheduler poll: ping me when a live game is a
+    Close game / Thriller. Fail closed like /internal/daily-update."""
+    if not _TRIGGER_SECRET or not compare_digest(x_trigger_secret, _TRIGGER_SECRET):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _run_thriller_poll)

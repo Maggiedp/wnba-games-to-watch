@@ -16,6 +16,7 @@ from src.db.schema import (
     PlayoffProbability,
     Team,
     TeamStyle,
+    ThrillerAlert,
 )
 
 
@@ -1225,3 +1226,19 @@ def delete_team_style_season(session: Session, season: int) -> None:
     session.query(TeamStyle).filter(TeamStyle.season == season).delete(
         synchronize_session=False
     )
+
+
+def has_alerted(session: Session, espn_id: str) -> bool:
+    """True if we've already pinged about this game (any date)."""
+    return session.query(ThrillerAlert).filter_by(espn_id=espn_id).first() is not None
+
+
+def record_alert(session: Session, espn_id: str, date: str, label: str) -> None:
+    """Persist that we alerted about `espn_id` (game's ET `date`, `label`).
+    Idempotent: a duplicate insert (concurrent-poll race) is rolled back and
+    swallowed rather than raised, so a loser thread can't 500 the poll."""
+    session.add(ThrillerAlert(espn_id=espn_id, date=date, label=label))
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()

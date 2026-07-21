@@ -195,6 +195,21 @@ class TeamStyle(Base):
     )
 
 
+class ThrillerAlert(Base):
+    """One row per game we've already pinged about — dedup for the live
+    'tune in' alerts. Keyed by espn_id (globally unique per game); date/label
+    are metadata (which ET night, and Close vs Thriller). A brand-new table, so
+    Base.metadata.create_all creates it — no ALTER needed in init_db."""
+
+    __tablename__ = "thriller_alerts"
+
+    id = Column(Integer, primary_key=True)
+    espn_id = Column(String(20), nullable=False, unique=True)
+    date = Column(String(10), nullable=False)  # game's ET date, metadata
+    label = Column(String(20), nullable=False)  # "Close game" | "Thriller"
+    alerted_at = Column(DateTime, default=func.now())  # wall-clock UTC, exempt
+
+
 def get_database_url() -> str:
     db_url = os.getenv("DATABASE_URL", "sqlite:///./data/games_to_watch.db")
     if db_url.startswith("sqlite:///./"):
