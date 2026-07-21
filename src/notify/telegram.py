@@ -28,5 +28,12 @@ def send_telegram(text: str, timeout: int = 10) -> bool:
         r.raise_for_status()
         return True
     except requests.RequestException as e:
-        logger.warning("telegram: send failed: %s", e)
+        # NEVER log the raw exception: requests embeds the full request URL
+        # (which contains the bot token) in HTTPError/connection error strings,
+        # so `%s` on the exception would leak the token into logs. Log only the
+        # exception type + HTTP status.
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        logger.warning(
+            "telegram: send failed (%s, status=%s)", type(e).__name__, status
+        )
         return False

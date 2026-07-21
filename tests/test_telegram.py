@@ -40,3 +40,21 @@ def test_send_returns_false_when_unconfigured(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     assert telegram.send_telegram("hi") is False
+
+
+def test_failure_log_never_contains_the_bot_token(monkeypatch, caplog):
+    """requests embeds the token-bearing URL in exception strings; the failure
+    log must not leak it (adversarial-review Finding 2)."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:SUPERSECRETTOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+
+    def raise_with_token(*a, **k):
+        raise requests.HTTPError(
+            "401 Client Error for url: "
+            "https://api.telegram.org/bot123:SUPERSECRETTOKEN/sendMessage"
+        )
+
+    monkeypatch.setattr(telegram.requests, "post", raise_with_token)
+    with caplog.at_level("WARNING"):
+        assert telegram.send_telegram("hi") is False
+    assert "SUPERSECRETTOKEN" not in caplog.text
