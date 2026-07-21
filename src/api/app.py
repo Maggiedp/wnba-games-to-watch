@@ -8,6 +8,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from secrets import compare_digest
 from contextlib import asynccontextmanager
 
@@ -36,6 +37,7 @@ from src.db.queries import (
     get_daily_rankings,
     get_elo_history,
     get_game_shapes,
+    get_games_by_date,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
@@ -46,6 +48,14 @@ from src.db.queries import (
     get_team_styles,
     get_teams_by_ids,
     get_upcoming_rankings,
+    has_alerted,
+    record_alert,
+)
+from src.notify.telegram import send_telegram
+from src.notify.thriller import (
+    classify_excitement,
+    compose_alert,
+    filter_recent_tipoffs,
 )
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
@@ -857,3 +867,50 @@ async def trigger_daily_update(x_trigger_secret: str = Header(default="")):
     if result != 0:
         raise HTTPException(status_code=500, detail="Daily update job failed")
     return {"status": "ok"}
+
+
+def _run_thriller_poll() -> dict:
+    """Self-gate on recent tipoffs (no ESPN if nothing's plausibly live), detect
+    live shapes, and ping Telegram once per game that's Close/Thriller."""
+    now_utc = datetime.now(timezone.utc)
+    session = get_session()
+    try:
+        candidates = get_games_by_date(session, today_et()) + get_games_by_date(
+            session, yesterday_et()
+        )
+        date_by_id = {g.espn_id: g.date for g in candidates if g.espn_id}
+    finally:
+        session.close()
+
+    if not filter_recent_tipoffs(candidates, now_utc):
+        return {"checked": 0, "alerted": 0}
+
+    games, _ = _detect_live_shapes(raise_on_today_failure=False)
+    alerted = 0
+    session = get_session()
+    try:
+        for g in games:
+            label = classify_excitement(g.get("excitement"))
+            if label is None:
+                continue
+            espn_id = g["espn_id"]
+            if has_alerted(session, espn_id):
+                continue
+            if send_telegram(compose_alert(g, label)):
+                record_alert(
+                    session, espn_id, date_by_id.get(espn_id, today_et()), label
+                )
+                alerted += 1
+    finally:
+        session.close()
+    return {"checked": len(games), "alerted": alerted}
+
+
+@app.post("/internal/thriller-poll")
+async def trigger_thriller_poll(x_trigger_secret: str = Header(default="")):
+    """Every-5-min Cloud Scheduler poll: ping me when a live game is a
+    Close game / Thriller. Fail closed like /internal/daily-update."""
+    if not _TRIGGER_SECRET or not compare_digest(x_trigger_secret, _TRIGGER_SECRET):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _run_thriller_poll)
