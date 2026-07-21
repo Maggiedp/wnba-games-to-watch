@@ -2,10 +2,20 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 import src.api.app as app_module
 from src.data.espn_api import today_et
 from src.db.queries import has_alerted
 from src.db.schema import Game
+
+
+@pytest.fixture(autouse=True)
+def _telegram_env(monkeypatch):
+    """Poll tests assume Telegram is configured (the poll fails closed otherwise);
+    the unconfigured case is exercised explicitly in its own test."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
 
 
 def _seed_live_game(env, espn_id="401700020"):
@@ -197,3 +207,13 @@ def test_poll_502s_when_scoreboard_fails_during_a_game(env, client, monkeypatch)
     r = client.post("/internal/thriller-poll", headers={"X-Trigger-Secret": "s3cret"})
     assert r.status_code == 502
     assert sends == []  # no alerts sent during an outage
+
+
+def test_poll_500s_when_telegram_unconfigured(client, monkeypatch):
+    """Missing Telegram secrets are a permanent deploy error, not a transient
+    send failure: the poll must fail closed (500), not fake-quiet 200 (Finding 2)."""
+    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    r = client.post("/internal/thriller-poll", headers={"X-Trigger-Secret": "s3cret"})
+    assert r.status_code == 500

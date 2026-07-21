@@ -12,13 +12,20 @@ logger = logging.getLogger(__name__)
 _API = "https://api.telegram.org"
 
 
+def telegram_configured() -> bool:
+    """True if both the bot token and chat id are set (env / Secret Manager)."""
+    return bool(os.environ.get("TELEGRAM_BOT_TOKEN")) and bool(
+        os.environ.get("TELEGRAM_CHAT_ID")
+    )
+
+
 def send_telegram(text: str, timeout: int = 10) -> bool:
     """POST `text` to the configured chat. Returns True on 2xx, else False."""
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
+    if not telegram_configured():
         logger.warning("telegram: token/chat_id not configured; skipping send")
         return False
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    chat_id = os.environ["TELEGRAM_CHAT_ID"]
     try:
         r = requests.post(
             f"{_API}/bot{token}/sendMessage",

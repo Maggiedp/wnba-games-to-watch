@@ -51,7 +51,7 @@ from src.db.queries import (
     has_alerted,
     record_alert,
 )
-from src.notify.telegram import send_telegram
+from src.notify.telegram import send_telegram, telegram_configured
 from src.notify.thriller import (
     classify_excitement,
     compose_alert,
@@ -878,6 +878,13 @@ async def trigger_daily_update(x_trigger_secret: str = Header(default="")):
 def _run_thriller_poll() -> dict:
     """Self-gate on recent tipoffs (no ESPN if nothing's plausibly live), detect
     live shapes, and ping Telegram once per game that's Close/Thriller."""
+    # Fail closed on missing Telegram config: a transient send failure stays soft
+    # (retries next poll), but an unset token/chat_id is a permanent deploy/secret
+    # error — surface it as a hard 500 so a misconfigured deploy can't masquerade
+    # as healthy quiet runs. Mirrors the TRIGGER_SECRET fail-closed posture.
+    if not telegram_configured():
+        raise HTTPException(status_code=500, detail="Telegram not configured")
+
     now_utc = datetime.now(timezone.utc)
     session = get_session()
     try:
@@ -888,6 +895,11 @@ def _run_thriller_poll() -> dict:
     finally:
         session.close()
 
+    # This gate is a COST gate, not an eligibility filter: it only decides whether
+    # anything is plausibly live so we can skip the ESPN call on quiet nights. We
+    # deliberately alert on ALL live Close/Thriller games below, not just the
+    # recent-tipoff subset — intersecting with this 4h window would suppress a
+    # legit long multi-OT thriller (tipoff >4h ago but still live).
     if not filter_recent_tipoffs(candidates, now_utc):
         return {"checked": 0, "alerted": 0}
 
