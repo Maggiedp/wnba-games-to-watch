@@ -204,12 +204,10 @@ class ThrillerAlert(Base):
     __tablename__ = "thriller_alerts"
 
     id = Column(Integer, primary_key=True)
-    espn_id = Column(String(20), nullable=False)
+    espn_id = Column(String(20), nullable=False, unique=True)
     date = Column(String(10), nullable=False)  # game's ET date, metadata
     label = Column(String(20), nullable=False)  # "Close game" | "Thriller"
     alerted_at = Column(DateTime, default=func.now())  # wall-clock UTC, exempt
-
-    __table_args__ = (UniqueConstraint("espn_id", name="uq_thriller_alert"),)
 
 
 def get_database_url() -> str:

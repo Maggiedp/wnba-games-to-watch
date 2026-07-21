@@ -908,25 +908,31 @@ def _run_thriller_poll() -> dict:
     # loudly (Scheduler-retriable/observable) instead of a fake-quiet 200.
     games, _ = _detect_live_shapes()
     alerted = 0
-    session = get_session()
-    try:
-        for g in games:
-            label = classify_excitement(g.get("excitement"))
-            if label is None:
+    for g in games:
+        label = classify_excitement(g.get("excitement"))
+        if label is None:
+            continue
+        espn_id = g["espn_id"]
+        # Lock the whole claim so overlapping polls can't slip between the
+        # has_alerted check and record_alert and double-send. Use a short session
+        # per DB op so no pooled connection is held across the blocking Telegram
+        # POST (the repo's close-the-session-before-network-I/O pattern).
+        with _thriller_alert_lock:
+            session = get_session()
+            try:
+                already = has_alerted(session, espn_id)
+            finally:
+                session.close()
+            if already or not send_telegram(compose_alert(g, label)):
                 continue
-            espn_id = g["espn_id"]
-            # Hold the lock across check+send+record so a concurrent poll can't
-            # slip between has_alerted and record_alert and double-send.
-            with _thriller_alert_lock:
-                if has_alerted(session, espn_id):
-                    continue
-                if send_telegram(compose_alert(g, label)):
-                    record_alert(
-                        session, espn_id, date_by_id.get(espn_id, today_et()), label
-                    )
-                    alerted += 1
-    finally:
-        session.close()
+            session = get_session()
+            try:
+                record_alert(
+                    session, espn_id, date_by_id.get(espn_id, today_et()), label
+                )
+            finally:
+                session.close()
+            alerted += 1
     return {"checked": len(games), "alerted": alerted}
 
 

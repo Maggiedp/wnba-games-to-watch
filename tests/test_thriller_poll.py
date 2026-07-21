@@ -11,11 +11,26 @@ from src.db.schema import Game
 
 
 @pytest.fixture(autouse=True)
-def _telegram_env(monkeypatch):
-    """Poll tests assume Telegram is configured (the poll fails closed otherwise);
-    the unconfigured case is exercised explicitly in its own test."""
+def _poll_env(monkeypatch):
+    """Shared poll setup: a known trigger secret + configured Telegram. Tests that
+    need the negative cases (bad secret, unconfigured Telegram) override in-body."""
+    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+
+
+def _game(espn_id, excitement, **over):
+    """A live-game dict as _detect_live_shapes yields; override any field."""
+    g = {
+        "espn_id": espn_id,
+        "home_team": "Los Angeles Sparks",
+        "away_team": "Las Vegas Aces",
+        "home_score": "74",
+        "away_score": "78",
+        "excitement": excitement,
+    }
+    g.update(over)
+    return g
 
 
 def _seed_live_game(env, espn_id="401700020"):
@@ -40,14 +55,12 @@ def _seed_live_game(env, espn_id="401700020"):
         session.close()
 
 
-def test_requires_secret(client, monkeypatch):
-    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
+def test_requires_secret(client):
     r = client.post("/internal/thriller-poll", headers={"X-Trigger-Secret": "wrong"})
     assert r.status_code == 403
 
 
 def test_noop_when_nothing_recent(client, monkeypatch):
-    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
     called = {"detect": 0, "send": 0}
     monkeypatch.setattr(
         app_module,
@@ -66,16 +79,8 @@ def test_noop_when_nothing_recent(client, monkeypatch):
 
 
 def test_sends_and_dedups_qualifying_game(env, client, monkeypatch):
-    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
     _seed_live_game(env, "401700020")
-    game = {
-        "espn_id": "401700020",
-        "home_team": "Los Angeles Sparks",
-        "away_team": "Las Vegas Aces",
-        "home_score": "74",
-        "away_score": "78",
-        "excitement": 8.1,
-    }
+    game = _game("401700020", 8.1)
     monkeypatch.setattr(app_module, "_detect_live_shapes", lambda **k: ([game], True))
     sends = []
     monkeypatch.setattr(
@@ -99,16 +104,8 @@ def test_sends_and_dedups_qualifying_game(env, client, monkeypatch):
 
 
 def test_no_dedup_row_when_send_fails(env, client, monkeypatch):
-    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
     _seed_live_game(env, "401700021")
-    game = {
-        "espn_id": "401700021",
-        "home_team": "A",
-        "away_team": "B",
-        "home_score": "70",
-        "away_score": "72",
-        "excitement": 8.0,
-    }
+    game = _game("401700021", 8.0)
     monkeypatch.setattr(app_module, "_detect_live_shapes", lambda **k: ([game], True))
     monkeypatch.setattr(app_module, "send_telegram", lambda *a, **k: False)
 
@@ -122,16 +119,8 @@ def test_no_dedup_row_when_send_fails(env, client, monkeypatch):
 
 
 def test_below_close_threshold_no_send(env, client, monkeypatch):
-    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
     _seed_live_game(env, "401700022")
-    game = {
-        "espn_id": "401700022",
-        "home_team": "A",
-        "away_team": "B",
-        "home_score": "70",
-        "away_score": "60",
-        "excitement": 3.0,
-    }
+    game = _game("401700022", 3.0)
     monkeypatch.setattr(app_module, "_detect_live_shapes", lambda **k: ([game], True))
     sends = []
     monkeypatch.setattr(
@@ -144,16 +133,8 @@ def test_below_close_threshold_no_send(env, client, monkeypatch):
 def test_concurrent_polls_send_once(env, client, monkeypatch):
     """Two overlapping polls on the same live game must send exactly once and
     neither must 500 on the unique-constraint race (Finding 1)."""
-    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
     _seed_live_game(env, "401700030")
-    game = {
-        "espn_id": "401700030",
-        "home_team": "Los Angeles Sparks",
-        "away_team": "Las Vegas Aces",
-        "home_score": "80",
-        "away_score": "82",
-        "excitement": 8.5,
-    }
+    game = _game("401700030", 8.5)
     monkeypatch.setattr(app_module, "_detect_live_shapes", lambda **k: ([game], True))
 
     sends = []
@@ -192,7 +173,6 @@ def test_poll_502s_when_scoreboard_fails_during_a_game(env, client, monkeypatch)
     the poll must 502 (observable/retriable), not fake-quiet 200 (Finding 1)."""
     from src.data.espn_api import ESPNAPIError
 
-    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
     _seed_live_game(env, "401700040")
 
     def boom(_date):
@@ -212,7 +192,6 @@ def test_poll_502s_when_scoreboard_fails_during_a_game(env, client, monkeypatch)
 def test_poll_500s_when_telegram_unconfigured(client, monkeypatch):
     """Missing Telegram secrets are a permanent deploy error, not a transient
     send failure: the poll must fail closed (500), not fake-quiet 200 (Finding 2)."""
-    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     r = client.post("/internal/thriller-poll", headers={"X-Trigger-Secret": "s3cret"})
