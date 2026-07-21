@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import src.api.app as app_module
@@ -127,3 +129,49 @@ def test_below_close_threshold_no_send(env, client, monkeypatch):
     )
     r = client.post("/internal/thriller-poll", headers={"X-Trigger-Secret": "s3cret"})
     assert r.json()["alerted"] == 0 and sends == []
+
+
+def test_concurrent_polls_send_once(env, client, monkeypatch):
+    """Two overlapping polls on the same live game must send exactly once and
+    neither must 500 on the unique-constraint race (Finding 1)."""
+    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
+    _seed_live_game(env, "401700030")
+    game = {
+        "espn_id": "401700030",
+        "home_team": "Los Angeles Sparks",
+        "away_team": "Las Vegas Aces",
+        "home_score": "80",
+        "away_score": "82",
+        "excitement": 8.5,
+    }
+    monkeypatch.setattr(app_module, "_detect_live_shapes", lambda **k: ([game], True))
+
+    sends = []
+    sends_lock = threading.Lock()
+
+    def slow_send(text, **k):
+        time.sleep(0.05)  # widen the race window so an unlocked impl double-sends
+        with sends_lock:
+            sends.append(text)
+        return True
+
+    monkeypatch.setattr(app_module, "send_telegram", slow_send)
+
+    results = []
+
+    def run():
+        results.append(app_module._run_thriller_poll())
+
+    t1, t2 = threading.Thread(target=run), threading.Thread(target=run)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert len(sends) == 1
+    assert sum(r["alerted"] for r in results) == 1
+    session = env.get_session()
+    try:
+        assert has_alerted(session, "401700030") is True
+    finally:
+        session.close()

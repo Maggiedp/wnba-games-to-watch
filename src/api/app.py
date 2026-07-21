@@ -488,6 +488,13 @@ _replay_live_cache: "tuple[float, dict] | None" = None
 _replay_live_cache_lock = threading.Lock()
 _replay_live_build_lock = threading.Lock()
 
+# Serializes the thriller poll's per-game check-send-record critical section so
+# two overlapping polls (a slow poll still running at the next 5-min fire, or a
+# manual replay) can't both pass the has_alerted check and double-send. One
+# in-process lock suffices because --max-instances=1 pins us to a single
+# container; record_alert is also idempotent as belt-and-suspenders.
+_thriller_alert_lock = threading.Lock()
+
 
 def _detect_live_shapes(raise_on_today_failure: bool):
     """Shared detection: today+yesterday statuses -> DB-known live ids -> per-game
@@ -894,13 +901,16 @@ def _run_thriller_poll() -> dict:
             if label is None:
                 continue
             espn_id = g["espn_id"]
-            if has_alerted(session, espn_id):
-                continue
-            if send_telegram(compose_alert(g, label)):
-                record_alert(
-                    session, espn_id, date_by_id.get(espn_id, today_et()), label
-                )
-                alerted += 1
+            # Hold the lock across check+send+record so a concurrent poll can't
+            # slip between has_alerted and record_alert and double-send.
+            with _thriller_alert_lock:
+                if has_alerted(session, espn_id):
+                    continue
+                if send_telegram(compose_alert(g, label)):
+                    record_alert(
+                        session, espn_id, date_by_id.get(espn_id, today_et()), label
+                    )
+                    alerted += 1
     finally:
         session.close()
     return {"checked": len(games), "alerted": alerted}
