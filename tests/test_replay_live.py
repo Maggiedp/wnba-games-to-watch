@@ -203,11 +203,13 @@ def test_replay_live_single_flights_concurrent_cold_builds(client, monkeypatch):
     assert builds["n"] == 1  # single-flight collapsed 5 cold calls into one build
 
 
-def test_detect_live_shapes_swallows_today_failure_when_best_effort(monkeypatch):
+def test_detect_live_shapes_raises_502_on_today_failure(monkeypatch):
+    from fastapi import HTTPException
+
     def boom(_date):
         raise ESPNAPIError("down")
 
     monkeypatch.setattr(app, "fetch_today_game_statuses", boom)
-    games, has_pending = app._detect_live_shapes(raise_on_today_failure=False)
-    assert games == []
-    assert has_pending is False
+    with pytest.raises(HTTPException) as exc:
+        app._detect_live_shapes()
+    assert exc.value.status_code == 502

@@ -496,12 +496,13 @@ _replay_live_build_lock = threading.Lock()
 _thriller_alert_lock = threading.Lock()
 
 
-def _detect_live_shapes(raise_on_today_failure: bool):
+def _detect_live_shapes():
     """Shared detection: today+yesterday statuses -> DB-known live ids -> per-game
-    live shape dicts, plus has_pending. If raise_on_today_failure, a failed today
-    scoreboard fetch raises HTTPException(502) (user-facing /api/replay-live);
-    otherwise it's swallowed and returns ([], False) (best-effort
-    /internal/thriller-poll).
+    live shape dicts, plus has_pending. A failed today-scoreboard fetch raises
+    HTTPException(502): /api/replay-live surfaces it to the client, and the
+    thriller poll lets it 502 the run so an ESPN outage during games is an
+    observable/retriable failure rather than a fake-quiet success (the poll only
+    reaches here after its DB self-gate confirmed a game just tipped off).
     """
     # Today primary; yesterday best-effort for late-ET games past the UTC-midnight
     # boundary.
@@ -509,9 +510,7 @@ def _detect_live_shapes(raise_on_today_failure: bool):
         statuses = fetch_today_game_statuses(today_et())
     except ESPNAPIError as e:
         logger.warning("detect-live: today statuses failed: %s", e)
-        if raise_on_today_failure:
-            raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
-        return [], False
+        raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
     try:
         statuses = {**fetch_today_game_statuses(yesterday_et()), **statuses}
     except ESPNAPIError as e:
@@ -595,7 +594,7 @@ def _detect_live_shapes(raise_on_today_failure: bool):
 def _build_replay_live() -> dict:
     """Compute the live slate for /api/replay-live (raises 502 on today failure).
     get_replay_live() wraps this with the response cache."""
-    games, has_pending = _detect_live_shapes(raise_on_today_failure=True)
+    games, has_pending = _detect_live_shapes()
     return {"games": games, "has_pending": has_pending}
 
 
@@ -892,7 +891,10 @@ def _run_thriller_poll() -> dict:
     if not filter_recent_tipoffs(candidates, now_utc):
         return {"checked": 0, "alerted": 0}
 
-    games, _ = _detect_live_shapes(raise_on_today_failure=False)
+    # A game just tipped (self-gate passed), so a today-scoreboard failure here is
+    # a real failure: let _detect_live_shapes' 502 propagate → the poll run fails
+    # loudly (Scheduler-retriable/observable) instead of a fake-quiet 200.
+    games, _ = _detect_live_shapes()
     alerted = 0
     session = get_session()
     try:

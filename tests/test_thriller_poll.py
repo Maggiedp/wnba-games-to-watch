@@ -175,3 +175,25 @@ def test_concurrent_polls_send_once(env, client, monkeypatch):
         assert has_alerted(session, "401700030") is True
     finally:
         session.close()
+
+
+def test_poll_502s_when_scoreboard_fails_during_a_game(env, client, monkeypatch):
+    """Self-gate passed (a game just tipped), but today's scoreboard fetch fails:
+    the poll must 502 (observable/retriable), not fake-quiet 200 (Finding 1)."""
+    from src.data.espn_api import ESPNAPIError
+
+    monkeypatch.setattr(app_module, "_TRIGGER_SECRET", "s3cret")
+    _seed_live_game(env, "401700040")
+
+    def boom(_date):
+        raise ESPNAPIError("down")
+
+    monkeypatch.setattr(app_module, "fetch_today_game_statuses", boom)
+    sends = []
+    monkeypatch.setattr(
+        app_module, "send_telegram", lambda t, **k: sends.append(t) or True
+    )
+
+    r = client.post("/internal/thriller-poll", headers={"X-Trigger-Secret": "s3cret"})
+    assert r.status_code == 502
+    assert sends == []  # no alerts sent during an outage
