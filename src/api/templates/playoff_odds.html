@@ -170,7 +170,8 @@
         <button class="sort-btn" data-playoff-view="seeds" type="button" aria-pressed="false">Seeds</button>
       </div>
     </div>
-    <table class="playoff-table" id="playoff-table">
+    <p class="empty" id="playoff-status">Loading…</p>
+    <table class="playoff-table" id="playoff-table" hidden>
       <thead id="playoff-thead"></thead>
       <tbody id="playoff-tbody"></tbody>
     </table>
@@ -184,16 +185,34 @@
 let allPlayoffOdds = [];
 let playoffView = 'rounds';  // 'rounds' | 'seeds'
 
+// Unlike the homepage (where an empty odds list just left the collapsible
+// section hidden), this is a page the user navigated to — so a no-data state
+// must say so rather than render a blank shell. /api/playoff-odds returns []
+// whenever today's rows aren't written yet (the daily run is 6 AM ET), so this
+// fires in that pre-run window, on a missed run, and on a transient API error.
+const PLAYOFF_UNAVAILABLE = 'Playoff odds update daily — check back after the morning run.';
+
+function showPlayoffStatus(msg) {
+    const status = document.getElementById('playoff-status');
+    const table = document.getElementById('playoff-table');
+    if (status) { status.textContent = msg; status.hidden = false; }
+    if (table) table.hidden = true;
+}
+
 async function fetchPlayoffOdds() {
     try {
         const resp = await fetch('/api/playoff-odds');
-        if (!resp.ok) return;
+        if (!resp.ok) { showPlayoffStatus(PLAYOFF_UNAVAILABLE); return; }
         const odds = await resp.json();
-        if (!odds || odds.length === 0) return;
+        if (!odds || odds.length === 0) { showPlayoffStatus(PLAYOFF_UNAVAILABLE); return; }
         allPlayoffOdds = odds;
+        const status = document.getElementById('playoff-status');
+        const table = document.getElementById('playoff-table');
+        if (status) status.hidden = true;
+        if (table) table.hidden = false;
         renderPlayoffPicture();
     } catch (e) {
-        // Non-fatal — page works without the table
+        showPlayoffStatus(PLAYOFF_UNAVAILABLE);
     }
 }
 

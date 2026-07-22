@@ -22,7 +22,10 @@ function heatAlpha(prob) {
 // Seed distribution → per-seed display cells for the Playoff Picture "Seeds" view.
 // seedDistribution is the /api/playoff-odds field: {seed: prob} with string keys
 // (JSON) summing to the team's make-playoffs prob; only seeds that occurred are
-// present (absent seed = 0), and it's null/{} for rows a daily run hasn't written.
+// present (absent seed = 0). Two distinct empty encodings (do not conflate — the
+// Seeds-toggle gate depends on the difference): `{}` is a WRITTEN row for a team
+// that reached the playoffs in zero sims (make_playoffs_prob == 0, i.e. eliminated
+// — a complete row); `null` is a row a daily run hasn't written (legacy/pre-column).
 // Returns { cells: [{seed, prob, display}] for seeds 1..8, hasData }.
 //   display: '' for 0/absent, '<1%' for tiny-nonzero, 'NN%' otherwise (mirrors the
 //            round-cell convention). hasData = any seed prob > 0.
