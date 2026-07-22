@@ -30,6 +30,15 @@ const WIDTHS = [320, 360, 390, 430];
 const UPCOMING_DETAIL_ID = '9990001';
 const COMPLETED_DETAIL_ID = '9980001';
 
+// Switch the /playoff-odds table to the Seeds heatmap view (asserts it took).
+async function openPlayoffSeedsView(page) {
+  await page.waitForSelector('#playoff-view-toggle:not([hidden])');
+  await page.click('[data-playoff-view="seeds"]');
+  await page.waitForFunction(
+    () => document.getElementById('playoff-table').classList.contains('view-seeds'),
+  );
+}
+
 // readySelector = client-rendered content that must exist before measuring
 // (networkidle alone can race the post-fetch render).
 const PAGES = [
@@ -39,6 +48,8 @@ const PAGES = [
   { path: '/style', readySelector: '#style-grid svg' },
   { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
   { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: 'main' },
+  { path: '/playoff-odds', readySelector: '#playoff-tbody tr' },
+  { path: '/playoff-odds', readySelector: '#playoff-tbody tr', apply: openPlayoffSeedsView },
 ];
 
 let server;

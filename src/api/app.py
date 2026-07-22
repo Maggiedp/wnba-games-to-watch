@@ -134,6 +134,13 @@ async def style_page():
     return HTMLResponse(render_style())
 
 
+@app.get("/playoff-odds", response_class=HTMLResponse)
+async def playoff_odds_page():
+    from src.api.routes import render_playoff_odds
+
+    return HTMLResponse(render_playoff_odds())
+
+
 @app.get("/game/{espn_id}", response_class=HTMLResponse)
 def game_detail(espn_id: str):
     from src.api.routes import render_game_detail

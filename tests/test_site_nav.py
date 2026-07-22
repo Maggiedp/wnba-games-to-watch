@@ -9,6 +9,7 @@ NAV = (
     ("/rankings", "Power rankings"),
     ("/replay", "Replay value"),
     ("/style", "Team style"),
+    ("/playoff-odds", "Playoff odds"),
     ("/transparency", "Behind the numbers"),
 )
 
