@@ -1,6 +1,7 @@
 """Tests for src/api/routes.py — focused on response formatting."""
 
 import json
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -1378,16 +1379,17 @@ def test_playoff_odds_endpoint_omits_record_for_historical_date(env, client):
 
 
 def test_playoff_odds_default_falls_back_to_latest_when_today_empty(env, client):
-    """The default (no ?date=) request falls back to the freshest populated day
-    when today has no snapshot yet — the pre-6AM daily-run window or a missed run.
-    A dedicated page must show recent odds, not a blank shell."""
+    """The default (no ?date=) request falls back to the freshest RECENT day when
+    today has no snapshot yet — the pre-6AM daily-run window or a missed run. A
+    dedicated page must show current-ish odds, not a blank shell."""
     session = env.get_session()
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     a_id = session.query(env.Team).filter_by(name="Aces").one().id
-    # Only a PAST snapshot exists; nothing written for today_et().
+    # A snapshot from yesterday (within the fallback age bound); none for today.
+    yesterday = (date.fromisoformat(today_et()) - timedelta(days=1)).isoformat()
     upsert_playoff_probability(
         session,
-        date="2026-05-15",
+        date=yesterday,
         team_id=a_id,
         probability=0.8,
         reach_semis_prob=0.5,
@@ -1402,6 +1404,29 @@ def test_playoff_odds_default_falls_back_to_latest_when_today_empty(env, client)
     # The fallback day isn't today, so records are omitted (mixed-time guard).
     assert rows[0]["wins"] is None
     assert rows[0]["losses"] is None
+
+
+def test_playoff_odds_default_does_not_fall_back_to_stale_snapshot(env, client):
+    """The fallback is age-bounded: a snapshot older than the cutoff (offseason /
+    a multi-day outage) must NOT stand in for today — showing last season's final
+    odds as current would be wrong, so the page gets its empty state instead."""
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    # 30 days stale — well beyond the ~3-day fallback bound.
+    stale = (date.fromisoformat(today_et()) - timedelta(days=30)).isoformat()
+    upsert_playoff_probability(
+        session,
+        date=stale,
+        team_id=a_id,
+        probability=0.8,
+        reach_semis_prob=0.5,
+        reach_finals_prob=0.3,
+        win_championship_prob=0.2,
+    )
+    session.close()
+
+    assert client.get("/api/playoff-odds").json() == []
 
 
 def test_playoff_odds_explicit_empty_date_does_not_fall_back(env, client):

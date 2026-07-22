@@ -8,7 +8,8 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date as date_cls
+from datetime import datetime, timedelta, timezone
 from secrets import compare_digest
 from contextlib import asynccontextmanager
 
@@ -640,6 +641,13 @@ def get_replay_live():
         return result
 
 
+# How stale the freshest snapshot may be and still stand in for "today" on the
+# default /api/playoff-odds request. Covers the pre-6AM daily-run window and a
+# missed run; beyond it (offseason / multi-day outage) the page shows its empty
+# state rather than presenting last season's final odds as current.
+_PLAYOFF_FALLBACK_MAX_AGE_DAYS = 3
+
+
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])
 async def get_playoff_odds(date: str = Query(default=None)):
     """Return per-team round-by-round playoff probabilities.
@@ -668,12 +676,21 @@ async def get_playoff_odds(date: str = Query(default=None)):
         recs = _populated(date)
         # No populated snapshot for today yet — the pre-6AM daily-run window, or a
         # missed/late run. On the DEFAULT (no ?date=) request, fall back to the
-        # freshest available day so the dedicated /playoff-odds page shows recent
+        # freshest RECENT day so the dedicated /playoff-odds page shows current-ish
         # odds instead of a blank shell. An explicit ?date= query stays exact (a
         # historical lookup must not silently jump to another date).
+        #
+        # The fallback is age-bounded: it must cover the pre-run window and a
+        # missed run, but never present LAST SEASON's final odds as current. In
+        # the offseason (or a multi-day outage) the latest populated day is older
+        # than the cutoff, so we fall through to the honest empty state instead.
         if not recs and not explicit_date:
             latest = get_latest_playoff_probability_date(session, today)
-            if latest and latest != date:
+            cutoff = (
+                date_cls.fromisoformat(today)
+                - timedelta(days=_PLAYOFF_FALLBACK_MAX_AGE_DAYS)
+            ).isoformat()
+            if latest and latest >= cutoff and latest != date:
                 date = latest
                 is_today = False
                 recs = _populated(date)
