@@ -1,7 +1,8 @@
 """Tests for src/api/routes.py — focused on response formatting."""
 
 import json
-from datetime import date, timedelta
+from datetime import date as date_cls
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -1386,7 +1387,7 @@ def test_playoff_odds_default_falls_back_to_latest_when_today_empty(env, client)
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     a_id = session.query(env.Team).filter_by(name="Aces").one().id
     # A snapshot from yesterday (within the fallback age bound); none for today.
-    yesterday = (date.fromisoformat(today_et()) - timedelta(days=1)).isoformat()
+    yesterday = (date_cls.fromisoformat(today_et()) - timedelta(days=1)).isoformat()
     upsert_playoff_probability(
         session,
         date=yesterday,
@@ -1414,7 +1415,7 @@ def test_playoff_odds_default_does_not_fall_back_to_stale_snapshot(env, client):
     upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
     a_id = session.query(env.Team).filter_by(name="Aces").one().id
     # 30 days stale — well beyond the ~3-day fallback bound.
-    stale = (date.fromisoformat(today_et()) - timedelta(days=30)).isoformat()
+    stale = (date_cls.fromisoformat(today_et()) - timedelta(days=30)).isoformat()
     upsert_playoff_probability(
         session,
         date=stale,
