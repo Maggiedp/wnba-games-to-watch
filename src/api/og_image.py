@@ -181,6 +181,23 @@ def render_style_card() -> bytes:
     return _to_png(img)
 
 
+@functools.cache
+def render_playoff_odds_card() -> bytes:
+    """Static /playoff-odds brand card (1200x630 PNG bytes). Content is constant."""
+    img, draw = _draw_base()
+    headline_font = _fit_font(draw, "Playoff", 1080, 150, 900.0)
+    _centered(draw, "Playoff", 190, headline_font, _OFFWHITE)
+    _centered(draw, "Picture", 350, headline_font, _ORANGE)
+    _centered(
+        draw,
+        "Every WNBA team's title odds, simulated daily",
+        540,
+        _load_font(34, 400.0),
+        _MUTED,
+    )
+    return _to_png(img)
+
+
 def render_game_card(
     name_a: str,
     name_b: str,

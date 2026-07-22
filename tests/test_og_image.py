@@ -298,7 +298,14 @@ def test_og_transparency_endpoint_returns_png(client):
 def test_og_static_endpoints_answer_head(client):
     from src.api.app import _OG_STATIC_CACHE_S
 
-    for path in ("/og-home.png", "/og-transparency.png"):
+    for path in (
+        "/og-home.png",
+        "/og-transparency.png",
+        "/og-rankings.png",
+        "/og-replay.png",
+        "/og-style.png",
+        "/og-playoff-odds.png",
+    ):
         r = client.head(path)
         assert r.status_code == 200, path
         assert r.headers["content-type"] == "image/png", path
@@ -433,3 +440,27 @@ def test_og_replay_endpoint_answers_head(client):
     r = client.head("/og-replay.png")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
+
+
+def test_render_playoff_odds_card_returns_1200x630_png():
+    from src.api.og_image import render_playoff_odds_card
+
+    data = render_playoff_odds_card()
+    img = _open(data)
+    assert img.size == (1200, 630)
+    assert img.format == "PNG"
+
+
+def test_render_playoff_odds_card_is_memoized():
+    from src.api.og_image import render_playoff_odds_card
+
+    assert render_playoff_odds_card() is render_playoff_odds_card()
+
+
+def test_og_playoff_odds_endpoint_returns_png(client):
+    from src.api.app import _OG_STATIC_CACHE_S
+
+    r = client.get("/og-playoff-odds.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.headers["cache-control"] == f"public, max-age={_OG_STATIC_CACHE_S}"

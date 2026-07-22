@@ -225,6 +225,13 @@ def og_style_image():
     return _png_response(render_style_card(), _OG_STATIC_CACHE_S)
 
 
+@app.api_route("/og-playoff-odds.png", methods=["GET", "HEAD"])
+def og_playoff_odds_image():
+    from src.api.og_image import render_playoff_odds_card
+
+    return _png_response(render_playoff_odds_card(), _OG_STATIC_CACHE_S)
+
+
 @app.get("/api/games/today", response_model=list[GameResponse])
 def get_today_games():
     today = today_et()
