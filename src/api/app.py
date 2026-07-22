@@ -685,12 +685,15 @@ async def get_playoff_odds(date: str = Query(default=None)):
         # the offseason (or a multi-day outage) the latest populated day is older
         # than the cutoff, so we fall through to the honest empty state instead.
         if not recs and not explicit_date:
+            # latest is < today here: we only reach this branch when _populated(today)
+            # is empty, and get_latest_playoff_probability_date uses the same
+            # "populated" predicate, so it can't return today.
             latest = get_latest_playoff_probability_date(session, today)
             cutoff = (
                 date_cls.fromisoformat(today)
                 - timedelta(days=_PLAYOFF_FALLBACK_MAX_AGE_DAYS)
             ).isoformat()
-            if latest and latest >= cutoff and latest != date:
+            if latest and latest >= cutoff:
                 date = latest
                 is_today = False
                 recs = _populated(date)

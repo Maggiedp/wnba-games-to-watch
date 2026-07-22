@@ -182,7 +182,7 @@
 
   <section class="playoff-card">
     <div class="playoff-header-row">
-      <p class="playoff-explainer" id="playoff-explainer">Each team's chance to reach every round — from making the playoffs to winning the title.</p>
+      <p class="playoff-explainer" id="playoff-explainer"></p>
       <div class="sort-toggle" id="playoff-view-toggle" role="group" aria-label="Playoff table view" hidden>
         <button class="sort-btn" data-playoff-view="rounds" type="button" aria-pressed="true">Rounds</button>
         <button class="sort-btn" data-playoff-view="seeds" type="button" aria-pressed="false">Seeds</button>
@@ -214,11 +214,22 @@ const PLAYOFF_EMPTY = 'Playoff odds appear once the season’s first simulation 
 // log it so a real outage isn't indistinguishable from the expected empty state.
 const PLAYOFF_ERROR = 'Couldn’t load the playoff odds. Refresh to try again.';
 
+// Per-view explainer copy — single source for the header line, set on render.
+const ROUNDS_EXPLAINER = 'Each team’s chance to reach every round — from making the playoffs to winning the title.';
+const SEEDS_EXPLAINER = 'Each team’s chance to finish at each seed, or miss the playoffs.';
+
 function showPlayoffStatus(msg) {
     const status = document.getElementById('playoff-status');
     const table = document.getElementById('playoff-table');
     if (status) { status.textContent = msg; status.hidden = false; }
     if (table) table.hidden = true;
+}
+
+function hidePlayoffStatus() {
+    const status = document.getElementById('playoff-status');
+    const table = document.getElementById('playoff-table');
+    if (status) status.hidden = true;
+    if (table) table.hidden = false;
 }
 
 async function fetchPlayoffOdds() {
@@ -228,10 +239,7 @@ async function fetchPlayoffOdds() {
         const odds = await resp.json();
         if (!odds || odds.length === 0) { showPlayoffStatus(PLAYOFF_EMPTY); return; }
         allPlayoffOdds = odds;
-        const status = document.getElementById('playoff-status');
-        const table = document.getElementById('playoff-table');
-        if (status) status.hidden = true;
-        if (table) table.hidden = false;
+        hidePlayoffStatus();
         renderPlayoffPicture();
     } catch (e) {
         console.error('playoff-odds load failed', e);
@@ -257,9 +265,7 @@ function renderPlayoffPicture() {
 
     const seeds = playoffView === 'seeds';
     table.classList.toggle('view-seeds', seeds);
-    if (explainer) explainer.textContent = seeds
-        ? "Each team's chance to finish at each seed, or miss the playoffs."
-        : "Each team's chance to reach every round — from making the playoffs to winning the title.";
+    if (explainer) explainer.textContent = seeds ? SEEDS_EXPLAINER : ROUNDS_EXPLAINER;
 
     // Logo + team name + default-hidden abbreviation (shown at
     // phone widths by CSS) — shared by both branches so the logo
@@ -313,17 +319,16 @@ function renderPlayoffPicture() {
             // True elimination = exactly 0 odds to make the playoffs, not
             // a sub-0.5% value that merely rounds to 0% on display.
             const eliminated = t.make_playoffs_prob === 0;
-            // Show "<1%" for live-but-tiny odds so a team isn't
-            // misrepresented as 0% when it still has a real chance.
-            const pctText = (frac) => {
-                const pct = Math.round(frac * 100);
-                return (frac > 0 && pct === 0) ? '<1%' : pct + '%';
-            };
+            // Show "<1%" for live-but-tiny odds so a team isn't misrepresented as
+            // 0% when it still has a real chance. Callers with a pre-rounded pct
+            // (barCell) pass it to avoid rounding twice.
+            const pctText = (frac, pct = Math.round(frac * 100)) =>
+                (frac > 0 && pct === 0) ? '<1%' : pct + '%';
             // Playoffs: a left-anchored bar — the field funnels from ~100% here
             // down the column, so a proportional bar reads as a leaderboard.
             const barCell = (frac, label) => {
                 const pct = Math.round(frac * 100);
-                const display = pctText(frac);
+                const display = pctText(frac, pct);
                 const fill = `linear-gradient(to right, rgba(255,107,0,0.20) ${pct}%, transparent ${pct}%)`;
                 return `<td class="prob-cell" style="background: ${fill}" aria-label="${display} ${label}">${display}</td>`;
             };
@@ -375,6 +380,9 @@ function setupPlayoffViewToggle() {
     });
 }
 
+// Seed the header explainer before data loads (Rounds is the default view);
+// renderPlayoffPicture updates it per view once odds arrive.
+document.getElementById('playoff-explainer').textContent = ROUNDS_EXPLAINER;
 setupPlayoffViewToggle();
 fetchPlayoffOdds();
 </script>
