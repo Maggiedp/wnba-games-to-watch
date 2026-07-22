@@ -178,15 +178,6 @@ async function assertDateInputsFit(page, label) {
 // Homepage states. Each apply() ASSERTS the toggle took effect (waits on the
 // resulting DOM state) so a renamed id/class fails loudly instead of letting
 // the walk pass vacuously against an untoggled page.
-async function openPlayoffPicture(page) {
-  await page.waitForSelector('#playoff-toggle:not([hidden])');
-  await page.click('#playoff-toggle');
-  await page.waitForFunction(() => !document.getElementById('playoff-content').hidden);
-  await page.waitForFunction(
-    () => document.querySelectorAll('#playoff-tbody tr').length > 0,
-  );
-}
-
 const HOMEPAGE_STATES = [
   { name: 'default' },
   {
@@ -198,18 +189,6 @@ const HOMEPAGE_STATES = [
       );
     },
     extraAssert: assertDateInputsFit,
-  },
-  { name: 'playoff-rounds', apply: openPlayoffPicture },
-  {
-    name: 'playoff-seeds',
-    apply: async (page) => {
-      await openPlayoffPicture(page);
-      await page.waitForSelector('#playoff-view-toggle:not([hidden])');
-      await page.click('[data-playoff-view="seeds"]');
-      await page.waitForFunction(
-        () => document.getElementById('playoff-table').classList.contains('view-seeds'),
-      );
-    },
   },
   {
     name: 'completed-open',

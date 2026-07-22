@@ -1905,34 +1905,11 @@ def test_playoff_odds_endpoint_includes_seed_distribution(env, client):
     assert rows[0]["seed_distribution"] == {"1": 0.5, "2": 0.35}
 
 
-def test_homepage_ships_playoff_view_toggle(client):
-    """The Rounds|Seeds toggle markup ships in the homepage (hidden until a
-    daily run writes seed_distribution; un-hidden client-side)."""
+def test_homepage_has_no_playoff_picture(client):
+    """The Playoff Picture (toggle, table, Rounds|Seeds view) moved to
+    /playoff-odds (PR removing homepage duplication) and must not ship here."""
     html = client.get("/").text
-    assert 'id="playoff-view-toggle"' in html
-    assert 'data-playoff-view="rounds"' in html
-    assert 'data-playoff-view="seeds"' in html
-    assert 'id="playoff-thead"' in html
-
-
-def test_playoff_rounds_table_fits_mobile_viewports():
-    """Full team names gave the Rounds-view playoff table a min-content width
-    wider than phone viewports -> page-level horizontal scroll. Containment:
-    abbr span always rendered, <=480px name->abbr swap + padding trim, and an
-    overflow-x net on the wrapper (rationale in homepage.html's comments)."""
-    from src.api.routes import render_homepage
-
-    src = render_homepage()
-    assert "teamCell(t, false)" not in src  # rounds rows emit the abbr span now
-    # Empty abbreviation ('' is a supported state) falls back to the full name;
-    # the fixed-layout Seeds view tags it .is-fallback and ellipsizes it.
-    assert "escapeHtml(t.abbreviation || t.team)" in src
-    assert "t.abbreviation ? '' : ' is-fallback'" in src
-    assert ".playoff-team-abbr.is-fallback" in src
-    # Phone-width condensing applies to both views (no .view-seeds gate).
-    assert "@media (max-width: 480px)" in src
-    assert ".playoff-table .playoff-team-name { display: none; }" in src
-    assert ".playoff-table .playoff-team-abbr { display: inline; }" in src
-    # The overflow net must live on the table's wrapper rule specifically.
-    inner_rule = src.split(".playoff-picture-inner", 1)[1].split("}", 1)[0]
-    assert "overflow-x: auto" in inner_rule
+    assert 'id="playoff-view-toggle"' not in html
+    assert 'id="playoff-section"' not in html
+    assert 'id="playoff-table"' not in html
+    assert "Show playoff picture" not in html
