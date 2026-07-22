@@ -30,6 +30,15 @@ const WIDTHS = [320, 360, 390, 430];
 const UPCOMING_DETAIL_ID = '9990001';
 const COMPLETED_DETAIL_ID = '9980001';
 
+// Switch the /playoff-odds table to the Seeds heatmap view (asserts it took).
+async function openPlayoffSeedsView(page) {
+  await page.waitForSelector('#playoff-view-toggle:not([hidden])');
+  await page.click('[data-playoff-view="seeds"]');
+  await page.waitForFunction(
+    () => document.getElementById('playoff-table').classList.contains('view-seeds'),
+  );
+}
+
 // readySelector = client-rendered content that must exist before measuring
 // (networkidle alone can race the post-fetch render).
 const PAGES = [
@@ -39,6 +48,8 @@ const PAGES = [
   { path: '/style', readySelector: '#style-grid svg' },
   { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
   { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: 'main' },
+  { path: '/playoff-odds', readySelector: '#playoff-tbody tr' },
+  { path: '/playoff-odds', readySelector: '#playoff-tbody tr', apply: openPlayoffSeedsView },
 ];
 
 let server;
@@ -167,15 +178,6 @@ async function assertDateInputsFit(page, label) {
 // Homepage states. Each apply() ASSERTS the toggle took effect (waits on the
 // resulting DOM state) so a renamed id/class fails loudly instead of letting
 // the walk pass vacuously against an untoggled page.
-async function openPlayoffPicture(page) {
-  await page.waitForSelector('#playoff-toggle:not([hidden])');
-  await page.click('#playoff-toggle');
-  await page.waitForFunction(() => !document.getElementById('playoff-content').hidden);
-  await page.waitForFunction(
-    () => document.querySelectorAll('#playoff-tbody tr').length > 0,
-  );
-}
-
 const HOMEPAGE_STATES = [
   { name: 'default' },
   {
@@ -187,18 +189,6 @@ const HOMEPAGE_STATES = [
       );
     },
     extraAssert: assertDateInputsFit,
-  },
-  { name: 'playoff-rounds', apply: openPlayoffPicture },
-  {
-    name: 'playoff-seeds',
-    apply: async (page) => {
-      await openPlayoffPicture(page);
-      await page.waitForSelector('#playoff-view-toggle:not([hidden])');
-      await page.click('[data-playoff-view="seeds"]');
-      await page.waitForFunction(
-        () => document.getElementById('playoff-table').classList.contains('view-seeds'),
-      );
-    },
   },
   {
     name: 'completed-open',

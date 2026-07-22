@@ -433,6 +433,11 @@ _SHAPE_CHART_JS = _load_template("js/shape_chart.js")
 # pure/numeric, Node-tested; injected via %%TEAM_STYLE_JS%%.
 _TEAM_STYLE_JS = _load_template("js/team_style_helpers.js")
 
+# Seed-heatmap helpers (seedPctText/heatAlpha/buildSeedRow/seedsViewAvailable)
+# for the /playoff-odds page, pure/numeric, Node-tested; injected via
+# %%PLAYOFF_ODDS_HELPERS_JS%%.
+_PLAYOFF_ODDS_HELPERS_JS = _load_template("js/playoff_odds_helpers.js")
+
 # Primary site views, promoted out of the footer into a top nav shared by every
 # page (homepage masthead + inner pages + detail). Each page marks its own entry
 # active; `in_masthead` is the homepage variant that nests inside the navy
@@ -443,6 +448,7 @@ _SITE_NAV_ITEMS = (
     ("rankings", "/rankings", "Power rankings"),
     ("replay", "/replay", "Replay value"),
     ("style", "/style", "Team style"),
+    ("playoff-odds", "/playoff-odds", "Playoff odds"),
     ("transparency", "/transparency", "Behind the numbers"),
 )
 
@@ -512,6 +518,16 @@ _STYLE_HTML = (
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
     .replace("%%TEAM_STYLE_JS%%", _TEAM_STYLE_JS)
+)
+
+_PLAYOFF_ODDS_HTML = (
+    _load_template("playoff_odds.html")
+    .replace("%%SITE_NAV%%", _site_nav("playoff-odds"))
+    .replace("%%SITE_TITLE%%", _SITE_TITLE)
+    .replace("%%SITE_URL%%", _SITE_URL)
+    .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
+    .replace("%%SHARED_JS%%", _SHARED_JS)
+    .replace("%%PLAYOFF_ODDS_HELPERS_JS%%", _PLAYOFF_ODDS_HELPERS_JS)
 )
 
 
@@ -1187,3 +1203,9 @@ def render_style() -> str:
     """Render the /style fingerprint gallery shell. STATIC — team data is
     fetched client-side from /api/team-style (same import-frozen caveat)."""
     return _STYLE_HTML
+
+
+def render_playoff_odds() -> str:
+    """Render the /playoff-odds page shell. STATIC — odds are fetched client-side
+    from /api/playoff-odds (same import-frozen caveat as the other inner pages)."""
+    return _PLAYOFF_ODDS_HTML

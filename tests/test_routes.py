@@ -1,6 +1,8 @@
 """Tests for src/api/routes.py — focused on response formatting."""
 
 import json
+from datetime import date as date_cls
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -1377,6 +1379,84 @@ def test_playoff_odds_endpoint_omits_record_for_historical_date(env, client):
     assert rows[0]["losses"] is None
 
 
+def test_playoff_odds_default_falls_back_to_latest_when_today_empty(env, client):
+    """The default (no ?date=) request falls back to the freshest RECENT day when
+    today has no snapshot yet — the pre-6AM daily-run window or a missed run. A
+    dedicated page must show current-ish odds, not a blank shell."""
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    # A snapshot from yesterday (within the fallback age bound); none for today.
+    yesterday = (date_cls.fromisoformat(today_et()) - timedelta(days=1)).isoformat()
+    upsert_playoff_probability(
+        session,
+        date=yesterday,
+        team_id=a_id,
+        probability=0.8,
+        reach_semis_prob=0.5,
+        reach_finals_prob=0.3,
+        win_championship_prob=0.2,
+    )
+    session.close()
+
+    rows = client.get("/api/playoff-odds").json()  # no date → today empty → fallback
+    assert [r["team"] for r in rows] == ["Aces"]
+    assert rows[0]["make_playoffs_prob"] == 0.8
+    # The fallback day isn't today, so records are omitted (mixed-time guard).
+    assert rows[0]["wins"] is None
+    assert rows[0]["losses"] is None
+
+
+def test_playoff_odds_default_does_not_fall_back_to_stale_snapshot(env, client):
+    """The fallback is age-bounded: a snapshot older than the cutoff (offseason /
+    a multi-day outage) must NOT stand in for today — showing last season's final
+    odds as current would be wrong, so the page gets its empty state instead."""
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    # 30 days stale — well beyond the ~3-day fallback bound.
+    stale = (date_cls.fromisoformat(today_et()) - timedelta(days=30)).isoformat()
+    upsert_playoff_probability(
+        session,
+        date=stale,
+        team_id=a_id,
+        probability=0.8,
+        reach_semis_prob=0.5,
+        reach_finals_prob=0.3,
+        win_championship_prob=0.2,
+    )
+    session.close()
+
+    assert client.get("/api/playoff-odds").json() == []
+
+
+def test_playoff_odds_explicit_empty_date_does_not_fall_back(env, client):
+    """An explicit ?date= for a day with no snapshot returns [] — a historical
+    lookup stays exact and must never silently jump to another date."""
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    upsert_playoff_probability(
+        session,
+        date="2026-05-15",
+        team_id=a_id,
+        probability=0.8,
+        reach_semis_prob=0.5,
+        reach_finals_prob=0.3,
+        win_championship_prob=0.2,
+    )
+    session.close()
+
+    # 2026-05-16 has no snapshot; the fallback must NOT engage for an explicit date.
+    assert client.get("/api/playoff-odds?date=2026-05-16").json() == []
+
+
+def test_playoff_odds_empty_when_no_snapshot_exists(env, client):
+    """No populated snapshot anywhere → [] (the page renders its empty state).
+    Confirms the fallback path is a no-op when there's nothing to fall back to."""
+    assert client.get("/api/playoff-odds").json() == []
+
+
 # Valid baseline game_shapes row for the _detail_shape_section unit tests; each
 # test overrides only the field under test (cf. _seed_shape in
 # test_game_shape_queries.py for the analogous DB-write builder).
@@ -1905,34 +1985,11 @@ def test_playoff_odds_endpoint_includes_seed_distribution(env, client):
     assert rows[0]["seed_distribution"] == {"1": 0.5, "2": 0.35}
 
 
-def test_homepage_ships_playoff_view_toggle(client):
-    """The Rounds|Seeds toggle markup ships in the homepage (hidden until a
-    daily run writes seed_distribution; un-hidden client-side)."""
+def test_homepage_has_no_playoff_picture(client):
+    """The Playoff Picture (toggle, table, Rounds|Seeds view) moved to
+    /playoff-odds (PR removing homepage duplication) and must not ship here."""
     html = client.get("/").text
-    assert 'id="playoff-view-toggle"' in html
-    assert 'data-playoff-view="rounds"' in html
-    assert 'data-playoff-view="seeds"' in html
-    assert 'id="playoff-thead"' in html
-
-
-def test_playoff_rounds_table_fits_mobile_viewports():
-    """Full team names gave the Rounds-view playoff table a min-content width
-    wider than phone viewports -> page-level horizontal scroll. Containment:
-    abbr span always rendered, <=480px name->abbr swap + padding trim, and an
-    overflow-x net on the wrapper (rationale in homepage.html's comments)."""
-    from src.api.routes import render_homepage
-
-    src = render_homepage()
-    assert "teamCell(t, false)" not in src  # rounds rows emit the abbr span now
-    # Empty abbreviation ('' is a supported state) falls back to the full name;
-    # the fixed-layout Seeds view tags it .is-fallback and ellipsizes it.
-    assert "escapeHtml(t.abbreviation || t.team)" in src
-    assert "t.abbreviation ? '' : ' is-fallback'" in src
-    assert ".playoff-team-abbr.is-fallback" in src
-    # Phone-width condensing applies to both views (no .view-seeds gate).
-    assert "@media (max-width: 480px)" in src
-    assert ".playoff-table .playoff-team-name { display: none; }" in src
-    assert ".playoff-table .playoff-team-abbr { display: inline; }" in src
-    # The overflow net must live on the table's wrapper rule specifically.
-    inner_rule = src.split(".playoff-picture-inner", 1)[1].split("}", 1)[0]
-    assert "overflow-x: auto" in inner_rule
+    assert 'id="playoff-view-toggle"' not in html
+    assert 'id="playoff-section"' not in html
+    assert 'id="playoff-table"' not in html
+    assert "Show playoff picture" not in html

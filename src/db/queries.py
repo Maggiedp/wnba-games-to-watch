@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -976,6 +976,26 @@ def get_playoff_probabilities(
         )
         for r in records
     }
+
+
+def get_latest_playoff_probability_date(
+    session: Session, on_or_before: str
+) -> str | None:
+    """Most recent date (<= on_or_before) with a POPULATED playoff snapshot, or None.
+
+    "Populated" = at least one row with a non-NULL win_championship_prob, matching
+    the /api/playoff-odds endpoint's own row filter (legacy pre-round-prob rows are
+    skipped there, so they must not count as a snapshot here either). Lets the
+    endpoint fall back to the freshest available day when today's rows aren't
+    written yet (the pre-6AM daily-run window / a missed run), so the dedicated
+    /playoff-odds page shows recent odds instead of a blank shell.
+    """
+    return (
+        session.query(func.max(PlayoffProbability.date))
+        .filter(PlayoffProbability.date <= on_or_before)
+        .filter(PlayoffProbability.win_championship_prob.isnot(None))
+        .scalar()
+    )
 
 
 def upsert_game_shape(

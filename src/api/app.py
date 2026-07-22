@@ -8,7 +8,8 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date as date_cls
+from datetime import datetime, timedelta, timezone
 from secrets import compare_digest
 from contextlib import asynccontextmanager
 
@@ -38,6 +39,7 @@ from src.db.queries import (
     get_elo_history,
     get_game_shapes,
     get_games_by_date,
+    get_latest_playoff_probability_date,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
@@ -134,6 +136,13 @@ async def style_page():
     return HTMLResponse(render_style())
 
 
+@app.get("/playoff-odds", response_class=HTMLResponse)
+async def playoff_odds_page():
+    from src.api.routes import render_playoff_odds
+
+    return HTMLResponse(render_playoff_odds())
+
+
 @app.get("/game/{espn_id}", response_class=HTMLResponse)
 def game_detail(espn_id: str):
     from src.api.routes import render_game_detail
@@ -223,6 +232,13 @@ def og_style_image():
     from src.api.og_image import render_style_card
 
     return _png_response(render_style_card(), _OG_STATIC_CACHE_S)
+
+
+@app.api_route("/og-playoff-odds.png", methods=["GET", "HEAD"])
+def og_playoff_odds_image():
+    from src.api.og_image import render_playoff_odds_card
+
+    return _png_response(render_playoff_odds_card(), _OG_STATIC_CACHE_S)
 
 
 @app.get("/api/games/today", response_model=list[GameResponse])
@@ -625,6 +641,13 @@ def get_replay_live():
         return result
 
 
+# How stale the freshest snapshot may be and still stand in for "today" on the
+# default /api/playoff-odds request. Covers the pre-6AM daily-run window and a
+# missed run; beyond it (offseason / multi-day outage) the page shows its empty
+# state rather than presenting last season's final odds as current.
+_PLAYOFF_FALLBACK_MAX_AGE_DAYS = 3
+
+
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])
 async def get_playoff_odds(date: str = Query(default=None)):
     """Return per-team round-by-round playoff probabilities.
@@ -634,21 +657,46 @@ async def get_playoff_odds(date: str = Query(default=None)):
     as tiebreakers.
     """
     today = today_et()
+    explicit_date = date is not None
     if date is None:
         date = today
     is_today = date == today
     session = get_session()
     try:
-        recs = get_playoff_probabilities(session, date)
-        if not recs:
-            return []
-        # Skip legacy rows from before the round-prob migration: if any new
-        # column is NULL, we don't have a meaningful champ/finals/semis value.
-        # Showing those as 0% would mislead — wait for the next daily-update
-        # to populate them.
-        recs = {
-            tid: r for tid, r in recs.items() if r.win_championship_prob is not None
-        }
+
+        def _populated(d: str) -> dict:
+            # Skip legacy rows from before the round-prob migration: if the champ
+            # column is NULL we have no meaningful champ/finals/semis value, and
+            # showing 0% would mislead. A "populated" snapshot has >= 1 real row.
+            recs = get_playoff_probabilities(session, d)
+            return {
+                tid: r for tid, r in recs.items() if r.win_championship_prob is not None
+            }
+
+        recs = _populated(date)
+        # No populated snapshot for today yet — the pre-6AM daily-run window, or a
+        # missed/late run. On the DEFAULT (no ?date=) request, fall back to the
+        # freshest RECENT day so the dedicated /playoff-odds page shows current-ish
+        # odds instead of a blank shell. An explicit ?date= query stays exact (a
+        # historical lookup must not silently jump to another date).
+        #
+        # The fallback is age-bounded: it must cover the pre-run window and a
+        # missed run, but never present LAST SEASON's final odds as current. In
+        # the offseason (or a multi-day outage) the latest populated day is older
+        # than the cutoff, so we fall through to the honest empty state instead.
+        if not recs and not explicit_date:
+            # latest is < today here: we only reach this branch when _populated(today)
+            # is empty, and get_latest_playoff_probability_date uses the same
+            # "populated" predicate, so it can't return today.
+            latest = get_latest_playoff_probability_date(session, today)
+            cutoff = (
+                date_cls.fromisoformat(today)
+                - timedelta(days=_PLAYOFF_FALLBACK_MAX_AGE_DAYS)
+            ).isoformat()
+            if latest and latest >= cutoff:
+                date = latest
+                is_today = False
+                recs = _populated(date)
         if not recs:
             return []
         teams = get_teams_by_ids(session, set(recs.keys()))

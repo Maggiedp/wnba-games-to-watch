@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WNBA Playoff Picture · %%SITE_TITLE%%</title>
+<meta name="description" content="%%SITE_TITLE%% playoff odds: every WNBA team's chance to make the playoffs and win the title, from a daily Monte Carlo simulation.">
+
+<meta property="og:title" content="WNBA Playoff Picture · %%SITE_TITLE%%">
+<meta property="og:description" content="Every WNBA team's playoff and championship odds, simulated daily.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="%%SITE_URL%%/playoff-odds">
+<meta property="og:image" content="%%SITE_URL%%/og-playoff-odds.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="WNBA playoff odds by team">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="WNBA Playoff Picture · %%SITE_TITLE%%">
+<meta name="twitter:description" content="Every WNBA team's playoff and championship odds, simulated daily.">
+<meta name="twitter:image" content="%%SITE_URL%%/og-playoff-odds.png">
+
+%%SHARED_HEAD%%
+            /* View toggle (2nd caller after the homepage; below the 3rd-caller
+               lift threshold, so kept page-local per repo convention). */
+            .sort-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+            /* The display rule above overrides the [hidden] attribute's UA display:none,
+               so restore it — the view toggle stays hidden until data loads and while a
+               partial snapshot has no Seeds view. (0,1,1) beats .sort-toggle's (0,1,0). */
+            .sort-toggle[hidden] { display: none; }
+            .sort-btn {
+                padding: 6px 14px;
+                border: none;
+                background: var(--surface);
+                font-size: 0.84rem;
+                font-weight: 500;
+                cursor: pointer;
+                color: #555c66;
+                font-family: var(--body);
+            }
+            .sort-btn + .sort-btn { border-left: 1px solid var(--line); }
+            .sort-btn[aria-pressed="true"] { background: var(--navy); color: white; }
+            .sort-btn:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
+            /* ---------- Playoff Picture ---------- */
+            /* Surface card matching /rankings + /replay so the page reads as a
+               designed view, not a bare table on the cream background. */
+            .playoff-card {
+                background: var(--surface);
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                padding: 20px;
+            }
+            .playoff-table-scroll {
+                /* Safety net: a table can't shrink below min-content, so if the
+                   columns ever outgrow a narrow viewport, scroll the table inside
+                   this wrapper — never the whole page. */
+                overflow-x: auto;
+            }
+            .playoff-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+            }
+            .playoff-table th {
+                text-align: right;
+                font-weight: 500;
+                color: var(--navy-3);
+                padding: 6px 8px;
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                border-bottom: 1px solid var(--navy-3);
+            }
+            .playoff-table th.team-col { text-align: left; }
+            .playoff-table th.record-col { text-align: left; }
+            .playoff-table td.record-cell {
+                text-align: left;
+                font-variant-numeric: tabular-nums;
+                color: var(--navy-3);
+                white-space: nowrap;
+            }
+            .playoff-table td {
+                padding: 6px 8px;
+                border-bottom: 1px solid rgba(0,0,0,0.06);
+            }
+            .playoff-table td.team-cell {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .playoff-table td.prob-cell {
+                text-align: right;
+                font-variant-numeric: tabular-nums;
+                background-position: left center;
+                background-repeat: no-repeat;
+            }
+            .playoff-table tr.eliminated { opacity: 0.5; }
+            .playoff-logo {
+                width: 22px;
+                height: 22px;
+                object-fit: contain;
+                flex-shrink: 0;
+            }
+            .playoff-team-name { font-weight: 500; }
+            @media (max-width: 768px) {
+                .playoff-table { font-size: 13px; }
+                .playoff-table th, .playoff-table td { padding: 5px 6px; }
+            }
+
+            /* ---------- Seed-distribution ("Seeds") view ---------- */
+            .playoff-header-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;  /* explainer left, view toggle right */
+                flex-wrap: wrap;                 /* explainer wraps above the toggle on phones */
+                gap: 10px 12px;
+                margin-bottom: 14px;
+            }
+            .playoff-explainer {
+                font-size: 13px;
+                color: var(--navy-3);
+                margin: 0;
+                flex: 1 1 240px;  /* take remaining width; wrap when it can't */
+                min-width: 0;
+            }
+            .playoff-table th.seed-col,
+            .playoff-table th.miss-col { text-align: center; }
+            /* Fixed layout + equal columns: otherwise width:100% auto-layout dumps
+               all slack into seed 1 (the column with the most blank cells). With
+               team-col fixed, the 8 seed + Miss columns share the rest equally. */
+            #playoff-table.view-seeds { table-layout: fixed; }
+            #playoff-table.view-seeds th.team-col { width: 20%; }
+            .playoff-table td.seed-cell,
+            .playoff-table td.miss-cell {
+                text-align: center;
+                font-variant-numeric: tabular-nums;
+            }
+            .playoff-team-abbr {
+                font-weight: 500;
+                display: none;
+            }
+            @media (max-width: 768px) {
+                #playoff-table.view-seeds .playoff-team-name { display: none; }
+                #playoff-table.view-seeds .playoff-team-abbr { display: inline; }
+                #playoff-table.view-seeds td.seed-cell,
+                #playoff-table.view-seeds td.miss-cell,
+                #playoff-table.view-seeds th.seed-col,
+                #playoff-table.view-seeds th.miss-col { padding: 5px 4px; }
+                /* A full-name fallback label (empty abbreviation) can't widen a
+                   fixed-layout column — ellipsize it inside the team cell so it
+                   never paints over the seed cells. Scoped to .is-fallback: real
+                   abbreviations must never clamp (at 320px they'd ellipsize). */
+                #playoff-table.view-seeds .playoff-team-abbr.is-fallback {
+                    display: block;
+                    min-width: 0;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+            }
+            /* Phone widths: the Rounds view gets the same name->abbr swap the
+               Seeds view gets at <=768px, plus tighter cell padding — with
+               full team names the 6-column table's min-content width (~396px)
+               exceeds the viewport and forces page-level horizontal scroll.
+               481-768px keeps full names (the table fits there). */
+            @media (max-width: 480px) {
+                .playoff-table .playoff-team-name { display: none; }
+                .playoff-table .playoff-team-abbr { display: inline; }
+                .playoff-table th, .playoff-table td { padding: 5px 4px; }
+                /* Trim card padding so the dense table keeps its width; the
+                   .playoff-table-scroll wrapper still catches any overflow. */
+                .playoff-card { padding: 14px 8px; }
+            }
+        </style>
+</head>
+<body>
+%%SITE_NAV%%
+<div class="wrap">
+  <h1>Playoff Picture</h1>
+  <p class="sub">Every team's chance to make the playoffs and win the title — from a daily Monte Carlo simulation.</p>
+
+  <section class="playoff-card">
+    <div class="playoff-header-row">
+      <p class="playoff-explainer" id="playoff-explainer"></p>
+      <div class="sort-toggle" id="playoff-view-toggle" role="group" aria-label="Playoff table view" hidden>
+        <button class="sort-btn" data-playoff-view="rounds" type="button" aria-pressed="true">Rounds</button>
+        <button class="sort-btn" data-playoff-view="seeds" type="button" aria-pressed="false">Seeds</button>
+      </div>
+    </div>
+    <p class="empty" id="playoff-status">Loading…</p>
+    <div class="playoff-table-scroll">
+      <table class="playoff-table" id="playoff-table" hidden>
+        <thead id="playoff-thead"></thead>
+        <tbody id="playoff-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+%%SHARED_JS%%
+%%PLAYOFF_ODDS_HELPERS_JS%%
+let allPlayoffOdds = [];
+let playoffView = 'rounds';  // 'rounds' | 'seeds'
+
+// This is a page the user navigated to, so a no-data or failed load must SAY so
+// rather than render a blank shell — and the two are distinct. The server falls
+// back to the freshest available snapshot when today's rows aren't written yet
+// (pre-6AM run / a missed run), so an empty list now means no snapshot exists at
+// all: very early season, before the first simulation.
+const PLAYOFF_EMPTY = 'Playoff odds appear once the season’s first simulation runs.';
+// A transport/server error is a different situation than "no data" — say so, and
+// log it so a real outage isn't indistinguishable from the expected empty state.
+const PLAYOFF_ERROR = 'Couldn’t load the playoff odds. Refresh to try again.';
+
+// Per-view explainer copy — single source for the header line, set on render.
+const ROUNDS_EXPLAINER = 'Each team’s chance to reach every round — from making the playoffs to winning the title.';
+const SEEDS_EXPLAINER = 'Each team’s chance to finish at each seed, or miss the playoffs.';
+
+function showPlayoffStatus(msg) {
+    const status = document.getElementById('playoff-status');
+    const table = document.getElementById('playoff-table');
+    if (status) { status.textContent = msg; status.hidden = false; }
+    if (table) table.hidden = true;
+}
+
+function hidePlayoffStatus() {
+    const status = document.getElementById('playoff-status');
+    const table = document.getElementById('playoff-table');
+    if (status) status.hidden = true;
+    if (table) table.hidden = false;
+}
+
+async function fetchPlayoffOdds() {
+    try {
+        const resp = await fetch('/api/playoff-odds');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const odds = await resp.json();
+        if (!odds || odds.length === 0) { showPlayoffStatus(PLAYOFF_EMPTY); return; }
+        allPlayoffOdds = odds;
+        hidePlayoffStatus();
+        renderPlayoffPicture();
+    } catch (e) {
+        console.error('playoff-odds load failed', e);
+        showPlayoffStatus(PLAYOFF_ERROR);
+    }
+}
+
+function renderPlayoffPicture() {
+    const odds = allPlayoffOdds;
+    const thead = document.getElementById('playoff-thead');
+    const tbody = document.getElementById('playoff-tbody');
+    const table = document.getElementById('playoff-table');
+    const explainer = document.getElementById('playoff-explainer');
+
+    // The Seeds view is offered only when the snapshot is complete —
+    // every displayed team has a computed seed_distribution. A mixed
+    // snapshot (some legacy/unwritten null rows) keeps the toggle
+    // hidden so a team with real odds can't render as blank/eliminated.
+    const seedsAvailable = seedsViewAvailable(odds);
+    const viewToggle = document.getElementById('playoff-view-toggle');
+    if (viewToggle) viewToggle.hidden = !seedsAvailable;
+    if (!seedsAvailable) playoffView = 'rounds';
+
+    const seeds = playoffView === 'seeds';
+    table.classList.toggle('view-seeds', seeds);
+    if (explainer) explainer.textContent = seeds ? SEEDS_EXPLAINER : ROUNDS_EXPLAINER;
+
+    // Logo + team name + default-hidden abbreviation (shown at
+    // phone widths by CSS) — shared by both branches so the logo
+    // markup lives in one place.
+    const teamCell = (t) => {
+        const logoHtml = t.logo_url
+            ? `<img class="playoff-logo" src="${escapeHtml(t.logo_url)}" alt="" aria-hidden="true">`
+            : `<span class="playoff-logo"></span>`;
+        // Abbreviation may legitimately be '' (schema default; ESPN
+        // ingestion fallback) — fall back to the full name, tagged
+        // .is-fallback so the CSS can contain it.
+        const abbr = `<span class="playoff-team-abbr${t.abbreviation ? '' : ' is-fallback'}">${escapeHtml(t.abbreviation || t.team)}</span>`;
+        return `<td class="team-cell">${logoHtml}<span class="playoff-team-name">${escapeHtml(t.team)}</span>${abbr}</td>`;
+    };
+
+    if (seeds) {
+        thead.innerHTML = '<tr><th class="team-col">Team</th>'
+            + [1, 2, 3, 4, 5, 6, 7, 8].map(
+                s => `<th class="seed-col">${s}</th>`).join('')
+            + '<th class="miss-col">Miss</th></tr>';
+        tbody.innerHTML = odds.map(t => {
+            const row = buildSeedRow(t.seed_distribution);
+            const eliminated = !row.hasData;
+            const cells = row.cells.map(c => {
+                const alpha = heatAlpha(c.prob);
+                const aria = c.prob > 0
+                    ? ` aria-label="${c.display} chance to finish as the ${c.seed} seed"`
+                    : '';
+                return `<td class="seed-cell" style="background: rgba(255,107,0,${alpha})"${aria}>${c.display}</td>`;
+            }).join('');
+            // Miss = chance of not making the playoffs, so the row + Miss
+            // sums to 100%. Grey, not orange: missing isn't a "hot" outcome.
+            const missProb = Math.max(0, 1 - t.make_playoffs_prob);
+            const missText = seedPctText(missProb);
+            const missAlpha = heatAlpha(missProb);
+            const missCell = `<td class="miss-cell" style="background: rgba(124,114,102,${missAlpha})"${missText ? ` aria-label="${missText} chance to miss the playoffs"` : ''}>${missText}</td>`;
+            return `
+            <tr${eliminated ? ' class="eliminated"' : ''}>
+                ${teamCell(t)}
+                ${cells}
+                ${missCell}
+            </tr>`;
+        }).join('');
+    } else {
+        thead.innerHTML = '<tr>'
+            + '<th class="team-col">Team</th>'
+            + '<th class="record-col">Rec</th>'
+            + '<th>Playoffs</th><th>Semis</th><th>Finals</th><th>Champ</th>'
+            + '</tr>';
+        tbody.innerHTML = odds.map(t => {
+            // True elimination = exactly 0 odds to make the playoffs, not
+            // a sub-0.5% value that merely rounds to 0% on display.
+            const eliminated = t.make_playoffs_prob === 0;
+            // Show "<1%" for live-but-tiny odds so a team isn't misrepresented as
+            // 0% when it still has a real chance. Callers with a pre-rounded pct
+            // (barCell) pass it to avoid rounding twice.
+            const pctText = (frac, pct = Math.round(frac * 100)) =>
+                (frac > 0 && pct === 0) ? '<1%' : pct + '%';
+            // Playoffs: a left-anchored bar — the field funnels from ~100% here
+            // down the column, so a proportional bar reads as a leaderboard.
+            const barCell = (frac, label) => {
+                const pct = Math.round(frac * 100);
+                const display = pctText(frac, pct);
+                const fill = `linear-gradient(to right, rgba(255,107,0,0.20) ${pct}%, transparent ${pct}%)`;
+                return `<td class="prob-cell" style="background: ${fill}" aria-label="${display} ${label}">${display}</td>`;
+            };
+            // Semis/Finals: plain numbers. A left-anchored bar on these small
+            // values slivers into a fake vertical rule down the column, so the
+            // number carries them and only the two poles get a visual encoding.
+            const numCell = (frac, label) => {
+                const display = pctText(frac);
+                return `<td class="prob-cell" aria-label="${display} ${label}">${display}</td>`;
+            };
+            // Champ (the title): a full-cell heat tint on its own steeper ramp —
+            // the prize column, the reason to read to the end of the row.
+            const champCell = (frac, label) => {
+                const display = pctText(frac);
+                return `<td class="prob-cell" style="background: rgba(255,107,0,${champHeatAlpha(frac)})" aria-label="${display} ${label}">${display}</td>`;
+            };
+            // Record is present only on a today request (the endpoint
+            // always answers today here); a historical snapshot omits it.
+            const recordCell = (t.wins == null || t.losses == null)
+                ? '<td class="record-cell"></td>'
+                : `<td class="record-cell" aria-label="${t.wins} wins, ${t.losses} losses">${t.wins}-${t.losses}</td>`;
+            return `
+            <tr${eliminated ? ' class="eliminated"' : ''}>
+                ${teamCell(t)}
+                ${recordCell}
+                ${barCell(t.make_playoffs_prob, 'chance to make the playoffs')}
+                ${numCell(t.reach_semis_prob, 'chance to reach the semifinals')}
+                ${numCell(t.reach_finals_prob, 'chance to reach the finals')}
+                ${champCell(t.win_championship_prob, 'chance to win the championship')}
+            </tr>`;
+        }).join('');
+    }
+}
+
+function setupPlayoffViewToggle() {
+    const group = document.getElementById('playoff-view-toggle');
+    if (!group || group.dataset.ready) return;
+    group.dataset.ready = '1';
+    group.querySelectorAll('[data-playoff-view]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const view = btn.dataset.playoffView;
+            if (view === playoffView) return;
+            playoffView = view;
+            group.querySelectorAll('[data-playoff-view]').forEach(b =>
+                b.setAttribute('aria-pressed',
+                    b.dataset.playoffView === view ? 'true' : 'false'));
+            renderPlayoffPicture();
+        });
+    });
+}
+
+// Seed the header explainer before data loads (Rounds is the default view);
+// renderPlayoffPicture updates it per view once odds arrive.
+document.getElementById('playoff-explainer').textContent = ROUNDS_EXPLAINER;
+setupPlayoffViewToggle();
+fetchPlayoffOdds();
+</script>
+</body>
+</html>
