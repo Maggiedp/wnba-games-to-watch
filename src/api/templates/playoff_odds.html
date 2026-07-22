@@ -38,12 +38,19 @@
             .sort-btn[aria-pressed="true"] { background: var(--navy); color: white; }
             .sort-btn:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
 
-            /* ---------- Playoff Picture (moved from homepage.html) ---------- */
-            .playoff-picture-inner {
-                padding: 0;
-                /* Safety net: a table can't shrink below min-content, so if
-                   columns ever outgrow a narrow viewport, scroll the table
-                   inside this wrapper — never the whole page. */
+            /* ---------- Playoff Picture ---------- */
+            /* Surface card matching /rankings + /replay so the page reads as a
+               designed view, not a bare table on the cream background. */
+            .playoff-card {
+                background: var(--surface);
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                padding: 20px;
+            }
+            .playoff-table-scroll {
+                /* Safety net: a table can't shrink below min-content, so if the
+                   columns ever outgrow a narrow viewport, scroll the table inside
+                   this wrapper — never the whole page. */
                 overflow-x: auto;
             }
             .playoff-table {
@@ -101,9 +108,17 @@
             .playoff-header-row {
                 display: flex;
                 align-items: center;
-                justify-content: flex-end;  /* lone child: right-align the view toggle */
-                gap: 12px;
-                margin-bottom: 8px;
+                justify-content: space-between;  /* explainer left, view toggle right */
+                flex-wrap: wrap;                 /* explainer wraps above the toggle on phones */
+                gap: 10px 12px;
+                margin-bottom: 14px;
+            }
+            .playoff-explainer {
+                font-size: 13px;
+                color: var(--navy-3);
+                margin: 0;
+                flex: 1 1 240px;  /* take remaining width; wrap when it can't */
+                min-width: 0;
             }
             .playoff-table th.seed-col,
             .playoff-table th.miss-col { text-align: center; }
@@ -116,11 +131,6 @@
             .playoff-table td.miss-cell {
                 text-align: center;
                 font-variant-numeric: tabular-nums;
-            }
-            .playoff-caption {
-                font-size: 12px;
-                color: var(--navy-3);
-                margin: 8px 0 0;
             }
             .playoff-team-abbr {
                 font-weight: 500;
@@ -154,6 +164,9 @@
                 .playoff-table .playoff-team-name { display: none; }
                 .playoff-table .playoff-team-abbr { display: inline; }
                 .playoff-table th, .playoff-table td { padding: 5px 4px; }
+                /* Trim card padding so the dense table keeps its width; the
+                   .playoff-table-scroll wrapper still catches any overflow. */
+                .playoff-card { padding: 14px 8px; }
             }
         </style>
 </head>
@@ -163,20 +176,22 @@
   <h1>Playoff Picture</h1>
   <p class="sub">Every team's chance to make the playoffs and win the title — from a daily Monte Carlo simulation.</p>
 
-  <div class="playoff-picture-inner">
+  <section class="playoff-card">
     <div class="playoff-header-row">
+      <p class="playoff-explainer" id="playoff-explainer">Each team's chance to reach every round — from making the playoffs to winning the title.</p>
       <div class="sort-toggle" id="playoff-view-toggle" role="group" aria-label="Playoff table view" hidden>
         <button class="sort-btn" data-playoff-view="rounds" type="button" aria-pressed="true">Rounds</button>
         <button class="sort-btn" data-playoff-view="seeds" type="button" aria-pressed="false">Seeds</button>
       </div>
     </div>
     <p class="empty" id="playoff-status">Loading…</p>
-    <table class="playoff-table" id="playoff-table" hidden>
-      <thead id="playoff-thead"></thead>
-      <tbody id="playoff-tbody"></tbody>
-    </table>
-    <p class="playoff-caption" id="playoff-caption" hidden>Chance each team finishes at each seed, or misses the playoffs.</p>
-  </div>
+    <div class="playoff-table-scroll">
+      <table class="playoff-table" id="playoff-table" hidden>
+        <thead id="playoff-thead"></thead>
+        <tbody id="playoff-tbody"></tbody>
+      </table>
+    </div>
+  </section>
 </div>
 
 <script>
@@ -221,7 +236,7 @@ function renderPlayoffPicture() {
     const thead = document.getElementById('playoff-thead');
     const tbody = document.getElementById('playoff-tbody');
     const table = document.getElementById('playoff-table');
-    const caption = document.getElementById('playoff-caption');
+    const explainer = document.getElementById('playoff-explainer');
 
     // The Seeds view is offered only when the snapshot is complete —
     // every displayed team has a computed seed_distribution. A mixed
@@ -234,7 +249,9 @@ function renderPlayoffPicture() {
 
     const seeds = playoffView === 'seeds';
     table.classList.toggle('view-seeds', seeds);
-    if (caption) caption.hidden = !seeds;
+    if (explainer) explainer.textContent = seeds
+        ? "Each team's chance to finish at each seed, or miss the playoffs."
+        : "Each team's chance to reach every round — from making the playoffs to winning the title.";
 
     // Logo + team name + default-hidden abbreviation (shown at
     // phone widths by CSS) — shared by both branches so the logo
@@ -288,13 +305,32 @@ function renderPlayoffPicture() {
             // True elimination = exactly 0 odds to make the playoffs, not
             // a sub-0.5% value that merely rounds to 0% on display.
             const eliminated = t.make_playoffs_prob === 0;
-            const cell = (frac, label) => {
+            // Show "<1%" for live-but-tiny odds so a team isn't
+            // misrepresented as 0% when it still has a real chance.
+            const pctText = (frac) => {
                 const pct = Math.round(frac * 100);
-                // Show "<1%" for live-but-tiny odds so a team isn't
-                // misrepresented as 0% when it still has a real chance.
-                const display = (frac > 0 && pct === 0) ? '<1%' : pct + '%';
+                return (frac > 0 && pct === 0) ? '<1%' : pct + '%';
+            };
+            // Playoffs: a left-anchored bar — the field funnels from ~100% here
+            // down the column, so a proportional bar reads as a leaderboard.
+            const barCell = (frac, label) => {
+                const pct = Math.round(frac * 100);
+                const display = pctText(frac);
                 const fill = `linear-gradient(to right, rgba(255,107,0,0.20) ${pct}%, transparent ${pct}%)`;
                 return `<td class="prob-cell" style="background: ${fill}" aria-label="${display} ${label}">${display}</td>`;
+            };
+            // Semis/Finals: plain numbers. A left-anchored bar on these small
+            // values slivers into a fake vertical rule down the column, so the
+            // number carries them and only the two poles get a visual encoding.
+            const numCell = (frac, label) => {
+                const display = pctText(frac);
+                return `<td class="prob-cell" aria-label="${display} ${label}">${display}</td>`;
+            };
+            // Champ (the title): a full-cell heat tint on its own steeper ramp —
+            // the prize column, the reason to read to the end of the row.
+            const champCell = (frac, label) => {
+                const display = pctText(frac);
+                return `<td class="prob-cell" style="background: rgba(255,107,0,${champHeatAlpha(frac)})" aria-label="${display} ${label}">${display}</td>`;
             };
             // Record is present only on a today request (the endpoint
             // always answers today here); a historical snapshot omits it.
@@ -305,10 +341,10 @@ function renderPlayoffPicture() {
             <tr${eliminated ? ' class="eliminated"' : ''}>
                 ${teamCell(t)}
                 ${recordCell}
-                ${cell(t.make_playoffs_prob, 'chance to make the playoffs')}
-                ${cell(t.reach_semis_prob, 'chance to reach the semifinals')}
-                ${cell(t.reach_finals_prob, 'chance to reach the finals')}
-                ${cell(t.win_championship_prob, 'chance to win the championship')}
+                ${barCell(t.make_playoffs_prob, 'chance to make the playoffs')}
+                ${numCell(t.reach_semis_prob, 'chance to reach the semifinals')}
+                ${numCell(t.reach_finals_prob, 'chance to reach the finals')}
+                ${champCell(t.win_championship_prob, 'chance to win the championship')}
             </tr>`;
         }).join('');
     }

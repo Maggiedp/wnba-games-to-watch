@@ -4,7 +4,7 @@ const { loadHelpers } = require('./helpers');
 
 // Self-contained: buildSeedRow calls seedPctText in the same file; none use shared.js.
 const {
-  buildSeedRow, seedsViewAvailable, seedPctText, heatAlpha,
+  buildSeedRow, seedsViewAvailable, seedPctText, heatAlpha, champHeatAlpha,
 } = loadHelpers('playoff_odds_helpers.js');
 
 // --- buildSeedRow (Playoff Picture "Seeds" view) ---
@@ -51,6 +51,13 @@ test('heatAlpha: "0" for 0/negative, else a 0.06–0.85 opacity ramp', () => {
   assert.equal(heatAlpha(-0.1), '0');
   assert.equal(heatAlpha(0.5), '0.510');   // 0.06 + 0.5*0.9
   assert.equal(heatAlpha(1), '0.850');     // capped at 0.85
+});
+
+test('champHeatAlpha: "0" for 0/negative, else a steeper 0.1+ ramp capped at 0.5', () => {
+  assert.equal(champHeatAlpha(0), '0');
+  assert.equal(champHeatAlpha(-0.1), '0');
+  assert.equal(champHeatAlpha(0.12), '0.268');  // 0.1 + 0.12*1.4 — a favorite's ~12%
+  assert.equal(champHeatAlpha(0.5), '0.500');   // 0.1 + 0.5*1.4 = 0.8 → capped at 0.5
 });
 
 // --- seedsViewAvailable (Seeds toggle gate — must not show a mixed snapshot) ---

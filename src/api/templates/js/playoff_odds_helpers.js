@@ -19,6 +19,15 @@ function heatAlpha(prob) {
     return prob > 0 ? Math.min(0.85, 0.06 + prob * 0.9).toFixed(3) : '0';
 }
 
+// Probability (0..1) → the alpha for the Rounds-view "Champ" (title) cell's orange
+// fill. A steeper, capped ramp than heatAlpha because championship odds live in a
+// small range (~0 to ~0.30 even for the favorite), so the flat seed ramp would read
+// as barely-tinted. Capped at 0.5 so it stays a heat cue, not a solid block, and
+// never out-shouts the Playoffs funnel bar. '0' (transparent) for 0/eliminated.
+function champHeatAlpha(prob) {
+    return prob > 0 ? Math.min(0.5, 0.1 + prob * 1.4).toFixed(3) : '0';
+}
+
 // Seed distribution → per-seed display cells for the Playoff Picture "Seeds" view.
 // seedDistribution is the /api/playoff-odds field: {seed: prob} with string keys
 // (JSON) summing to the team's make-playoffs prob; only seeds that occurred are

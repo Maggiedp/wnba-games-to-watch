@@ -32,6 +32,16 @@ def test_playoff_odds_page_ships_loading_and_empty_state(client):
     assert "check back after the morning run" in html  # empty-state copy
 
 
+def test_playoff_odds_page_uses_card_and_explainer(client):
+    # The table is framed in a surface card (like /rankings, /replay) with a
+    # per-view explainer balancing the Rounds/Seeds toggle, and the Champ column
+    # uses its own heat ramp (champHeatAlpha) rather than a slivering bar.
+    html = client.get("/playoff-odds").text
+    assert 'class="playoff-card"' in html
+    assert 'id="playoff-explainer"' in html
+    assert "function champHeatAlpha" in html  # helper injected for the Champ tint
+
+
 def test_homepage_nav_links_to_playoff_odds(client):
     r = client.get("/")
     assert r.status_code == 200
