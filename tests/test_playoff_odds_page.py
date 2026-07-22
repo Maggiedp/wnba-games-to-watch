@@ -29,7 +29,9 @@ def test_playoff_odds_page_ships_loading_and_empty_state(client):
     assert 'id="playoff-status"' in html  # status/loading element present
     assert ">Loading…</p>" in html  # initial placeholder
     assert 'id="playoff-table" hidden' in html  # table hidden until data loads
-    assert "check back after the morning run" in html  # empty-state copy
+    # Distinct no-data vs failed-load copy (empty is not an error).
+    assert "first simulation runs" in html  # empty-state copy
+    assert "Refresh to try again" in html  # error-state copy
 
 
 def test_playoff_odds_page_uses_card_and_explainer(client):
@@ -40,6 +42,10 @@ def test_playoff_odds_page_uses_card_and_explainer(client):
     assert 'class="playoff-card"' in html
     assert 'id="playoff-explainer"' in html
     assert "function champHeatAlpha" in html  # helper injected for the Champ tint
+    # .sort-toggle's display rule overrides the [hidden] attribute's UA
+    # display:none, so this rule must ship or the view toggle shows before data
+    # loads and the incomplete-snapshot gate silently breaks (browser-only).
+    assert ".sort-toggle[hidden]" in html
 
 
 def test_homepage_nav_links_to_playoff_odds(client):

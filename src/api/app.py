@@ -38,6 +38,7 @@ from src.db.queries import (
     get_elo_history,
     get_game_shapes,
     get_games_by_date,
+    get_latest_playoff_probability_date,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
@@ -648,21 +649,34 @@ async def get_playoff_odds(date: str = Query(default=None)):
     as tiebreakers.
     """
     today = today_et()
+    explicit_date = date is not None
     if date is None:
         date = today
     is_today = date == today
     session = get_session()
     try:
-        recs = get_playoff_probabilities(session, date)
-        if not recs:
-            return []
-        # Skip legacy rows from before the round-prob migration: if any new
-        # column is NULL, we don't have a meaningful champ/finals/semis value.
-        # Showing those as 0% would mislead — wait for the next daily-update
-        # to populate them.
-        recs = {
-            tid: r for tid, r in recs.items() if r.win_championship_prob is not None
-        }
+
+        def _populated(d: str) -> dict:
+            # Skip legacy rows from before the round-prob migration: if the champ
+            # column is NULL we have no meaningful champ/finals/semis value, and
+            # showing 0% would mislead. A "populated" snapshot has >= 1 real row.
+            recs = get_playoff_probabilities(session, d)
+            return {
+                tid: r for tid, r in recs.items() if r.win_championship_prob is not None
+            }
+
+        recs = _populated(date)
+        # No populated snapshot for today yet — the pre-6AM daily-run window, or a
+        # missed/late run. On the DEFAULT (no ?date=) request, fall back to the
+        # freshest available day so the dedicated /playoff-odds page shows recent
+        # odds instead of a blank shell. An explicit ?date= query stays exact (a
+        # historical lookup must not silently jump to another date).
+        if not recs and not explicit_date:
+            latest = get_latest_playoff_probability_date(session, today)
+            if latest and latest != date:
+                date = latest
+                is_today = False
+                recs = _populated(date)
         if not recs:
             return []
         teams = get_teams_by_ids(session, set(recs.keys()))

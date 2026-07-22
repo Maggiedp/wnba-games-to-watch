@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from src.db.queries import (
     get_completed_postseason_games,
     get_head_to_head,
+    get_latest_playoff_probability_date,
     get_playoff_probabilities,
     get_team_records,
     upsert_daily_ranking,
@@ -283,6 +284,38 @@ def test_get_playoff_probabilities_returns_records(session, team_ids):
 def test_get_playoff_probabilities_empty_for_missing_date(session, team_ids):
     result = get_playoff_probabilities(session, "2099-01-01")
     assert result == {}
+
+
+def test_get_latest_playoff_probability_date_picks_freshest_populated(
+    session, team_ids
+):
+    a_id, b_id = team_ids
+    # Populated snapshots on two days.
+    for d in ("2026-06-01", "2026-06-10"):
+        upsert_playoff_probability(
+            session,
+            date=d,
+            team_id=a_id,
+            probability=0.6,
+            reach_semis_prob=0.4,
+            reach_finals_prob=0.2,
+            win_championship_prob=0.1,
+        )
+    # A LATER, legacy-only row (NULL champ) must NOT count as a populated snapshot
+    # — it mirrors the endpoint's own "win_championship_prob is not None" filter.
+    upsert_playoff_probability(
+        session, date="2026-06-20", team_id=b_id, probability=0.5
+    )
+
+    assert (
+        get_latest_playoff_probability_date(session, "2026-07-01") == "2026-06-10"
+    )  # freshest populated, ignoring the later legacy row
+    assert (
+        get_latest_playoff_probability_date(session, "2026-06-05") == "2026-06-01"
+    )  # cutoff excludes later days
+    assert (
+        get_latest_playoff_probability_date(session, "2026-05-01") is None
+    )  # nothing populated at/before the cutoff
 
 
 def test_upsert_daily_ranking_stores_win_prob(session, team_ids):

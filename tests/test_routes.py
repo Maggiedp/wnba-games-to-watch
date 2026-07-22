@@ -1377,6 +1377,60 @@ def test_playoff_odds_endpoint_omits_record_for_historical_date(env, client):
     assert rows[0]["losses"] is None
 
 
+def test_playoff_odds_default_falls_back_to_latest_when_today_empty(env, client):
+    """The default (no ?date=) request falls back to the freshest populated day
+    when today has no snapshot yet — the pre-6AM daily-run window or a missed run.
+    A dedicated page must show recent odds, not a blank shell."""
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    # Only a PAST snapshot exists; nothing written for today_et().
+    upsert_playoff_probability(
+        session,
+        date="2026-05-15",
+        team_id=a_id,
+        probability=0.8,
+        reach_semis_prob=0.5,
+        reach_finals_prob=0.3,
+        win_championship_prob=0.2,
+    )
+    session.close()
+
+    rows = client.get("/api/playoff-odds").json()  # no date → today empty → fallback
+    assert [r["team"] for r in rows] == ["Aces"]
+    assert rows[0]["make_playoffs_prob"] == 0.8
+    # The fallback day isn't today, so records are omitted (mixed-time guard).
+    assert rows[0]["wins"] is None
+    assert rows[0]["losses"] is None
+
+
+def test_playoff_odds_explicit_empty_date_does_not_fall_back(env, client):
+    """An explicit ?date= for a day with no snapshot returns [] — a historical
+    lookup stays exact and must never silently jump to another date."""
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    a_id = session.query(env.Team).filter_by(name="Aces").one().id
+    upsert_playoff_probability(
+        session,
+        date="2026-05-15",
+        team_id=a_id,
+        probability=0.8,
+        reach_semis_prob=0.5,
+        reach_finals_prob=0.3,
+        win_championship_prob=0.2,
+    )
+    session.close()
+
+    # 2026-05-16 has no snapshot; the fallback must NOT engage for an explicit date.
+    assert client.get("/api/playoff-odds?date=2026-05-16").json() == []
+
+
+def test_playoff_odds_empty_when_no_snapshot_exists(env, client):
+    """No populated snapshot anywhere → [] (the page renders its empty state).
+    Confirms the fallback path is a no-op when there's nothing to fall back to."""
+    assert client.get("/api/playoff-odds").json() == []
+
+
 # Valid baseline game_shapes row for the _detail_shape_section unit tests; each
 # test overrides only the field under test (cf. _seed_shape in
 # test_game_shape_queries.py for the analogous DB-write builder).
