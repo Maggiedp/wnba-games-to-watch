@@ -3,12 +3,32 @@
 const EXCITEMENT_CLOSE = 4.0;
 const EXCITEMENT_THRILLER = 7.5;
 const EXCITEMENT_FUTURE_WEIGHT = 2.5;
+// Current-WP band for the LIVE badge; see src/scoring/excitement.py.
+const EXCITEMENT_LOPSIDED_LOW = 0.15;
+const EXCITEMENT_LOPSIDED_HIGH = 0.85;
 
 function excitementLabelFor(score) {
     if (score == null) return '';
     if (score >= EXCITEMENT_THRILLER) return 'Thriller';
     if (score >= EXCITEMENT_CLOSE) return 'Close game';
     return '';
+}
+
+// The live-badge label: the cumulative excitement classification, gated on the
+// CURRENT win prob (last play's home_pct) so a decided-but-formerly-wild game
+// stops reading "Close game" while it's a blowout. Only removes a label, never
+// adds one; suppresses only on a confirmed lopsided WP (a missing/NaN WP keeps
+// the label — though a bad WP already zeroes the score upstream).
+function liveExcitementLabel(plays) {
+    const label = computeExcitement(plays);
+    if (!label) return '';
+    const last = plays[plays.length - 1];
+    const wp = last && last.home_pct;
+    if (typeof wp === 'number'
+        && (wp < EXCITEMENT_LOPSIDED_LOW || wp > EXCITEMENT_LOPSIDED_HIGH)) {
+        return '';
+    }
+    return label;
 }
 
 // Pass homePctOverride (0..1) for live data; omit for pregame (uses game.win_prob_a).

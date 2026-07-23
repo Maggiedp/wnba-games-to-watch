@@ -21,6 +21,15 @@ EXCITEMENT_CLOSE = 4.0
 EXCITEMENT_THRILLER = 7.5
 EXCITEMENT_FUTURE_WEIGHT = 2.5
 
+# Current-win-probability band for the LIVE excitement label. The index is
+# cumulative (it never decays), so a game that banked drama early can still
+# clear the Close/Thriller thresholds while it's now a blowout. The live label
+# (homepage badge + "tune in" alert) is suppressed when the *current* home win
+# prob falls outside this band — the label should read "is it close now?", not
+# "was it ever close?". Mirrored in js/homepage_helpers.js (test_constants_match_js).
+EXCITEMENT_LOPSIDED_LOW = 0.15
+EXCITEMENT_LOPSIDED_HIGH = 0.85
+
 REGULATION_SECONDS = 2400  # 4 × 10 min
 OT_PERIOD_SECONDS = 300
 

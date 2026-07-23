@@ -5,6 +5,8 @@ import pytest
 from src.scoring.excitement import (
     EXCITEMENT_CLOSE,
     EXCITEMENT_FUTURE_WEIGHT,
+    EXCITEMENT_LOPSIDED_HIGH,
+    EXCITEMENT_LOPSIDED_LOW,
     EXCITEMENT_THRILLER,
     compute_excitement,
     elapsed_seconds,
@@ -27,9 +29,17 @@ def test_constants_match_js():
     js_future = float(
         re.search(r"EXCITEMENT_FUTURE_WEIGHT\s*=\s*([\d.]+)", src).group(1)
     )
+    js_lop_low = float(
+        re.search(r"EXCITEMENT_LOPSIDED_LOW\s*=\s*([\d.]+)", src).group(1)
+    )
+    js_lop_high = float(
+        re.search(r"EXCITEMENT_LOPSIDED_HIGH\s*=\s*([\d.]+)", src).group(1)
+    )
     assert EXCITEMENT_CLOSE == js_close
     assert EXCITEMENT_THRILLER == js_thriller
     assert EXCITEMENT_FUTURE_WEIGHT == js_future
+    assert EXCITEMENT_LOPSIDED_LOW == js_lop_low
+    assert EXCITEMENT_LOPSIDED_HIGH == js_lop_high
 
 
 def test_elapsed_seconds_colon_format():

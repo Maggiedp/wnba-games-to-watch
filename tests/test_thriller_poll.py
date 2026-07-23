@@ -130,6 +130,22 @@ def test_below_close_threshold_no_send(env, client, monkeypatch):
     assert r.json()["alerted"] == 0 and sends == []
 
 
+def test_currently_lopsided_game_no_send(env, client, monkeypatch):
+    """A game that banked Thriller-level cumulative excitement but is now a
+    blowout (current home WP outside [0.15, 0.85]) must NOT alert — the live
+    label reflects the current state, not the game's history."""
+    _seed_live_game(env, "401700023")
+    # Thriller-level excitement, but the current WP (last curve point) is 0.95.
+    game = _game("401700023", 8.5, curve=[[600.0, 0.5], [2400.0, 0.95]])
+    monkeypatch.setattr(app_module, "_detect_live_shapes", lambda **k: ([game], True))
+    sends = []
+    monkeypatch.setattr(
+        app_module, "send_telegram", lambda t, **k: sends.append(t) or True
+    )
+    r = client.post("/internal/thriller-poll", headers={"X-Trigger-Secret": "s3cret"})
+    assert r.json()["alerted"] == 0 and sends == []
+
+
 def test_concurrent_polls_send_once(env, client, monkeypatch):
     """Two overlapping polls on the same live game must send exactly once and
     neither must 500 on the unique-constraint race (Finding 1)."""

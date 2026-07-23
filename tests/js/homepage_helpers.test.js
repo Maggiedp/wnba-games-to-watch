@@ -6,8 +6,23 @@ const { loadHelpers } = require('./helpers');
 const {
   excitementLabelFor, winProbText, elapsedSeconds,
   excitementScore, computeExcitement, completedEntryFromLiveWp,
-  curveFromPlays, sortCompleted,
+  curveFromPlays, sortCompleted, liveExcitementLabel,
 } = loadHelpers('shared.js', 'homepage_helpers.js');
+
+// A Q4 dogfight (alternating ~0.05↔0.95 WP swings) that banks Close-level
+// cumulative excitement; the final play sets the CURRENT win prob.
+function q4Dogfight(finalHomePct) {
+  return [
+    { period: 4, clock: '10:00', home_pct: 0.5 },
+    { period: 4, clock: '8:00', home_pct: 0.95 },
+    { period: 4, clock: '6:00', home_pct: 0.05 },
+    { period: 4, clock: '4:00', home_pct: 0.95 },
+    { period: 4, clock: '2:00', home_pct: 0.05 },
+    { period: 4, clock: '1:00', home_pct: 0.95 },
+    { period: 4, clock: '0:30', home_pct: 0.05 },
+    { period: 4, clock: '0:00', home_pct: finalHomePct },
+  ];
+}
 
 // --- elapsedSeconds (mirrors tests/test_excitement.py for the Python port) ---
 
@@ -87,6 +102,37 @@ test('computeExcitement maps score to label via thresholds', () => {
   assert.equal(excitementLabelFor(7.5), 'Thriller');
   // End-to-end: too few plays → null score → empty label.
   assert.equal(computeExcitement([]), '');
+});
+
+// --- liveExcitementLabel (current-WP gate over the cumulative label) ---
+
+test('liveExcitementLabel suppresses the label when the game is currently lopsided', () => {
+  const blowoutNow = q4Dogfight(0.95);
+  // The cumulative label WOULD show (excitement was banked earlier)...
+  assert.notEqual(computeExcitement(blowoutNow), '');
+  // ...but the game is decided right now, so the live label is suppressed.
+  assert.equal(liveExcitementLabel(blowoutNow), '');
+});
+
+test('liveExcitementLabel keeps the label when the game is currently close', () => {
+  const closeNow = q4Dogfight(0.5);
+  const label = computeExcitement(closeNow);
+  assert.notEqual(label, '');
+  assert.equal(liveExcitementLabel(closeNow), label);
+});
+
+test('liveExcitementLabel returns empty for a below-Close game (unchanged)', () => {
+  // Close now, but nothing exciting happened → no label either way.
+  const dull = [
+    { period: 1, clock: '10:00', home_pct: 0.5 },
+    { period: 4, clock: '0:00', home_pct: 0.5 },
+  ];
+  assert.equal(computeExcitement(dull), '');
+  assert.equal(liveExcitementLabel(dull), '');
+});
+
+test('liveExcitementLabel returns empty for too-few plays without throwing', () => {
+  assert.equal(liveExcitementLabel([]), '');
 });
 
 // --- winProbText ---
