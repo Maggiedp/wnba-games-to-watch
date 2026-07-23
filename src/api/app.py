@@ -55,9 +55,9 @@ from src.db.queries import (
 )
 from src.notify.telegram import send_telegram, telegram_configured
 from src.notify.thriller import (
-    classify_excitement,
     compose_alert,
     filter_recent_tipoffs,
+    live_excitement_label,
 )
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
@@ -957,7 +957,13 @@ def _run_thriller_poll() -> dict:
     games, _ = _detect_live_shapes()
     alerted = 0
     for g in games:
-        label = classify_excitement(g.get("excitement"))
+        # Gate the cumulative excitement label on the CURRENT win prob (last
+        # curve point = home_pct) so a decided-but-formerly-wild game doesn't
+        # ping. Missing/short curve → None → no suppression (never drop a real
+        # alert on a data hiccup).
+        curve = g.get("curve")
+        current_wp = curve[-1][1] if curve else None
+        label = live_excitement_label(g.get("excitement"), current_wp)
         if label is None:
             continue
         espn_id = g["espn_id"]

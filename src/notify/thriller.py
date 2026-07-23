@@ -1,9 +1,15 @@
 """Pure classification + message composition for the live 'tune in' alerts.
 No I/O — trivially unit-tested."""
 
+import math
 from datetime import datetime, timedelta
 
-from src.scoring.excitement import EXCITEMENT_CLOSE, EXCITEMENT_THRILLER
+from src.scoring.excitement import (
+    EXCITEMENT_CLOSE,
+    EXCITEMENT_LOPSIDED_HIGH,
+    EXCITEMENT_LOPSIDED_LOW,
+    EXCITEMENT_THRILLER,
+)
 
 _BASE_URL = "https://wumbers.com"
 _PREFIX = {"Thriller": "🔥 Thriller", "Close game": "👀 Close game"}
@@ -18,6 +24,28 @@ def classify_excitement(excitement: float | None) -> str | None:
     if excitement >= EXCITEMENT_CLOSE:
         return "Close game"
     return None
+
+
+def live_excitement_label(
+    excitement: float | None, home_pct: float | None
+) -> str | None:
+    """The live-alert label: the cumulative classification, gated on the CURRENT
+    win probability so a decided-but-formerly-wild game doesn't ping.
+
+    Suppressed only when `home_pct` is a finite number outside the [LOW, HIGH]
+    band; a missing / non-finite WP keeps the label (never silently kill a real
+    alert on a data hiccup). Matches the JS mirror `liveExcitementLabel`, which
+    also treats a non-finite WP as "keep"."""
+    label = classify_excitement(excitement)
+    if label is None:
+        return None
+    if (
+        isinstance(home_pct, (int, float))
+        and math.isfinite(home_pct)
+        and not (EXCITEMENT_LOPSIDED_LOW <= home_pct <= EXCITEMENT_LOPSIDED_HIGH)
+    ):
+        return None
+    return label
 
 
 def compose_alert(game: dict, label: str) -> str:
