@@ -43,6 +43,8 @@ from src.db.queries import (
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
+    get_shot_making,
+    get_shot_making_seasons,
     get_team_abbrev_map,
     get_team_records,
     get_team_style_season_counts,
@@ -874,6 +876,44 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
         else:
             view.sort(key=lambda v: v["team"])
         return {"season": season, "teams": view}
+    finally:
+        session.close()
+
+
+@app.get("/api/shot-making")
+async def get_shot_making_endpoint():
+    """Shot-making leaderboard for a season (DB-only, precomputed). Ranks players
+    by points added over expected (actual - xPPS). Defaults to the newest
+    populated season (mirrors /api/replay); v1 exposes no season param."""
+    session = get_session()
+    try:
+        seasons = get_shot_making_seasons(session)
+        season = seasons[0] if seasons else int(today_et()[:4])
+        rows = get_shot_making(session, season)
+        rows.sort(key=lambda r: r.points_added, reverse=True)
+        players = []
+        for i, r in enumerate(rows, start=1):
+            try:
+                diet = json.loads(r.diet) if r.diet else {}
+            except (ValueError, TypeError):
+                diet = {}
+            players.append(
+                {
+                    "rank": i,
+                    "athlete_id": r.athlete_id,
+                    "athlete_name": r.athlete_name,
+                    "team_id": r.team_id,
+                    "fga": r.fga,
+                    "made": r.made,
+                    "made_pct": round(r.made / r.fga, 3) if r.fga else 0.0,
+                    "actual_pps": r.actual_pps,
+                    "expected_pps": r.expected_pps,
+                    "points_added": r.points_added,
+                    "points_added_per_100": r.points_added_per_100,
+                    "diet": diet,
+                }
+            )
+        return {"season": season, "players": players}
     finally:
         session.close()
 
