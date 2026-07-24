@@ -17,6 +17,7 @@ from src.data.espn_api import (
     fetch_games_for_range,
     fetch_live_win_probability,
     fetch_schedule_and_results,
+    fetch_shots,
     fetch_team_details,
     fetch_team_style_stats,
     today_et,
@@ -31,8 +32,10 @@ from src.db.queries import (
     get_completed_games,
     get_completed_games_missing_excitement,
     get_completed_games_missing_shape,
+    get_completed_games_missing_shots,
     get_completed_postseason_games,
     get_games_for_excitement_refresh,
+    get_shots_for_season,
     get_team_abbrev_map,
     get_team_by_id,
     get_team_by_name,
@@ -43,6 +46,8 @@ from src.db.queries import (
     upsert_game,
     upsert_game_shape,
     upsert_playoff_probability,
+    upsert_shot_making,
+    upsert_shots,
     upsert_team,
     upsert_team_style,
 )
@@ -73,6 +78,7 @@ from src.scoring.monte_carlo import (
     to_team_standings,
 )
 from src.scoring.quality import compute_quality_score
+from src.scoring.shot_making import compute_leaderboard
 from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
 
 os.makedirs("logs", exist_ok=True)
@@ -521,6 +527,77 @@ def populate_game_shapes_for_recent_completions(
             )
     session.commit()
     logger.info(f"Stored game_shapes for {stored} games")
+
+
+def populate_shots_for_recent_completions(
+    session,
+    limit: int | None = DAILY_EXCITEMENT_RETRY_CAP,
+    timeout: int = BACKFILL_ESPN_TIMEOUT_S,
+) -> None:
+    """Ingest FGA rows for completed 2026 games not yet in `shots`. Bounded +
+    non-fatal (mirrors populate_game_shapes_for_recent_completions): a failing
+    game is skipped and re-tried next run."""
+    games = get_completed_games_missing_shots(session, season_year=2026, limit=limit)
+    if not games:
+        logger.info("No completed games need shot ingestion")
+        return
+    logger.info(f"Ingesting shots for {len(games)} completed games")
+    total = 0
+    for game in games:
+        try:
+            shots = fetch_shots(game.espn_id, timeout=timeout)
+            total += upsert_shots(session, game.espn_id, 2026, shots, commit=False)
+        except (ESPNAPIError, ESPNNotFoundError) as e:
+            logger.warning(
+                f"Could not fetch shots (espn_id={game.espn_id}): {e} — skipping"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to ingest shots (espn_id={game.espn_id}): {e} — skipping"
+            )
+    session.commit()
+    logger.info(f"Ingested {total} shots")
+
+
+def recompute_shot_making(session, season: int) -> int:
+    """Rebuild the shot_making leaderboard for a season from `shots`. Wholesale
+    recompute (trivial at this scale). Returns the eligible player count."""
+    shot_rows = get_shots_for_season(session, season)
+    shots = [
+        {
+            "athlete_id": s.athlete_id,
+            "athlete_name": s.athlete_name,
+            "team_id": s.team_id,
+            "shot_type": s.shot_type,
+            "distance_ft": s.distance_ft,
+            "points": s.points,
+            "point_value": s.point_value,
+            "made": s.made,
+        }
+        for s in shot_rows
+    ]
+    board = compute_leaderboard(shots)
+    for r in board:
+        upsert_shot_making(
+            session,
+            season,
+            r["athlete_id"],
+            athlete_name=r["athlete_name"],
+            team_id=r["team_id"],
+            fga=r["fga"],
+            made=r["made"],
+            actual_pts=r["actual_pts"],
+            expected_pts=r["expected_pts"],
+            points_added=r["points_added"],
+            points_added_per_100=r["points_added_per_100"],
+            actual_pps=r["actual_pps"],
+            expected_pps=r["expected_pps"],
+            diet=json.dumps(r["diet"]),
+            commit=False,
+        )
+    session.commit()
+    logger.info(f"Recomputed shot-making for {len(board)} players")
+    return len(board)
 
 
 def refresh_recent_excitement_scores(
@@ -1345,6 +1422,11 @@ def main() -> int:
                 populate_game_shapes_for_recent_completions(session)
             except Exception as e:
                 logger.warning(f"Game-shape backfill failed (non-fatal): {e}")
+            try:
+                populate_shots_for_recent_completions(session)
+                recompute_shot_making(session, int(today[:4]))
+            except Exception as e:
+                logger.warning(f"Shot-making update failed (non-fatal): {e}")
             try:
                 refresh_recent_excitement_scores(session)
             except Exception as e:
