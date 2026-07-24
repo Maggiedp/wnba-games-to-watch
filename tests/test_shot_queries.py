@@ -1,11 +1,17 @@
-from src.db.schema import Base, get_engine, Shot, ShotMaking
+from src.db.schema import Base, get_engine, Shot, ShotMaking, Game, Team
 from sqlalchemy.orm import sessionmaker
 import pytest
+
+from src.db import queries as q
 
 
 @pytest.fixture
 def session(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/t.db")
+    # Reset the cached engine so each test gets a fresh database
+    import src.db.schema
+
+    src.db.schema._engine = None
     engine = get_engine()
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)()
@@ -72,3 +78,106 @@ def test_shot_making_table_roundtrips(session):
     )
     session.commit()
     assert session.query(ShotMaking).one().points_added == 10.0
+
+
+def _two_teams_and_game(session, espn_id, date):
+    session.add_all([Team(id=1, name="A"), Team(id=2, name="B")])
+    session.add(
+        Game(
+            id=1,
+            team_a_id=1,
+            team_b_id=2,
+            date=date,
+            espn_id=espn_id,
+            winner_id=1,
+            season_type=2,
+        )
+    )
+    session.commit()
+
+
+def test_upsert_shots_is_idempotent(session):
+    rows = [
+        {
+            "play_id": "1",
+            "athlete_id": "10",
+            "athlete_name": "X",
+            "team_id": "1",
+            "shot_type": "Jump Shot",
+            "distance_ft": 15.0,
+            "coord_x": 1,
+            "coord_y": 2,
+            "points": 2,
+            "point_value": 2,
+            "made": True,
+        }
+    ]
+    assert q.upsert_shots(session, "G1", 2026, rows) == 1
+    assert q.upsert_shots(session, "G1", 2026, rows) == 0  # dedup
+    assert len(q.get_shots_for_season(session, 2026)) == 1
+
+
+def test_missing_shots_excludes_already_ingested(session):
+    _two_teams_and_game(session, "G1", "2026-07-20")
+    assert [g.espn_id for g in q.get_completed_games_missing_shots(session, 2026)] == [
+        "G1"
+    ]
+    q.upsert_shots(
+        session,
+        "G1",
+        2026,
+        [
+            {
+                "play_id": "1",
+                "athlete_id": "10",
+                "athlete_name": "X",
+                "team_id": "1",
+                "shot_type": "Jump Shot",
+                "distance_ft": None,
+                "coord_x": None,
+                "coord_y": None,
+                "points": 2,
+                "point_value": 2,
+                "made": True,
+            }
+        ],
+    )
+    assert q.get_completed_games_missing_shots(session, 2026) == []
+
+
+def test_shot_making_upsert_and_read(session):
+    q.upsert_shot_making(
+        session,
+        2026,
+        "10",
+        athlete_name="X",
+        team_id="1",
+        fga=100,
+        made=50,
+        actual_pts=110.0,
+        expected_pts=100.0,
+        points_added=10.0,
+        points_added_per_100=10.0,
+        actual_pps=1.1,
+        expected_pps=1.0,
+        diet="{}",
+    )
+    q.upsert_shot_making(
+        session,
+        2026,
+        "10",
+        athlete_name="X",
+        team_id="1",
+        fga=101,
+        made=51,
+        actual_pts=112.0,
+        expected_pts=101.0,
+        points_added=11.0,
+        points_added_per_100=10.89,
+        actual_pps=1.108,
+        expected_pps=1.0,
+        diet="{}",
+    )
+    rows = q.get_shot_making(session, 2026)
+    assert len(rows) == 1 and rows[0].fga == 101  # upsert, not insert
+    assert q.get_shot_making_seasons(session) == [2026]

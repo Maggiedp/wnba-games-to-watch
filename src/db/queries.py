@@ -14,6 +14,8 @@ from src.db.schema import (
     Game,
     GameShape,
     PlayoffProbability,
+    Shot,
+    ShotMaking,
     Team,
     TeamStyle,
     ThrillerAlert,
@@ -1246,6 +1248,133 @@ def delete_team_style_season(session: Session, season: int) -> None:
     session.query(TeamStyle).filter(TeamStyle.season == season).delete(
         synchronize_session=False
     )
+
+
+def upsert_shots(
+    session: Session,
+    espn_game_id: str,
+    season: int,
+    shots: list[dict],
+    *,
+    commit: bool = True,
+) -> int:
+    """Insert FGA rows for a game, idempotent on (espn_game_id, play_id). Returns
+    the count newly inserted (already-present play_ids are skipped)."""
+    existing = {
+        r[0]
+        for r in session.query(Shot.play_id)
+        .filter(Shot.espn_game_id == espn_game_id)
+        .all()
+    }
+    inserted = 0
+    for s in shots:
+        if s["play_id"] in existing:
+            continue
+        session.add(
+            Shot(
+                espn_game_id=espn_game_id,
+                play_id=s["play_id"],
+                season=season,
+                athlete_id=s["athlete_id"],
+                athlete_name=s["athlete_name"],
+                team_id=s["team_id"],
+                shot_type=s["shot_type"],
+                distance_ft=s["distance_ft"],
+                coord_x=s["coord_x"],
+                coord_y=s["coord_y"],
+                points=s["points"],
+                point_value=s["point_value"],
+                made=s["made"],
+            )
+        )
+        inserted += 1
+    if commit:
+        session.commit()
+    return inserted
+
+
+def get_shots_for_season(session: Session, season: int) -> list[Shot]:
+    """All shots for a season."""
+    return session.query(Shot).filter(Shot.season == season).all()
+
+
+def get_completed_games_missing_shots(
+    session: Session, season_year: int = 2026, limit: int | None = None
+) -> list[Game]:
+    """Completed `season_year` games with an espn_id but no shots rows yet — the
+    daily-update candidate set. Ordered newest-first."""
+    ingested = session.query(Shot.espn_game_id).distinct()
+    query = (
+        session.query(Game)
+        .filter(Game.date.like(f"{season_year}-%"))
+        .filter(Game.winner_id.isnot(None))
+        .filter(Game.espn_id.isnot(None))
+        .filter(Game.espn_id.notin_(ingested))
+        .filter(_NOT_PRESEASON)
+        .order_by(Game.date.desc())
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    return query.all()
+
+
+def upsert_shot_making(
+    session: Session,
+    season: int,
+    athlete_id: str,
+    *,
+    athlete_name: str,
+    team_id: str,
+    fga: int,
+    made: int,
+    actual_pts: float,
+    expected_pts: float,
+    points_added: float,
+    points_added_per_100: float,
+    actual_pps: float,
+    expected_pps: float,
+    diet: str,
+    commit: bool = True,
+) -> ShotMaking:
+    """Upsert a shot_making row for (season, athlete_id). Idempotent."""
+    row = (
+        session.query(ShotMaking)
+        .filter(ShotMaking.season == season, ShotMaking.athlete_id == athlete_id)
+        .first()
+    )
+    if row is None:
+        row = ShotMaking(season=season, athlete_id=athlete_id)
+        session.add(row)
+    row.athlete_name = athlete_name
+    row.team_id = team_id
+    row.fga = fga
+    row.made = made
+    row.actual_pts = actual_pts
+    row.expected_pts = expected_pts
+    row.points_added = points_added
+    row.points_added_per_100 = points_added_per_100
+    row.actual_pps = actual_pps
+    row.expected_pps = expected_pps
+    row.diet = diet
+    if commit:
+        session.commit()
+    return row
+
+
+def get_shot_making(session: Session, season: int) -> list[ShotMaking]:
+    """All shot_making rows for a season."""
+    return session.query(ShotMaking).filter(ShotMaking.season == season).all()
+
+
+def get_shot_making_seasons(session: Session) -> list[int]:
+    """Distinct seasons present in shot_making, newest first."""
+    rows = (
+        session.query(ShotMaking.season)
+        .distinct()
+        .order_by(ShotMaking.season.desc())
+        .all()
+    )
+    return [r[0] for r in rows]
 
 
 def has_alerted(session: Session, espn_id: str) -> bool:
