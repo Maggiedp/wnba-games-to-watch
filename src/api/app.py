@@ -145,6 +145,13 @@ async def playoff_odds_page():
     return HTMLResponse(render_playoff_odds())
 
 
+@app.get("/shot-making", response_class=HTMLResponse)
+async def shot_making_page():
+    from src.api.routes import render_shot_making
+
+    return HTMLResponse(render_shot_making())
+
+
 @app.get("/game/{espn_id}", response_class=HTMLResponse)
 def game_detail(espn_id: str):
     from src.api.routes import render_game_detail

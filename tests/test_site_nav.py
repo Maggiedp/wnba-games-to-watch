@@ -2,13 +2,14 @@
 to every view, marks the current page active, and the homepage footer is slimmed
 to meta links only."""
 
-# path -> the nav label marked active on that page. The six (href, label) pairs
-# are also every link the nav must expose on every page (discoverability).
+# path -> the nav label marked active on that page. The seven (href, label)
+# pairs are also every link the nav must expose on every page (discoverability).
 NAV = (
     ("/", "Games"),
     ("/rankings", "Power rankings"),
     ("/replay", "Replay value"),
     ("/style", "Team style"),
+    ("/shot-making", "Shot-making"),
     ("/playoff-odds", "Playoff odds"),
     ("/transparency", "Behind the numbers"),
 )

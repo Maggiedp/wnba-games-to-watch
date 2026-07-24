@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shot-making · %%SITE_TITLE%%</title>
+<meta name="description" content="%%SITE_TITLE%%: which WNBA players convert better than expected from where and how they shoot — points added over a league-average shooter.">
+
+<meta property="og:title" content="Shot-making · %%SITE_TITLE%%">
+<meta property="og:description" content="Which WNBA players convert better than a league-average shooter from the same spots and shot types.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="%%SITE_URL%%/shot-making">
+<meta property="og:image" content="%%SITE_URL%%/og-home.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="WNBA Games to Watch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Shot-making · %%SITE_TITLE%%">
+<meta name="twitter:description" content="Which WNBA players convert better than a league-average shooter from the same spots and shot types.">
+<meta name="twitter:image" content="%%SITE_URL%%/og-home.png">
+
+%%SHARED_HEAD%%
+            /* View toggle (3rd caller after the homepage + /playoff-odds; kept
+               page-local per repo convention until a 4th caller). */
+            .sort-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+            .sort-btn {
+                padding: 6px 14px;
+                border: none;
+                background: var(--surface);
+                font-size: 0.84rem;
+                font-weight: 500;
+                cursor: pointer;
+                color: #555c66;
+                font-family: var(--body);
+            }
+            .sort-btn + .sort-btn { border-left: 1px solid var(--line); }
+            .sort-btn[aria-pressed="true"] { background: var(--navy); color: white; }
+            .sort-btn:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
+            /* ---------- Shot-making leaderboard ---------- */
+            .shots-key { color: var(--text-muted); font-size: .9rem; line-height: 1.5; margin: 0 0 16px; }
+            .shots-note { color: var(--text-subtle); font-size: .82rem; margin: 0 0 16px; }
+
+            .shots-card {
+                background: var(--surface);
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                padding: 20px;
+            }
+            .shots-header-row {
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                margin-bottom: 14px;
+            }
+            .shots-table-scroll { overflow-x: auto; }
+            .shots-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+            }
+            .shots-table th {
+                text-align: right;
+                font-weight: 500;
+                color: var(--navy-3);
+                padding: 6px 8px;
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                border-bottom: 1px solid var(--navy-3);
+                white-space: nowrap;
+            }
+            .shots-table th.rank-col,
+            .shots-table th.player-col { text-align: left; }
+            .shots-table td {
+                padding: 6px 8px;
+                border-bottom: 1px solid rgba(0,0,0,0.06);
+                text-align: right;
+                font-variant-numeric: tabular-nums;
+                white-space: nowrap;
+            }
+            .shots-table td.rank-cell,
+            .shots-table td.player-cell { text-align: left; white-space: normal; }
+            .shots-table td.player-cell { font-weight: 500; }
+            .shots-table td.team-cell { color: var(--navy-3); }
+            .shots-table td.added-cell.is-positive { color: var(--orange-deep); font-weight: 600; }
+            .shots-table td.added-cell.is-negative { color: #7a7f88; }
+            .shots-table td.diet-cell { text-align: left; }
+
+            .diet-bar {
+                display: flex;
+                width: 100px;
+                height: 10px;
+                border-radius: 4px;
+                overflow: hidden;
+                background: var(--surface-2, #f2f4f7);
+            }
+            .diet-seg { display: block; height: 100%; }
+            .diet-rim { background: var(--orange-deep); }
+            .diet-floater { background: var(--orange); }
+            .diet-mid { background: #d9a441; }
+            .diet-three { background: var(--navy); }
+            .diet-other { background: #c7ccd4; }
+
+            @media (max-width: 768px) {
+                .shots-table { font-size: 13px; }
+                .shots-table th, .shots-table td { padding: 5px 6px; }
+                .diet-bar { width: 70px; }
+            }
+            @media (max-width: 560px) {
+                .shots-table th.fga-col,
+                .shots-table td.fga-cell,
+                .shots-table th.made-col,
+                .shots-table td.made-cell { display: none; }
+            }
+        </style>
+</head>
+<body>
+%%SITE_NAV%%
+<div class="wrap">
+  <h1>Shot-making</h1>
+  <p class="sub">Points added over expected — did she convert better than a league-average WNBA player would from the same spots and shot types this season? No defender tracking, so this is a location-and-type model.</p>
+  <p class="shots-note">The league total nets to ~zero by construction — this measures who beat the expectation, not who scored the most.</p>
+
+  <section class="shots-card">
+    <div class="shots-header-row">
+      <div class="sort-toggle" id="shots-sort-toggle" role="group" aria-label="Sort shot-making leaderboard">
+        <button class="sort-btn" data-sort="added" type="button" aria-pressed="true">Points added</button>
+        <button class="sort-btn" data-sort="per100" type="button" aria-pressed="false">Per 100</button>
+      </div>
+    </div>
+    <p class="empty" id="shots-status">Loading…</p>
+    <div class="shots-table-scroll">
+      <table class="shots-table" id="board" hidden>
+        <thead>
+          <tr>
+            <th class="rank-col">Rank</th>
+            <th class="player-col">Player</th>
+            <th>Team</th>
+            <th class="fga-col">FGA</th>
+            <th class="made-col">FG%</th>
+            <th>xPPS</th>
+            <th>PPS</th>
+            <th>Points added</th>
+            <th>Per 100</th>
+            <th>Diet</th>
+          </tr>
+        </thead>
+        <tbody id="shots-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+%%SHARED_JS%%
+%%SHOT_MAKING_JS%%
+(function () {
+  let players = [];
+  let sortBy = 'added';  // 'added' | 'per100'
+
+  const status = document.getElementById('shots-status');
+  const table = document.getElementById('board');
+  const tbody = document.getElementById('shots-tbody');
+
+  function showStatus(msg) {
+    if (status) { status.textContent = msg; status.hidden = false; }
+    if (table) table.hidden = true;
+  }
+
+  function hideStatus() {
+    if (status) status.hidden = true;
+    if (table) table.hidden = false;
+  }
+
+  function rowHtml(p, rank) {
+    const added = fmtSigned(p.points_added);
+    const addedClass = p.points_added >= 0 ? 'is-positive' : 'is-negative';
+    const per100 = fmtSigned(p.points_added_per_100);
+    const fgPct = Math.round((p.made_pct || 0) * 100) + '%';
+    return `<tr>
+      <td class="rank-cell">${rank}</td>
+      <td class="player-cell">${escapeHtml(p.athlete_name)}</td>
+      <td class="team-cell">${escapeHtml(p.team_id)}</td>
+      <td class="fga-cell">${p.fga}</td>
+      <td class="made-cell">${fgPct}</td>
+      <td>${p.expected_pps.toFixed(3)}</td>
+      <td>${p.actual_pps.toFixed(3)}</td>
+      <td class="added-cell ${addedClass}">${added}</td>
+      <td>${per100}</td>
+      <td class="diet-cell"><div class="diet-bar">${dietBar(p.diet || {})}</div></td>
+    </tr>`;
+  }
+
+  function render() {
+    const sorted = players.slice().sort((a, b) =>
+      sortBy === 'per100'
+        ? b.points_added_per_100 - a.points_added_per_100
+        : b.points_added - a.points_added);
+    tbody.innerHTML = sorted.map((p, i) => rowHtml(p, i + 1)).join('');
+  }
+
+  function setupSortToggle() {
+    const group = document.getElementById('shots-sort-toggle');
+    if (!group) return;
+    group.querySelectorAll('[data-sort]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const sort = btn.dataset.sort;
+        if (sort === sortBy) return;
+        sortBy = sort;
+        group.querySelectorAll('[data-sort]').forEach((b) =>
+          b.setAttribute('aria-pressed', b.dataset.sort === sort ? 'true' : 'false'));
+        render();
+      });
+    });
+  }
+
+  async function load() {
+    try {
+      const res = await fetch('/api/shot-making');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      players = data.players || [];
+      if (!players.length) { showStatus('Shot-making appears once enough shots are logged this season.'); return; }
+      hideStatus();
+      render();
+    } catch (e) {
+      console.error('shot-making load failed', e);
+      showStatus('Couldn’t load the shot-making leaderboard. Refresh to try again.');
+    }
+  }
+
+  setupSortToggle();
+  load();
+})();
+</script>
+</body>
+</html>
