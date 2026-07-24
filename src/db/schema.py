@@ -215,6 +215,7 @@ class Shot(Base):
     coord_x = Column(Integer, nullable=True)
     coord_y = Column(Integer, nullable=True)
     points = Column(Integer, nullable=False)
+    point_value = Column(Integer, nullable=False)
     made = Column(Boolean, nullable=False)
 
     __table_args__ = (

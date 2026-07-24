@@ -24,6 +24,11 @@ def test_fetch_shots_excludes_free_throws_and_attributes_shooter(monkeypatch):
     # Every shot has a resolved shooter name + a 2 or 3 point value.
     assert shots and all(s["athlete_name"] for s in shots)
     assert all(s["points"] in (0, 2, 3) for s in shots)
+    assert all(s["point_value"] in (2, 3) for s in shots)
+    # A missed three-pointer (points=0) is still classified as a 3, not a 2 —
+    # the bug this test guards against: ESPN gives points=0 on a miss, and
+    # only the play text (not scoreValue) reveals it was a three.
+    assert any(s["made"] is False and s["point_value"] == 3 for s in shots)
     # The blocked layup is attributed to the shooter (Juskaite), not the blocker.
     juskaite = [s for s in shots if s["athlete_name"] == "Laura Juskaite"]
     assert any(
@@ -31,7 +36,27 @@ def test_fetch_shots_excludes_free_throws_and_attributes_shooter(monkeypatch):
     )
 
 
-def test_fetch_shots_idempotent_play_ids(monkeypatch):
+def test_fetch_shots_unique_play_ids(monkeypatch):
     shots = _load(monkeypatch)
     ids = [s["play_id"] for s in shots]
     assert len(ids) == len(set(ids))
+
+
+def test_fetch_shots_skips_unresolvable_shooter(monkeypatch):
+    payload = {
+        "boxscore": {"players": []},
+        "plays": [
+            {
+                "id": "1",
+                "shootingPlay": True,
+                "scoringPlay": False,
+                "scoreValue": 0,
+                "type": {"text": "Jump Shot"},
+                "participants": [{"athlete": {"id": "999"}}],
+                "text": "misses",
+                "coordinate": {"x": 1, "y": 2},
+            }
+        ],
+    }
+    monkeypatch.setattr(espn_api, "_get", lambda *a, **k: payload)
+    assert espn_api.fetch_shots("999") == []

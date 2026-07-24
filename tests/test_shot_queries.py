@@ -25,6 +25,7 @@ def test_shot_table_roundtrips_and_dedups(session):
             coord_x=28,
             coord_y=3,
             points=0,
+            point_value=2,
             made=False,
         )
     )
@@ -42,6 +43,7 @@ def test_shot_table_roundtrips_and_dedups(session):
             team_id="20",
             shot_type="x",
             points=0,
+            point_value=2,
             made=False,
         )
     )

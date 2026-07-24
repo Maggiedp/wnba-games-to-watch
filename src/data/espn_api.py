@@ -639,6 +639,7 @@ def fetch_shots(espn_id: str, timeout: int = 10) -> list[dict]:
                 "coord_x": int(cx) if isinstance(cx, (int, float)) else None,
                 "coord_y": int(cy) if isinstance(cy, (int, float)) else None,
                 "points": int(p.get("scoreValue") or 0) if p.get("scoringPlay") else 0,
+                "point_value": _shot_point_value(text, p.get("scoreValue")),
                 "made": bool(p.get("scoringPlay")),
             }
         )
