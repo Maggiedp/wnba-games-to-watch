@@ -3,6 +3,7 @@
 import functools
 import logging
 import math
+import re
 from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -560,6 +561,92 @@ def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
         "away_score": away_score,
         "plays": plays,
     }
+
+
+def _parse_distance_ft(text: str) -> Optional[float]:
+    """Shot distance in feet parsed from ESPN's play text ("23-foot ..."). None
+    when the text carries no distance (e.g. some putbacks) — the shot still
+    buckets by family × point value."""
+    m = re.search(r"(\d+)-foot", text or "")
+    return float(m.group(1)) if m else None
+
+
+def _shot_point_value(text: str, score_value) -> int:
+    """2 or 3 for a field-goal attempt. Made shots carry scoreValue (2/3);
+    misses carry 0, so fall back to the "three point" phrase ESPN emits on
+    missed threes."""
+    if "three point" in (text or "").lower():
+        return 3
+    if score_value in (2, 3):
+        return int(score_value)
+    return 2
+
+
+def _boxscore_athlete_map(data: dict) -> dict:
+    """athlete_id -> (displayName, team_id) from the summary boxscore — the
+    authoritative name/team source (participants carry only ids)."""
+    out = {}
+    for team in data.get("boxscore", {}).get("players", []):
+        team_id = str(team.get("team", {}).get("id", ""))
+        for stat in team.get("statistics", []):
+            for a in stat.get("athletes", []):
+                ath = a.get("athlete", {})
+                aid = str(ath.get("id", ""))
+                if aid:
+                    out[aid] = (ath.get("displayName", ""), team_id)
+    return out
+
+
+def fetch_shots(espn_id: str, timeout: int = 10) -> list[dict]:
+    """Field-goal attempts for a game from ESPN's summary play-by-play.
+
+    Returns one dict per FGA (free throws excluded). Shooter is participants[0]
+    (verified: the shooter even on a blocked shot); name/team resolved via the
+    boxscore. A play with no resolvable shooter is skipped (logged) rather than
+    misattributed — the daily job must degrade, not crash.
+    """
+    data = _get(f"{SITE_API}/summary", timeout=timeout, event=espn_id)
+    names = _boxscore_athlete_map(data)
+    shots: list[dict] = []
+    skipped = 0
+    for p in data.get("plays", []):
+        if not p.get("shootingPlay"):
+            continue
+        shot_type = p.get("type", {}).get("text", "") or ""
+        if shot_type.startswith("Free Throw"):
+            continue
+        participants = p.get("participants", []) or []
+        shooter_id = str(
+            (participants[0].get("athlete", {}) if participants else {}).get("id", "")
+        )
+        info = names.get(shooter_id)
+        play_id = str(p.get("id", ""))
+        if not shooter_id or info is None or not play_id:
+            skipped += 1
+            continue
+        name, team_id = info
+        text = p.get("text", "") or ""
+        coord = p.get("coordinate") or {}
+        cx, cy = coord.get("x"), coord.get("y")
+        shots.append(
+            {
+                "play_id": play_id,
+                "athlete_id": shooter_id,
+                "athlete_name": name,
+                "team_id": team_id,
+                "shot_type": shot_type,
+                "distance_ft": _parse_distance_ft(text),
+                "coord_x": int(cx) if isinstance(cx, (int, float)) else None,
+                "coord_y": int(cy) if isinstance(cy, (int, float)) else None,
+                "points": int(p.get("scoreValue") or 0) if p.get("scoringPlay") else 0,
+                "made": bool(p.get("scoringPlay")),
+            }
+        )
+    if skipped:
+        logger.warning(
+            "fetch_shots(%s): skipped %d unresolvable shooting plays", espn_id, skipped
+        )
+    return shots
 
 
 def fetch_today_game_statuses(game_date: str) -> dict[str, str]:
