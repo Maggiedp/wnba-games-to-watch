@@ -44,19 +44,24 @@ def test_three_pointer_families_by_point_value():
 
 
 def test_baseline_and_expected_pps():
-    # 10 identical 2pt rim shots, 6 made -> league make-rate 0.6 -> xPPS 1.2.
-    shots = [_shot("Layup Shot", 2, 2 if i < 6 else 0, i < 6) for i in range(10)]
+    # 30 identical 2pt rim shots (>= min_bucket), 18 made -> direct bucket rate 0.6 -> xPPS 1.2.
+    shots = [_shot("Layup Shot", 2, 2 if i < 18 else 0, i < 18) for i in range(30)]
     base = build_baseline(shots)
     assert round(expected_pps(shots[0], base), 3) == 1.2
 
 
 def test_small_bucket_falls_back():
-    # A lone 2pt mid shot (below min_bucket) borrows the family/point-value rate.
-    many_rim = [_shot("Layup Shot", 2, 2 if i < 5 else 0, i < 5) for i in range(10)]
-    one_mid = [_shot("Jump Shot", 15, 0, False)]
-    base = build_baseline(many_rim + one_mid, min_bucket=25)
-    # Fallback chain resolves to a finite, non-crashing expectation.
-    assert 0.0 <= expected_pps(one_mid[0], base) <= 3.0
+    # A well-populated ("mid", 2) family in the 10-15ft bin (40/100 made), plus ONE
+    # lone shot in a sparse 16-21ft bin. The lone shot's own bucket is under
+    # min_bucket, so its expectation must borrow the FAMILY rate, NOT its own
+    # degenerate 0% (a miss) rate. Family group = 100 + the lone shot = 40/101.
+    fam = [_shot("Jump Shot", 12, 2 if i < 40 else 0, i < 40) for i in range(100)]
+    lone = _shot("Jump Shot", 18, 0, False)
+    base = build_baseline(fam + [lone], min_bucket=25)
+    assert round(expected_pps(lone, base), 3) == round(
+        40 / 101 * 2, 3
+    )  # family fallback
+    assert expected_pps(lone, base) > 0.5  # NOT the degenerate 0.0 of its 1-shot bucket
 
 
 def test_leaderboard_eligibility_and_residual():

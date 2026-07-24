@@ -59,11 +59,15 @@ def _rate(pairs) -> float:
     return made / len(pairs) if pairs else 0.0
 
 
-def build_baseline(shots: list[dict], min_bucket: int = 25) -> dict:
+def build_baseline(
+    shots: list[dict], min_bucket: int = 25, min_family: int = 25
+) -> dict:
     """bucket_key -> league make-rate. Buckets under min_bucket attempts fall
     back to (family, point_value), then to point_value, so a sparse bucket never
-    hands a player an extreme expectation. Returned dict includes the fallback
-    levels under sentinel keys so expected_pps can resolve any shot."""
+    hands a player an extreme expectation. Both the bucket and family levels are
+    sample-gated (min_bucket, min_family); point_value is the terminal fallback
+    and is never gated. Returned dict includes the fallback levels under
+    sentinel keys so expected_pps can resolve any shot."""
     by_bucket = defaultdict(list)
     by_family = defaultdict(list)
     by_pv = defaultdict(list)
@@ -77,7 +81,7 @@ def build_baseline(shots: list[dict], min_bucket: int = 25) -> dict:
     for k, pairs in by_bucket.items():
         baseline[k] = _rate(pairs) if len(pairs) >= min_bucket else None
     for fk, pairs in by_family.items():
-        baseline["_family"][fk] = _rate(pairs)
+        baseline["_family"][fk] = _rate(pairs) if len(pairs) >= min_family else None
     for pv, pairs in by_pv.items():
         baseline["_pv"][pv] = _rate(pairs)
     return baseline
