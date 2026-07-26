@@ -46,3 +46,16 @@ def test_homepage_nav_links_to_shot_making(client):
     r = client.get("/")
     assert r.status_code == 200
     assert '<a href="/shot-making" class="site-nav-link">Shot-making</a>' in r.text
+
+
+def test_og_shot_making_png(client):
+    r = client.get("/og-shot-making.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert client.head("/og-shot-making.png").status_code == 200
+
+
+def test_shot_making_page_og_image_points_to_own_card(client):
+    html = client.get("/shot-making").text
+    assert "/og-shot-making.png" in html
+    assert "/og-home.png" not in html
