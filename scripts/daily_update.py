@@ -27,6 +27,7 @@ from src.data.wnba_schedule import (
     fetch_wnba_schedule_broadcasters,
 )
 from src.db.queries import (
+    delete_shot_making_season,
     delete_team_style_season,
     get_all_teams,
     get_completed_games,
@@ -544,24 +545,35 @@ def populate_shots_for_recent_completions(
     logger.info(f"Ingesting shots for {len(games)} completed games")
     total = 0
     for game in games:
+        # Ingest each game in its OWN transaction (commit=True) and roll back on
+        # failure, so one bad game can't corrupt the shared session for the rest
+        # of the loop, nor leave partially-staged rows that get committed anyway
+        # (mirrors the startup probes' rollback discipline; see scripts/CLAUDE.md).
+        # The retry gate is mere row-existence, so a game that rolls back to zero
+        # rows correctly stays a candidate next run.
         try:
             shots = fetch_shots(game.espn_id, timeout=timeout)
-            total += upsert_shots(session, game.espn_id, 2026, shots, commit=False)
+            total += upsert_shots(session, game.espn_id, 2026, shots, commit=True)
         except (ESPNAPIError, ESPNNotFoundError) as e:
+            session.rollback()
             logger.warning(
                 f"Could not fetch shots (espn_id={game.espn_id}): {e} — skipping"
             )
         except Exception as e:
+            session.rollback()
             logger.warning(
                 f"Failed to ingest shots (espn_id={game.espn_id}): {e} — skipping"
             )
-    session.commit()
     logger.info(f"Ingested {total} shots")
 
 
 def recompute_shot_making(session, season: int) -> int:
     """Rebuild the shot_making leaderboard for a season from `shots`. Wholesale
-    recompute (trivial at this scale). Returns the eligible player count."""
+    recompute: the season slice is DELETED and re-inserted in one transaction
+    (mirrors populate_team_style / store_elo_history) so a player who drops below
+    the eligibility cutoff — or is removed by a corrected re-ingest — can't leave
+    a stale row the DB-only endpoint keeps serving. Trivial at this scale.
+    Returns the eligible player count."""
     shot_rows = get_shots_for_season(session, season)
     shots = [
         {
@@ -578,6 +590,9 @@ def recompute_shot_making(session, season: int) -> int:
         for s in shot_rows
     ]
     board = compute_leaderboard(shots)
+    # Replace the whole season slice atomically — drop stale rows first, then
+    # insert the freshly computed board; the single commit below makes it atomic.
+    delete_shot_making_season(session, season)
     for r in board:
         upsert_shot_making(
             session,

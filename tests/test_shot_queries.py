@@ -121,6 +121,30 @@ def test_upsert_shots_is_idempotent(session):
     assert len(q.get_shots_for_season(session, 2026)) == 1
 
 
+def test_upsert_shots_dedups_within_batch(session):
+    # ESPN returning the same play_id twice in one payload must not hit the
+    # uq_shot_play constraint (Codex R1) — the second copy is skipped, one row.
+    def _shot(pid):
+        return {
+            "play_id": pid,
+            "athlete_id": "10",
+            "athlete_name": "X",
+            "team_id": "1",
+            "shot_type": "Jump Shot",
+            "distance_ft": 15.0,
+            "coord_x": 1,
+            "coord_y": 2,
+            "points": 2,
+            "point_value": 2,
+            "made": True,
+        }
+
+    assert (
+        q.upsert_shots(session, "G1", 2026, [_shot("1"), _shot("1"), _shot("2")]) == 2
+    )
+    assert len(q.get_shots_for_season(session, 2026)) == 2
+
+
 def test_missing_shots_excludes_already_ingested(session):
     _two_teams_and_game(session, "G1", "2026-07-20")
     assert [g.espn_id for g in q.get_completed_games_missing_shots(session, 2026)] == [

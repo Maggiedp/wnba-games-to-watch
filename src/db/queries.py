@@ -1250,6 +1250,16 @@ def delete_team_style_season(session: Session, season: int) -> None:
     )
 
 
+def delete_shot_making_season(session: Session, season: int) -> None:
+    """Delete all shot_making rows for a season (no commit). The daily recompute
+    replaces the whole board in one transaction so a player who drops below the
+    eligibility cutoff (or is removed by a corrected re-ingest) can't leave a
+    stale row the DB-only /api/shot-making endpoint keeps serving."""
+    session.query(ShotMaking).filter(ShotMaking.season == season).delete(
+        synchronize_session=False
+    )
+
+
 def upsert_shots(
     session: Session,
     espn_game_id: str,
@@ -1259,7 +1269,9 @@ def upsert_shots(
     commit: bool = True,
 ) -> int:
     """Insert FGA rows for a game, idempotent on (espn_game_id, play_id). Returns
-    the count newly inserted (already-present play_ids are skipped)."""
+    the count newly inserted (already-present play_ids are skipped). Dedups WITHIN
+    the incoming batch too, so a duplicate play_id in one ESPN payload can't hit
+    the uq_shot_play constraint and abort the game's transaction."""
     existing = {
         r[0]
         for r in session.query(Shot.play_id)
@@ -1270,6 +1282,7 @@ def upsert_shots(
     for s in shots:
         if s["play_id"] in existing:
             continue
+        existing.add(s["play_id"])  # guard against dupes within this batch
         session.add(
             Shot(
                 espn_game_id=espn_game_id,

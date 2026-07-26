@@ -99,3 +99,111 @@ def test_recompute_shot_making_writes_rows(session):
     assert du.recompute_shot_making(session, 2026) == 1
     assert q.get_shot_making(session, 2026)[0].fga == 120
     assert q.get_shot_making(session, 2026)[0].team_abbr == "LV"
+
+
+def test_populate_shots_isolates_a_bad_game(session, monkeypatch):
+    # Two completed games; G2's payload carries a NULL in a NOT-NULL column so its
+    # per-game commit fails. G1 must stay committed and G2 must leave ZERO rows and
+    # remain a retry candidate — no cross-game transaction corruption (Codex R1).
+    session.add_all([Team(id=1, name="A"), Team(id=2, name="B")])
+    session.add_all(
+        [
+            Game(
+                id=1,
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-07-20",
+                espn_id="G1",
+                winner_id=1,
+                season_type=2,
+            ),
+            Game(
+                id=2,
+                team_a_id=1,
+                team_b_id=2,
+                date="2026-07-19",
+                espn_id="G2",
+                winner_id=1,
+                season_type=2,
+            ),
+        ]
+    )
+    session.commit()
+
+    def fake_fetch(espn_id, **k):
+        shot = {
+            "play_id": "1",
+            "athlete_id": "10",
+            "athlete_name": "X",
+            "team_id": "1",
+            "team_abbr": "LV",
+            "shot_type": "Layup Shot",
+            "distance_ft": 2.0,
+            "coord_x": None,
+            "coord_y": None,
+            "points": 2,
+            "point_value": 2,
+            "made": True,
+        }
+        if espn_id == "G2":
+            shot["point_value"] = None  # NOT NULL -> commit raises IntegrityError
+        return [shot]
+
+    monkeypatch.setattr(du, "fetch_shots", fake_fetch)
+    du.populate_shots_for_recent_completions(session)  # must not raise
+
+    persisted = {s.espn_game_id for s in q.get_shots_for_season(session, 2026)}
+    assert persisted == {"G1"}  # G1 committed, G2 rolled back cleanly
+    candidates = {g.espn_id for g in q.get_completed_games_missing_shots(session, 2026)}
+    assert "G2" in candidates and "G1" not in candidates  # G2 still retryable
+
+
+def test_recompute_removes_stale_players(session):
+    # A pre-existing shot_making row for a player who has NO shots in this
+    # recompute (e.g. dropped below min_fga after a corrected re-ingest). The
+    # wholesale replace must drop it, not keep serving a ghost (Codex R2).
+    q.upsert_shot_making(
+        session,
+        2026,
+        "gone",
+        athlete_name="Gone",
+        team_id="9",
+        team_abbr="XX",
+        fga=200,
+        made=100,
+        actual_pts=1.0,
+        expected_pts=1.0,
+        points_added=0.0,
+        points_added_per_100=0.0,
+        actual_pps=1.0,
+        expected_pps=1.0,
+        diet="{}",
+    )
+    for i in range(120):
+        q.upsert_shots(
+            session,
+            "G1",
+            2026,
+            [
+                {
+                    "play_id": str(i),
+                    "athlete_id": "keep",
+                    "athlete_name": "Keep",
+                    "team_id": "1",
+                    "team_abbr": "LV",
+                    "shot_type": "Layup Shot",
+                    "distance_ft": 2.0,
+                    "coord_x": None,
+                    "coord_y": None,
+                    "points": 2 if i < 80 else 0,
+                    "point_value": 2,
+                    "made": i < 80,
+                }
+            ],
+            commit=False,
+        )
+    session.commit()
+    du.recompute_shot_making(session, 2026)
+    ids = {r.athlete_id for r in q.get_shot_making(session, 2026)}
+    assert "keep" in ids
+    assert "gone" not in ids  # stale row removed by the wholesale replace
