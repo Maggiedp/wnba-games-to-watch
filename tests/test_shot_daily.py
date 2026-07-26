@@ -43,6 +43,7 @@ def test_populate_shots_ingests_and_is_idempotent(session, monkeypatch):
             "athlete_id": "10",
             "athlete_name": "X",
             "team_id": "1",
+            "team_abbr": "LV",
             "shot_type": "Layup Shot",
             "distance_ft": 2.0,
             "coord_x": 1,
@@ -82,6 +83,7 @@ def test_recompute_shot_making_writes_rows(session):
                     "athlete_id": "10",
                     "athlete_name": "X",
                     "team_id": "1",
+                    "team_abbr": "LV",
                     "shot_type": "Layup Shot",
                     "distance_ft": 2.0,
                     "coord_x": None,
@@ -96,3 +98,4 @@ def test_recompute_shot_making_writes_rows(session):
     session.commit()
     assert du.recompute_shot_making(session, 2026) == 1
     assert q.get_shot_making(session, 2026)[0].fga == 120
+    assert q.get_shot_making(session, 2026)[0].team_abbr == "LV"

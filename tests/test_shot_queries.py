@@ -26,6 +26,7 @@ def test_shot_table_roundtrips_and_dedups(session):
             athlete_id="5345444",
             athlete_name="Laura Juskaite",
             team_id="20",
+            team_abbr="LV",
             shot_type="Driving Layup Shot",
             distance_ft=4.0,
             coord_x=28,
@@ -37,6 +38,8 @@ def test_shot_table_roundtrips_and_dedups(session):
     )
     session.commit()
     assert session.query(Shot).count() == 1
+    row = session.query(Shot).one()
+    assert row.team_abbr == "LV"
     from sqlalchemy.exc import IntegrityError
 
     session.add(
@@ -47,6 +50,7 @@ def test_shot_table_roundtrips_and_dedups(session):
             athlete_id="5345444",
             athlete_name="Laura Juskaite",
             team_id="20",
+            team_abbr="LV",
             shot_type="x",
             points=0,
             point_value=2,
@@ -152,6 +156,7 @@ def test_shot_making_upsert_and_read(session):
         "10",
         athlete_name="X",
         team_id="1",
+        team_abbr="LV",
         fga=100,
         made=50,
         actual_pts=110.0,
@@ -168,6 +173,7 @@ def test_shot_making_upsert_and_read(session):
         "10",
         athlete_name="X",
         team_id="1",
+        team_abbr="LV",
         fga=101,
         made=51,
         actual_pts=112.0,
@@ -180,4 +186,5 @@ def test_shot_making_upsert_and_read(session):
     )
     rows = q.get_shot_making(session, 2026)
     assert len(rows) == 1 and rows[0].fga == 101  # upsert, not insert
+    assert rows[0].team_abbr == "LV"
     assert q.get_shot_making_seasons(session) == [2026]

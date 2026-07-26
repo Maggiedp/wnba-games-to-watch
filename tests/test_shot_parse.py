@@ -25,6 +25,10 @@ def test_fetch_shots_excludes_free_throws_and_attributes_shooter(monkeypatch):
     assert shots and all(s["athlete_name"] for s in shots)
     assert all(s["points"] in (0, 2, 3) for s in shots)
     assert all(s["point_value"] in (2, 3) for s in shots)
+    # Every shot carries a resolved team abbreviation string.
+    assert all(isinstance(s["team_abbr"], str) and s["team_abbr"] for s in shots)
+    # Real ESPN abbreviations parse from the fixture (not raw numeric team ids).
+    assert any(s["team_abbr"] in ("LV", "TOR") for s in shots)
     # A missed three-pointer (points=0) is still classified as a 3, not a 2 —
     # the bug this test guards against: ESPN gives points=0 on a miss, and
     # only the play text (not scoreValue) reveals it was a three.

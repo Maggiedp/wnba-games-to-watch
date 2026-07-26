@@ -7,11 +7,14 @@ from src.scoring.shot_making import (
 )
 
 
-def _shot(atype, dist, pts, made, aid="1", name="P", team="10", pv=None):
+def _shot(
+    atype, dist, pts, made, aid="1", name="P", team="10", pv=None, team_abbr="LV"
+):
     return {
         "athlete_id": aid,
         "athlete_name": name,
         "team_id": team,
+        "team_abbr": team_abbr,
         "shot_type": atype,
         "distance_ft": dist,
         "points": pts,
@@ -76,3 +79,4 @@ def test_leaderboard_eligibility_and_residual():
     assert board[0]["athlete_id"] == "hot"  # sorted by points_added desc
     assert board[0]["points_added"] > board[-1]["points_added"]
     assert round(sum(r["diet"].get("rim", 0) for r in board[:1]), 3) == 1.0
+    assert all(r["team_abbr"] == "LV" for r in board)

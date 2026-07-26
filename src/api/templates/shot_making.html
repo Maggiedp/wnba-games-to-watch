@@ -182,7 +182,7 @@
     return `<tr>
       <td class="rank-cell">${rank}</td>
       <td class="player-cell">${escapeHtml(p.athlete_name)}</td>
-      <td class="team-cell">${escapeHtml(p.team_id)}</td>
+      <td class="team-cell">${escapeHtml(p.team_abbr || p.team_id)}</td>
       <td class="fga-cell">${p.fga}</td>
       <td class="made-cell">${fgPct}</td>
       <td>${p.expected_pps.toFixed(3)}</td>

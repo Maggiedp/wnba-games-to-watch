@@ -108,6 +108,7 @@ def compute_leaderboard(shots: list[dict], min_fga: int = 100) -> list[dict]:
             "expected": 0.0,
             "name": "",
             "team": "",
+            "team_abbr": "",
             "diet": defaultdict(int),
         }
     )
@@ -115,6 +116,7 @@ def compute_leaderboard(shots: list[dict], min_fga: int = 100) -> list[dict]:
         a = agg[s["athlete_id"]]
         a["name"] = s["athlete_name"]
         a["team"] = s["team_id"]
+        a["team_abbr"] = s.get("team_abbr", "")
         a["fga"] += 1
         a["made"] += 1 if s.get("made") else 0
         a["actual"] += s.get("points") or 0
@@ -131,6 +133,7 @@ def compute_leaderboard(shots: list[dict], min_fga: int = 100) -> list[dict]:
                 "athlete_id": aid,
                 "athlete_name": a["name"],
                 "team_id": a["team"],
+                "team_abbr": a["team_abbr"],
                 "fga": a["fga"],
                 "made": a["made"],
                 "actual_pts": round(a["actual"], 2),

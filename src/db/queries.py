@@ -1278,6 +1278,7 @@ def upsert_shots(
                 athlete_id=s["athlete_id"],
                 athlete_name=s["athlete_name"],
                 team_id=s["team_id"],
+                team_abbr=s.get("team_abbr", ""),
                 shot_type=s["shot_type"],
                 distance_ft=s["distance_ft"],
                 coord_x=s["coord_x"],
@@ -1325,6 +1326,7 @@ def upsert_shot_making(
     *,
     athlete_name: str,
     team_id: str,
+    team_abbr: str = "",
     fga: int,
     made: int,
     actual_pts: float,
@@ -1347,6 +1349,7 @@ def upsert_shot_making(
         session.add(row)
     row.athlete_name = athlete_name
     row.team_id = team_id
+    row.team_abbr = team_abbr
     row.fga = fga
     row.made = made
     row.actual_pts = actual_pts

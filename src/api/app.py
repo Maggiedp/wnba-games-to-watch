@@ -917,6 +917,7 @@ async def get_shot_making_endpoint():
                     "athlete_id": r.athlete_id,
                     "athlete_name": r.athlete_name,
                     "team_id": r.team_id,
+                    "team_abbr": r.team_abbr,
                     "fga": r.fga,
                     "made": r.made,
                     "made_pct": round(r.made / r.fga, 3) if r.fga else 0.0,

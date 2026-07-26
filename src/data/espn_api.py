@@ -583,17 +583,19 @@ def _shot_point_value(text: str, score_value) -> int:
 
 
 def _boxscore_athlete_map(data: dict) -> dict:
-    """athlete_id -> (displayName, team_id) from the summary boxscore — the
-    authoritative name/team source (participants carry only ids)."""
+    """athlete_id -> (displayName, team_id, team_abbr) from the summary
+    boxscore — the authoritative name/team source (participants carry only
+    ids)."""
     out = {}
     for team in data.get("boxscore", {}).get("players", []):
         team_id = str(team.get("team", {}).get("id", ""))
+        team_abbr = team.get("team", {}).get("abbreviation", "")
         for stat in team.get("statistics", []):
             for a in stat.get("athletes", []):
                 ath = a.get("athlete", {})
                 aid = str(ath.get("id", ""))
                 if aid:
-                    out[aid] = (ath.get("displayName", ""), team_id)
+                    out[aid] = (ath.get("displayName", ""), team_id, team_abbr)
     return out
 
 
@@ -624,7 +626,7 @@ def fetch_shots(espn_id: str, timeout: int = 10) -> list[dict]:
         if not shooter_id or info is None or not play_id:
             skipped += 1
             continue
-        name, team_id = info
+        name, team_id, team_abbr = info
         text = p.get("text", "") or ""
         coord = p.get("coordinate") or {}
         cx, cy = coord.get("x"), coord.get("y")
@@ -634,6 +636,7 @@ def fetch_shots(espn_id: str, timeout: int = 10) -> list[dict]:
                 "athlete_id": shooter_id,
                 "athlete_name": name,
                 "team_id": team_id,
+                "team_abbr": team_abbr,
                 "shot_type": shot_type,
                 "distance_ft": _parse_distance_ft(text),
                 "coord_x": int(cx) if isinstance(cx, (int, float)) else None,
