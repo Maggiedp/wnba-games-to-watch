@@ -248,3 +248,61 @@ def test_populate_shots_derives_current_season(session, monkeypatch):
     rows_2027 = q.get_shots_for_season(session, 2027)
     assert len(rows_2027) == 1 and rows_2027[0].season == 2027
     assert q.get_shots_for_season(session, 2026) == []
+
+
+def test_recompute_failure_preserves_previous_board(session, monkeypatch):
+    # A recompute that raises AFTER the season delete must roll back its own
+    # transaction so the previous board survives and no later commit on the same
+    # session can publish the emptied board (Codex R3).
+    q.upsert_shot_making(
+        session,
+        2026,
+        "old",
+        athlete_name="Old",
+        team_id="1",
+        team_abbr="LV",
+        fga=150,
+        made=80,
+        actual_pts=170.0,
+        expected_pts=160.0,
+        points_added=10.0,
+        points_added_per_100=6.67,
+        actual_pps=1.133,
+        expected_pps=1.067,
+        diet="{}",
+    )
+    for i in range(120):
+        q.upsert_shots(
+            session,
+            "G1",
+            2026,
+            [
+                {
+                    "play_id": str(i),
+                    "athlete_id": "keep",
+                    "athlete_name": "Keep",
+                    "team_id": "1",
+                    "team_abbr": "LV",
+                    "shot_type": "Layup Shot",
+                    "distance_ft": 2.0,
+                    "coord_x": None,
+                    "coord_y": None,
+                    "points": 2 if i < 80 else 0,
+                    "point_value": 2,
+                    "made": i < 80,
+                }
+            ],
+            commit=False,
+        )
+    session.commit()
+
+    def boom(*a, **k):
+        raise RuntimeError("insert failed mid-rebuild")
+
+    monkeypatch.setattr(du, "upsert_shot_making", boom)
+    with pytest.raises(RuntimeError):
+        du.recompute_shot_making(session, 2026)
+    # The delete was rolled back — previous board intact — and a later commit
+    # (simulating refresh_recent_excitement_scores) can't publish an empty board.
+    session.commit()
+    assert {r.athlete_id for r in q.get_shot_making(session, 2026)} == {"old"}

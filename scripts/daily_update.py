@@ -604,28 +604,37 @@ def recompute_shot_making(session, season: int) -> int:
     ]
     board = compute_leaderboard(shots)
     # Replace the whole season slice atomically — drop stale rows first, then
-    # insert the freshly computed board; the single commit below makes it atomic.
-    delete_shot_making_season(session, season)
-    for r in board:
-        upsert_shot_making(
-            session,
-            season,
-            r["athlete_id"],
-            athlete_name=r["athlete_name"],
-            team_id=r["team_id"],
-            team_abbr=r["team_abbr"],
-            fga=r["fga"],
-            made=r["made"],
-            actual_pts=r["actual_pts"],
-            expected_pts=r["expected_pts"],
-            points_added=r["points_added"],
-            points_added_per_100=r["points_added_per_100"],
-            actual_pps=r["actual_pps"],
-            expected_pps=r["expected_pps"],
-            diet=json.dumps(r["diet"]),
-            commit=False,
-        )
-    session.commit()
+    # insert the freshly computed board; the single commit makes it atomic. A
+    # failure AFTER the delete must roll back its OWN transaction: otherwise the
+    # pending DELETE (an emptied board) survives on the shared session and the
+    # next caller's commit (refresh_recent_excitement_scores) would publish it.
+    # Re-raise so the non-fatal wrapper in main() logs it; the previous board
+    # stays intact (mirrors populate_team_style's self-contained rollback).
+    try:
+        delete_shot_making_season(session, season)
+        for r in board:
+            upsert_shot_making(
+                session,
+                season,
+                r["athlete_id"],
+                athlete_name=r["athlete_name"],
+                team_id=r["team_id"],
+                team_abbr=r["team_abbr"],
+                fga=r["fga"],
+                made=r["made"],
+                actual_pts=r["actual_pts"],
+                expected_pts=r["expected_pts"],
+                points_added=r["points_added"],
+                points_added_per_100=r["points_added_per_100"],
+                actual_pps=r["actual_pps"],
+                expected_pps=r["expected_pps"],
+                diet=json.dumps(r["diet"]),
+                commit=False,
+            )
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     logger.info(f"Recomputed shot-making for {len(board)} players")
     return len(board)
 
@@ -1456,6 +1465,10 @@ def main() -> int:
                 populate_shots_for_recent_completions(session)
                 recompute_shot_making(session, int(today[:4]))
             except Exception as e:
+                # Defensive: recompute_shot_making already rolls back its own
+                # failed transaction, but roll back here too so no pending state
+                # leaks into refresh_recent_excitement_scores' commit below.
+                session.rollback()
                 logger.warning(f"Shot-making update failed (non-fatal): {e}")
             try:
                 refresh_recent_excitement_scores(session)

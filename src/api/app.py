@@ -44,7 +44,6 @@ from src.db.queries import (
     get_rankings_by_broadcaster,
     get_shape_seasons,
     get_shot_making,
-    get_shot_making_seasons,
     get_team_abbrev_map,
     get_team_records,
     get_team_style_season_counts,
@@ -896,13 +895,16 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
 
 @app.get("/api/shot-making")
 async def get_shot_making_endpoint():
-    """Shot-making leaderboard for a season (DB-only, precomputed). Ranks players
-    by points added over expected (actual - xPPS). Defaults to the newest
-    populated season (mirrors /api/replay); v1 exposes no season param."""
+    """Shot-making leaderboard for the CURRENT season (DB-only, precomputed).
+    Ranks players by points added over expected (actual - xPPS); v1 exposes no
+    season param. Keys off the current season (NOT the newest *populated* season
+    like /api/replay) because the page frames the data as "this season" — an
+    empty current season returns an empty board (its graceful empty state), never
+    last season's leaderboard silently mislabeled as current (mirrors the
+    /playoff-odds convention: never serve stale-season data as current)."""
     session = get_session()
     try:
-        seasons = get_shot_making_seasons(session)
-        season = seasons[0] if seasons else int(today_et()[:4])
+        season = int(today_et()[:4])
         rows = get_shot_making(session, season)
         rows.sort(key=lambda r: r.points_added, reverse=True)
         players = []
