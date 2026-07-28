@@ -51,9 +51,42 @@
             .shots-header-row {
                 display: flex;
                 align-items: center;
-                justify-content: flex-end;
+                justify-content: space-between;
+                gap: 12px 16px;
+                flex-wrap: wrap;
                 margin-bottom: 14px;
             }
+
+            /* Shot-diet color key + column-metric definitions */
+            .diet-legend {
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 6px 12px;
+                font-size: 0.78rem;
+                color: var(--text-muted);
+            }
+            .diet-legend-label {
+                font-weight: 600;
+                color: var(--navy-3);
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                font-size: 0.72rem;
+            }
+            .diet-key { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+            .diet-sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+            .shots-table th abbr {
+                text-decoration: underline dotted;
+                text-underline-offset: 2px;
+                cursor: help;
+            }
+            .shots-defs {
+                color: var(--text-subtle);
+                font-size: 0.8rem;
+                line-height: 1.6;
+                margin: 14px 0 0;
+            }
+            .shots-defs b { color: var(--navy-3); font-weight: 600; }
             .shots-table-scroll { overflow-x: auto; }
             .shots-table {
                 width: 100%;
@@ -125,6 +158,14 @@
 
   <section class="shots-card">
     <div class="shots-header-row">
+      <div class="diet-legend" aria-label="Shot diet colors">
+        <span class="diet-legend-label">Shot diet</span>
+        <span class="diet-key"><i class="diet-sw diet-rim"></i>Rim</span>
+        <span class="diet-key"><i class="diet-sw diet-floater"></i>Floater</span>
+        <span class="diet-key"><i class="diet-sw diet-mid"></i>Mid-range</span>
+        <span class="diet-key"><i class="diet-sw diet-three"></i>Three</span>
+        <span class="diet-key"><i class="diet-sw diet-other"></i>Other</span>
+      </div>
       <div class="sort-toggle" id="shots-sort-toggle" role="group" aria-label="Sort shot-making leaderboard">
         <button class="sort-btn" data-sort="added" type="button" aria-pressed="true">Points added</button>
         <button class="sort-btn" data-sort="per100" type="button" aria-pressed="false">Per 100</button>
@@ -140,16 +181,22 @@
             <th>Team</th>
             <th class="fga-col">FGA</th>
             <th class="made-col">FG%</th>
-            <th>xPPS</th>
-            <th>PPS</th>
+            <th><abbr title="Expected points per shot — the league-average return from the same spots and shot types">xPPS</abbr></th>
+            <th><abbr title="Points per shot — her actual return">PPS</abbr></th>
             <th>Points added</th>
             <th>Per 100</th>
-            <th>Diet</th>
+            <th>Shot diet</th>
           </tr>
         </thead>
         <tbody id="shots-tbody"></tbody>
       </table>
     </div>
+    <p class="shots-defs">
+      <b>xPPS</b> expected points per shot (league average from those spots &amp; shot types) ·
+      <b>PPS</b> her actual points per shot ·
+      <b>Points added</b> (PPS − xPPS) × attempts ·
+      <b>Per 100</b> points added per 100 shots.
+    </p>
   </section>
 </div>
 
