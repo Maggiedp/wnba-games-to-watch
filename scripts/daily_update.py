@@ -541,15 +541,29 @@ def populate_shots_for_recent_completions(
     today (not hard-coded) so it rolls over cleanly and stays consistent with
     recompute_shot_making(int(today[:4])).
 
-    Known limitation (accepted, won't-fix): the retry gate is mere row-existence,
-    so a game whose payload parsed only PARTIALLY (fetch_shots skips a shooting
-    play whose shooter can't be resolved from the boxscore) is frozen at first
-    ingest with those shots permanently missing. Practically near-nil: this runs
-    ~6h after games end, so the boxscore is fully populated and skips are 0; a
-    skip needs an ESPN defect (rate ~like game_shapes UNSHAPEABLE) and costs ~1
-    shot of ~150, not the game. Mirrors game_shapes' accepted-partial posture. If
-    it ever matters, the repair path is a bounded recent-window re-ingest (the
-    upsert is already idempotent/gap-filling), like refresh_recent_excitement."""
+    Known limitations (accepted, won't-fix) — all facets of "a game's shot slice
+    is frozen at first successful ingest, because the retry gate is mere row-
+    existence and ingested games are never re-fetched":
+    (1) A PARTIAL parse (fetch_shots skips a shooting play whose shooter can't be
+        resolved from the boxscore) freezes those shots as missing. Near-nil: runs
+        ~6h after games end, so the boxscore is populated and skips are 0; a skip
+        needs an ESPN defect (rate ~like game_shapes UNSHAPEABLE) and costs ~1
+        shot of ~150, not the game.
+    (2) A later ESPN CORRECTION to an already-ingested play (shooter/team fix,
+        make/miss flip, point-value fix) is never re-applied — same root cause
+        (no re-fetch of ingested games); upsert_shots' skip-existing is therefore
+        inert for corrections, not the cause. Rarer than (1).
+    (3) The candidate queue is newest-first with a cap (DAILY_EXCITEMENT_RETRY_CAP)
+        and NO last-attempt rotation field (unlike excitement/game_shape, which
+        re-attempt games and thus need it). Shots never re-attempt an ingested
+        game, so the queue holds only not-yet-ingested games and drains newest-
+        first at ~cap/run; a permanent-failure wastes 1 slot but can't starve the
+        backlog unless 50+ newest games fail simultaneously (implausible).
+    Repair path for all three if ever needed: a bounded recent-window re-ingest
+    (upsert is already idempotent/gap-filling) — like refresh_recent_excitement —
+    which would also want upsert_shots to update mutable fields, not skip. Decided
+    against for v1 (Codex adversarial R2–R4): impact is a handful of shots in rare
+    ESPN-defect cases; mirrors game_shapes' accepted-partial posture."""
     season = int(today_et()[:4])
     games = get_completed_games_missing_shots(session, season_year=season, limit=limit)
     if not games:
