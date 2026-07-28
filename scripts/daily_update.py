@@ -539,7 +539,17 @@ def populate_shots_for_recent_completions(
     Bounded + non-fatal (mirrors populate_game_shapes_for_recent_completions): a
     failing game is skipped and re-tried next run. The season is derived from
     today (not hard-coded) so it rolls over cleanly and stays consistent with
-    recompute_shot_making(int(today[:4]))."""
+    recompute_shot_making(int(today[:4])).
+
+    Known limitation (accepted, won't-fix): the retry gate is mere row-existence,
+    so a game whose payload parsed only PARTIALLY (fetch_shots skips a shooting
+    play whose shooter can't be resolved from the boxscore) is frozen at first
+    ingest with those shots permanently missing. Practically near-nil: this runs
+    ~6h after games end, so the boxscore is fully populated and skips are 0; a
+    skip needs an ESPN defect (rate ~like game_shapes UNSHAPEABLE) and costs ~1
+    shot of ~150, not the game. Mirrors game_shapes' accepted-partial posture. If
+    it ever matters, the repair path is a bounded recent-window re-ingest (the
+    upsert is already idempotent/gap-filling), like refresh_recent_excitement."""
     season = int(today_et()[:4])
     games = get_completed_games_missing_shots(session, season_year=season, limit=limit)
     if not games:
