@@ -48,10 +48,16 @@ def _distance_bin(distance_ft, point_value: int) -> str:
     return "na"
 
 
+def _family_label(shot: dict, pv: int) -> str:
+    """The diet/bucket family for a shot: 'three' for any 3-pointer (by point
+    value, not type text), else the type-text family. Single source of truth
+    shared by bucket_key and the leaderboard diet tally."""
+    return "three" if pv == 3 else shot_family(shot.get("shot_type", ""))
+
+
 def bucket_key(shot: dict) -> tuple:
     pv = _point_value(shot)
-    fam = "three" if pv == 3 else shot_family(shot.get("shot_type", ""))
-    return (_distance_bin(shot.get("distance_ft"), pv), fam, pv)
+    return (_distance_bin(shot.get("distance_ft"), pv), _family_label(shot, pv), pv)
 
 
 def _rate(pairs) -> float:
@@ -107,22 +113,22 @@ def compute_leaderboard(shots: list[dict], min_fga: int = 100) -> list[dict]:
             "actual": 0.0,
             "expected": 0.0,
             "name": "",
-            "team_shots": defaultdict(int),  # team_id -> shots (for primary team)
-            "team_abbrs": {},  # team_id -> abbr
+            # team_id -> [shot count, abbr]; picks the deterministic primary team.
+            "teams": defaultdict(lambda: [0, ""]),
             "diet": defaultdict(int),
         }
     )
     for s in shots:
         a = agg[s["athlete_id"]]
         a["name"] = s["athlete_name"]
-        a["team_shots"][s["team_id"]] += 1
-        a["team_abbrs"][s["team_id"]] = s.get("team_abbr", "")
+        team = a["teams"][s["team_id"]]
+        team[0] += 1
+        team[1] = s.get("team_abbr", "")
         a["fga"] += 1
         a["made"] += 1 if s.get("made") else 0
         a["actual"] += s.get("points") or 0
         a["expected"] += expected_pps(s, baseline)
-        pv = _point_value(s)
-        a["diet"]["three" if pv == 3 else shot_family(s.get("shot_type", ""))] += 1
+        a["diet"][_family_label(s, _point_value(s))] += 1
     rows = []
     for aid, a in agg.items():
         if a["fga"] < min_fga:
@@ -131,13 +137,13 @@ def compute_leaderboard(shots: list[dict], min_fga: int = 100) -> list[dict]:
         # Deterministic primary team = the team the player took the most shots for
         # this season, tie-broken by team_id. A traded player's displayed team no
         # longer flaps across rebuilds from last-write-wins over an unordered query.
-        team_id = max(a["team_shots"], key=lambda t: (a["team_shots"][t], t))
+        team_id = max(a["teams"], key=lambda t: (a["teams"][t][0], t))
         rows.append(
             {
                 "athlete_id": aid,
                 "athlete_name": a["name"],
                 "team_id": team_id,
-                "team_abbr": a["team_abbrs"][team_id],
+                "team_abbr": a["teams"][team_id][1],
                 "fga": a["fga"],
                 "made": a["made"],
                 "actual_pts": round(a["actual"], 2),

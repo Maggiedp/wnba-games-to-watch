@@ -1382,17 +1382,6 @@ def get_shot_making(session: Session, season: int) -> list[ShotMaking]:
     return session.query(ShotMaking).filter(ShotMaking.season == season).all()
 
 
-def get_shot_making_seasons(session: Session) -> list[int]:
-    """Distinct seasons present in shot_making, newest first."""
-    rows = (
-        session.query(ShotMaking.season)
-        .distinct()
-        .order_by(ShotMaking.season.desc())
-        .all()
-    )
-    return [r[0] for r in rows]
-
-
 def has_alerted(session: Session, espn_id: str) -> bool:
     """True if we've already pinged about this game (any date)."""
     return session.query(ThrillerAlert).filter_by(espn_id=espn_id).first() is not None

@@ -211,4 +211,3 @@ def test_shot_making_upsert_and_read(session):
     rows = q.get_shot_making(session, 2026)
     assert len(rows) == 1 and rows[0].fga == 101  # upsert, not insert
     assert rows[0].team_abbr == "LV"
-    assert q.get_shot_making_seasons(session) == [2026]
