@@ -80,3 +80,23 @@ def test_leaderboard_eligibility_and_residual():
     assert board[0]["points_added"] > board[-1]["points_added"]
     assert round(sum(r["diet"].get("rim", 0) for r in board[:1]), 3) == 1.0
     assert all(r["team_abbr"] == "LV" for r in board)
+
+
+def test_traded_player_team_is_deterministic_plurality():
+    # A player traded mid-season: 70 shots for LV, 50 for the old club (SEA).
+    # The row must show the PLURALITY team (LV) regardless of shot order, not
+    # last-write-wins over an unordered query (Codex R2).
+    lv = [
+        _shot("Layup Shot", 2, 2, True, aid="p", name="P", team="17", team_abbr="LV")
+        for _ in range(70)
+    ]
+    sea = [
+        _shot("Layup Shot", 2, 2, True, aid="p", name="P", team="14", team_abbr="SEA")
+        for _ in range(50)
+    ]
+    for order in (lv + sea, sea + lv, sea[:25] + lv + sea[25:]):
+        board = compute_leaderboard(order, min_fga=100)
+        assert len(board) == 1
+        assert board[0]["team_id"] == "17"  # plurality team, stable across orders
+        assert board[0]["team_abbr"] == "LV"
+        assert board[0]["fga"] == 120  # both teams' shots still counted

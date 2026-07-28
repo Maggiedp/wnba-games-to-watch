@@ -107,16 +107,16 @@ def compute_leaderboard(shots: list[dict], min_fga: int = 100) -> list[dict]:
             "actual": 0.0,
             "expected": 0.0,
             "name": "",
-            "team": "",
-            "team_abbr": "",
+            "team_shots": defaultdict(int),  # team_id -> shots (for primary team)
+            "team_abbrs": {},  # team_id -> abbr
             "diet": defaultdict(int),
         }
     )
     for s in shots:
         a = agg[s["athlete_id"]]
         a["name"] = s["athlete_name"]
-        a["team"] = s["team_id"]
-        a["team_abbr"] = s.get("team_abbr", "")
+        a["team_shots"][s["team_id"]] += 1
+        a["team_abbrs"][s["team_id"]] = s.get("team_abbr", "")
         a["fga"] += 1
         a["made"] += 1 if s.get("made") else 0
         a["actual"] += s.get("points") or 0
@@ -128,12 +128,16 @@ def compute_leaderboard(shots: list[dict], min_fga: int = 100) -> list[dict]:
         if a["fga"] < min_fga:
             continue
         added = a["actual"] - a["expected"]
+        # Deterministic primary team = the team the player took the most shots for
+        # this season, tie-broken by team_id. A traded player's displayed team no
+        # longer flaps across rebuilds from last-write-wins over an unordered query.
+        team_id = max(a["team_shots"], key=lambda t: (a["team_shots"][t], t))
         rows.append(
             {
                 "athlete_id": aid,
                 "athlete_name": a["name"],
-                "team_id": a["team"],
-                "team_abbr": a["team_abbr"],
+                "team_id": team_id,
+                "team_abbr": a["team_abbrs"][team_id],
                 "fga": a["fga"],
                 "made": a["made"],
                 "actual_pts": round(a["actual"], 2),

@@ -535,10 +535,13 @@ def populate_shots_for_recent_completions(
     limit: int | None = DAILY_EXCITEMENT_RETRY_CAP,
     timeout: int = BACKFILL_ESPN_TIMEOUT_S,
 ) -> None:
-    """Ingest FGA rows for completed 2026 games not yet in `shots`. Bounded +
-    non-fatal (mirrors populate_game_shapes_for_recent_completions): a failing
-    game is skipped and re-tried next run."""
-    games = get_completed_games_missing_shots(session, season_year=2026, limit=limit)
+    """Ingest FGA rows for completed current-season games not yet in `shots`.
+    Bounded + non-fatal (mirrors populate_game_shapes_for_recent_completions): a
+    failing game is skipped and re-tried next run. The season is derived from
+    today (not hard-coded) so it rolls over cleanly and stays consistent with
+    recompute_shot_making(int(today[:4]))."""
+    season = int(today_et()[:4])
+    games = get_completed_games_missing_shots(session, season_year=season, limit=limit)
     if not games:
         logger.info("No completed games need shot ingestion")
         return
@@ -553,7 +556,7 @@ def populate_shots_for_recent_completions(
         # rows correctly stays a candidate next run.
         try:
             shots = fetch_shots(game.espn_id, timeout=timeout)
-            total += upsert_shots(session, game.espn_id, 2026, shots, commit=True)
+            total += upsert_shots(session, game.espn_id, season, shots, commit=True)
         except (ESPNAPIError, ESPNNotFoundError) as e:
             session.rollback()
             logger.warning(

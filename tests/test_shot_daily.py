@@ -207,3 +207,44 @@ def test_recompute_removes_stale_players(session):
     ids = {r.athlete_id for r in q.get_shot_making(session, 2026)}
     assert "keep" in ids
     assert "gone" not in ids  # stale row removed by the wholesale replace
+
+
+def test_populate_shots_derives_current_season(session, monkeypatch):
+    # Season comes from today(), not a hard-coded 2026 — a 2027 game ingests and
+    # its shots are tagged season=2027, staying consistent with recompute's
+    # int(today[:4]) (Codex R1 rollover).
+    monkeypatch.setattr(du, "today_et", lambda: "2027-06-15")
+    session.add_all([Team(id=1, name="A"), Team(id=2, name="B")])
+    session.add(
+        Game(
+            id=1,
+            team_a_id=1,
+            team_b_id=2,
+            date="2027-06-14",
+            espn_id="G27",
+            winner_id=1,
+            season_type=2,
+        )
+    )
+    session.commit()
+    fake = [
+        {
+            "play_id": "1",
+            "athlete_id": "10",
+            "athlete_name": "X",
+            "team_id": "1",
+            "team_abbr": "LV",
+            "shot_type": "Layup Shot",
+            "distance_ft": 2.0,
+            "coord_x": None,
+            "coord_y": None,
+            "points": 2,
+            "point_value": 2,
+            "made": True,
+        }
+    ]
+    monkeypatch.setattr(du, "fetch_shots", lambda *a, **k: fake)
+    du.populate_shots_for_recent_completions(session)
+    rows_2027 = q.get_shots_for_season(session, 2027)
+    assert len(rows_2027) == 1 and rows_2027[0].season == 2027
+    assert q.get_shots_for_season(session, 2026) == []
