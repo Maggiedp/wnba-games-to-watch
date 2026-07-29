@@ -222,6 +222,7 @@ class Shot(Base):
     __table_args__ = (
         UniqueConstraint("espn_game_id", "play_id", name="uq_shot_play"),
         Index("idx_shot_season", "season"),
+        Index("idx_shot_season_athlete", "season", "athlete_id"),
     )
 
 

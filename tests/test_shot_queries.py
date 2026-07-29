@@ -211,3 +211,30 @@ def test_shot_making_upsert_and_read(session):
     rows = q.get_shot_making(session, 2026)
     assert len(rows) == 1 and rows[0].fga == 101  # upsert, not insert
     assert rows[0].team_abbr == "LV"
+
+
+def _shot_payload(play_id, aid, x=25, y=4):
+    return {
+        "play_id": play_id,
+        "athlete_id": aid,
+        "athlete_name": "P",
+        "team_id": "t1",
+        "team_abbr": "AAA",
+        "shot_type": "Layup Shot",
+        "distance_ft": 3.0,
+        "coord_x": x,
+        "coord_y": y,
+        "points": 2,
+        "point_value": 2,
+        "made": True,
+    }
+
+
+def test_get_shots_for_player_filters_by_season_and_athlete(session):
+    q.upsert_shots(
+        session, "g1", 2026, [_shot_payload("p1", "star"), _shot_payload("p2", "other")]
+    )
+    q.upsert_shots(session, "g2", 2025, [_shot_payload("p3", "star")])
+    rows = q.get_shots_for_player(session, 2026, "star")
+    assert len(rows) == 1
+    assert rows[0].athlete_id == "star" and rows[0].season == 2026
