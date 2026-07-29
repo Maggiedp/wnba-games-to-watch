@@ -556,7 +556,18 @@ def _get_shot_baseline(season: int) -> dict:
 @app.get("/api/player-shots")
 def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
     """One player's shot chart for the CURRENT season (DB-only). Colors each shot
-    by points added vs. the league xPPS baseline; empty for an unknown player."""
+    by points added vs. the league xPPS baseline; empty for an unknown player.
+
+    The panel renders ONLY `shots` + `zones`, so the response deliberately omits
+    `team_abbr` and `points_added`: `team_abbr` would be `rows[0]`'s team, which
+    is nondeterministic for a traded player (get_shots_for_player has no ORDER BY)
+    and the panel never shows a team; `points_added` here is live-recomputed from
+    raw `shots` while the leaderboard row shows the daily `shot_making` snapshot,
+    so exposing it invited a spurious mismatch during the 6 AM ingest→recompute
+    window (see the /api/player-shots gotcha in src/api/CLAUDE.md). `zones` still
+    reflect that same window skew, but only for a just-ingested player and only by
+    mentally summing — accepted daily-window known-limitation. Between daily runs
+    the zones tie to the leaderboard exactly (shared build_baseline)."""
     season = int(today_et()[:4])
     session = get_session()
     try:
@@ -567,10 +578,8 @@ def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
         return {
             "athlete_id": athlete_id,
             "athlete_name": "",
-            "team_abbr": "",
             "season": season,
             "fga": 0,
-            "points_added": 0.0,
             "shots": [],
             "zones": [],
         }
@@ -579,9 +588,10 @@ def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
     return {
         "athlete_id": athlete_id,
         "athlete_name": rows[0].athlete_name,
-        "team_abbr": rows[0].team_abbr or rows[0].team_id,
         "season": season,
-        **chart,
+        "fga": chart["fga"],
+        "shots": chart["shots"],
+        "zones": chart["zones"],
     }
 
 
