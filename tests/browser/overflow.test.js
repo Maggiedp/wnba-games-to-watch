@@ -46,6 +46,7 @@ const PAGES = [
   { path: '/rankings', readySelector: '#elo-chart svg' },
   { path: '/transparency', readySelector: '#calibration-chart svg' },
   { path: '/style', readySelector: '#style-grid svg' },
+  { path: '/shot-making', readySelector: '#shots-tbody tr' },
   { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
   { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: 'main' },
   { path: '/playoff-odds', readySelector: '#playoff-tbody tr' },
