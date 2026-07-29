@@ -43,6 +43,7 @@ from src.db.queries import (
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
+    get_shot_making,
     get_team_abbrev_map,
     get_team_records,
     get_team_style_season_counts,
@@ -143,6 +144,13 @@ async def playoff_odds_page():
     return HTMLResponse(render_playoff_odds())
 
 
+@app.get("/shot-making", response_class=HTMLResponse)
+async def shot_making_page():
+    from src.api.routes import render_shot_making
+
+    return HTMLResponse(render_shot_making())
+
+
 @app.get("/game/{espn_id}", response_class=HTMLResponse)
 def game_detail(espn_id: str):
     from src.api.routes import render_game_detail
@@ -239,6 +247,13 @@ def og_playoff_odds_image():
     from src.api.og_image import render_playoff_odds_card
 
     return _png_response(render_playoff_odds_card(), _OG_STATIC_CACHE_S)
+
+
+@app.api_route("/og-shot-making.png", methods=["GET", "HEAD"])
+def og_shot_making_image():
+    from src.api.og_image import render_shot_making_card
+
+    return _png_response(render_shot_making_card(), _OG_STATIC_CACHE_S)
 
 
 @app.get("/api/games/today", response_model=list[GameResponse])
@@ -874,6 +889,48 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
         else:
             view.sort(key=lambda v: v["team"])
         return {"season": season, "teams": view}
+    finally:
+        session.close()
+
+
+@app.get("/api/shot-making")
+async def get_shot_making_endpoint():
+    """Shot-making leaderboard for the CURRENT season (DB-only, precomputed).
+    Ranks players by points added over expected (actual - xPPS); v1 exposes no
+    season param. Keys off the current season (NOT the newest *populated* season
+    like /api/replay) because the page frames the data as "this season" — an
+    empty current season returns an empty board (its graceful empty state), never
+    last season's leaderboard silently mislabeled as current (mirrors the
+    /playoff-odds convention: never serve stale-season data as current)."""
+    session = get_session()
+    try:
+        season = int(today_et()[:4])
+        rows = get_shot_making(session, season)
+        rows.sort(key=lambda r: r.points_added, reverse=True)
+        players = []
+        for i, r in enumerate(rows, start=1):
+            try:
+                diet = json.loads(r.diet) if r.diet else {}
+            except (ValueError, TypeError):
+                diet = {}
+            players.append(
+                {
+                    "rank": i,
+                    "athlete_id": r.athlete_id,
+                    "athlete_name": r.athlete_name,
+                    "team_id": r.team_id,
+                    "team_abbr": r.team_abbr,
+                    "fga": r.fga,
+                    "made": r.made,
+                    "made_pct": round(r.made / r.fga, 3) if r.fga else 0.0,
+                    "actual_pps": r.actual_pps,
+                    "expected_pps": r.expected_pps,
+                    "points_added": r.points_added,
+                    "points_added_per_100": r.points_added_per_100,
+                    "diet": diet,
+                }
+            )
+        return {"season": season, "players": players}
     finally:
         session.close()
 

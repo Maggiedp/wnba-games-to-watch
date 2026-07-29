@@ -438,6 +438,10 @@ _TEAM_STYLE_JS = _load_template("js/team_style_helpers.js")
 # %%PLAYOFF_ODDS_HELPERS_JS%%.
 _PLAYOFF_ODDS_HELPERS_JS = _load_template("js/playoff_odds_helpers.js")
 
+# fmtSigned/dietBar for the /shot-making leaderboard, pure/numeric, Node-tested;
+# injected via %%SHOT_MAKING_JS%%.
+_SHOT_MAKING_JS = _load_template("js/shot_making_helpers.js")
+
 # Primary site views, promoted out of the footer into a top nav shared by every
 # page (homepage masthead + inner pages + detail). Each page marks its own entry
 # active; `in_masthead` is the homepage variant that nests inside the navy
@@ -448,6 +452,7 @@ _SITE_NAV_ITEMS = (
     ("rankings", "/rankings", "Power rankings"),
     ("replay", "/replay", "Replay value"),
     ("style", "/style", "Team style"),
+    ("shot-making", "/shot-making", "Shot-making"),
     ("playoff-odds", "/playoff-odds", "Playoff odds"),
     ("transparency", "/transparency", "Behind the numbers"),
 )
@@ -528,6 +533,16 @@ _PLAYOFF_ODDS_HTML = (
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
     .replace("%%PLAYOFF_ODDS_HELPERS_JS%%", _PLAYOFF_ODDS_HELPERS_JS)
+)
+
+_SHOT_MAKING_HTML = (
+    _load_template("shot_making.html")
+    .replace("%%SITE_NAV%%", _site_nav("shot-making"))
+    .replace("%%SITE_TITLE%%", _SITE_TITLE)
+    .replace("%%SITE_URL%%", _SITE_URL)
+    .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
+    .replace("%%SHARED_JS%%", _SHARED_JS)
+    .replace("%%SHOT_MAKING_JS%%", _SHOT_MAKING_JS)
 )
 
 
@@ -1209,3 +1224,9 @@ def render_playoff_odds() -> str:
     """Render the /playoff-odds page shell. STATIC — odds are fetched client-side
     from /api/playoff-odds (same import-frozen caveat as the other inner pages)."""
     return _PLAYOFF_ODDS_HTML
+
+
+def render_shot_making() -> str:
+    """Render the /shot-making leaderboard shell. STATIC — the leaderboard is
+    fetched client-side from /api/shot-making (same import-frozen caveat)."""
+    return _SHOT_MAKING_HTML

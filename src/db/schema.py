@@ -1,6 +1,7 @@
 """SQLAlchemy table definitions for WNBA Games to Watch."""
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -192,6 +193,65 @@ class TeamStyle(Base):
     __table_args__ = (
         UniqueConstraint("season", "team_id", name="uq_team_style_season_team"),
         Index("idx_team_style_season", "season"),
+    )
+
+
+class Shot(Base):
+    """One durable row per field-goal attempt (free throws excluded), parsed
+    from ESPN play-by-play. Powers the /shot-making xPPS leaderboard; raw rows
+    kept for a future shot-chart. Idempotent on (espn_game_id, play_id)."""
+
+    __tablename__ = "shots"
+
+    id = Column(Integer, primary_key=True)
+    espn_game_id = Column(String(20), nullable=False)
+    play_id = Column(String(24), nullable=False)
+    season = Column(Integer, nullable=False)
+    athlete_id = Column(String(20), nullable=False)
+    athlete_name = Column(String(64), nullable=False)
+    team_id = Column(String(20), nullable=False)
+    team_abbr = Column(String(16), nullable=False, default="")
+    shot_type = Column(String(64), nullable=False)
+    distance_ft = Column(Float, nullable=True)
+    coord_x = Column(Integer, nullable=True)
+    coord_y = Column(Integer, nullable=True)
+    points = Column(Integer, nullable=False)
+    point_value = Column(Integer, nullable=False)
+    made = Column(Boolean, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("espn_game_id", "play_id", name="uq_shot_play"),
+        Index("idx_shot_season", "season"),
+    )
+
+
+class ShotMaking(Base):
+    """Precomputed per-player shot-making leaderboard row for a season. Recomputed
+    wholesale each daily run from `shots`; the /api/shot-making endpoint reads it
+    (DB-only). One row per (season, athlete_id)."""
+
+    __tablename__ = "shot_making"
+
+    id = Column(Integer, primary_key=True)
+    season = Column(Integer, nullable=False)
+    athlete_id = Column(String(20), nullable=False)
+    athlete_name = Column(String(64), nullable=False)
+    team_id = Column(String(20), nullable=False)
+    team_abbr = Column(String(16), nullable=False, default="")
+    fga = Column(Integer, nullable=False)
+    made = Column(Integer, nullable=False)
+    actual_pts = Column(Float, nullable=False)
+    expected_pts = Column(Float, nullable=False)
+    points_added = Column(Float, nullable=False)
+    points_added_per_100 = Column(Float, nullable=False)
+    actual_pps = Column(Float, nullable=False)
+    expected_pps = Column(Float, nullable=False)
+    diet = Column(Text, nullable=False, default="{}")
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("season", "athlete_id", name="uq_shot_making"),
+        Index("idx_shot_making_season", "season"),
     )
 
 

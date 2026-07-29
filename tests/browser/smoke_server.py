@@ -55,6 +55,7 @@ def seed(session) -> None:
     from src.db.queries import (
         upsert_game_shape,
         upsert_playoff_probability,
+        upsert_shot_making,
         upsert_team_style,
     )
     from src.db.schema import (
@@ -228,6 +229,39 @@ def seed(session) -> None:
             def_pressure=0.14 + 0.006 * i,
             opp_3pa_rate=0.40 - 0.01 * i,
             games_played=20,
+            commit=False,
+        )
+
+    # --- Shot-making: one leaderboard row per team (for /shot-making). Varied
+    # points_added (+ and -) and diet mixes so the walk overflow-checks the
+    # populated table, legend, and diet bars at phone widths.
+    _diets = [
+        {"rim": 0.5, "mid": 0.3, "three": 0.2},
+        {"three": 0.5, "mid": 0.3, "rim": 0.2},
+        {"rim": 0.6, "mid": 0.3, "floater": 0.1},
+        {"three": 0.4, "mid": 0.34, "rim": 0.2, "floater": 0.06},
+    ]
+    for i, t in enumerate(teams):
+        fga = 300 + 8 * i
+        made = int(fga * (0.42 + 0.004 * i))
+        expected = fga * 1.05
+        actual = expected + (7.0 - i) * 3.0  # spans positive and negative
+        upsert_shot_making(
+            session,
+            season,
+            f"smoke-shooter-{i}",
+            athlete_name=f"Shooter {t.abbreviation} {i}",
+            team_id=str(t.id),
+            team_abbr=t.abbreviation,
+            fga=fga,
+            made=made,
+            actual_pts=round(actual, 2),
+            expected_pts=round(expected, 2),
+            points_added=round(actual - expected, 2),
+            points_added_per_100=round((actual - expected) / fga * 100, 2),
+            actual_pps=round(actual / fga, 3),
+            expected_pps=round(expected / fga, 3),
+            diet=json.dumps(_diets[i % len(_diets)]),
             commit=False,
         )
 

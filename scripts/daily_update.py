@@ -17,6 +17,7 @@ from src.data.espn_api import (
     fetch_games_for_range,
     fetch_live_win_probability,
     fetch_schedule_and_results,
+    fetch_shots,
     fetch_team_details,
     fetch_team_style_stats,
     today_et,
@@ -26,13 +27,16 @@ from src.data.wnba_schedule import (
     fetch_wnba_schedule_broadcasters,
 )
 from src.db.queries import (
+    delete_shot_making_season,
     delete_team_style_season,
     get_all_teams,
     get_completed_games,
     get_completed_games_missing_excitement,
     get_completed_games_missing_shape,
+    get_completed_games_missing_shots,
     get_completed_postseason_games,
     get_games_for_excitement_refresh,
+    get_shots_for_season,
     get_team_abbrev_map,
     get_team_by_id,
     get_team_by_name,
@@ -43,6 +47,8 @@ from src.db.queries import (
     upsert_game,
     upsert_game_shape,
     upsert_playoff_probability,
+    upsert_shot_making,
+    upsert_shots,
     upsert_team,
     upsert_team_style,
 )
@@ -73,6 +79,7 @@ from src.scoring.monte_carlo import (
     to_team_standings,
 )
 from src.scoring.quality import compute_quality_score
+from src.scoring.shot_making import compute_leaderboard
 from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
 
 os.makedirs("logs", exist_ok=True)
@@ -521,6 +528,129 @@ def populate_game_shapes_for_recent_completions(
             )
     session.commit()
     logger.info(f"Stored game_shapes for {stored} games")
+
+
+def populate_shots_for_recent_completions(
+    session,
+    limit: int | None = DAILY_EXCITEMENT_RETRY_CAP,
+    timeout: int = BACKFILL_ESPN_TIMEOUT_S,
+) -> None:
+    """Ingest FGA rows for completed current-season games not yet in `shots`.
+    Bounded + non-fatal (mirrors populate_game_shapes_for_recent_completions): a
+    failing game is skipped and re-tried next run. The season is derived from
+    today (not hard-coded) so it rolls over cleanly and stays consistent with
+    recompute_shot_making(int(today[:4])).
+
+    Known limitations (accepted, won't-fix) — all facets of "a game's shot slice
+    is frozen at first successful ingest, because the retry gate is mere row-
+    existence and ingested games are never re-fetched":
+    (1) A PARTIAL parse (fetch_shots skips a shooting play whose shooter can't be
+        resolved from the boxscore) freezes those shots as missing. Near-nil: runs
+        ~6h after games end, so the boxscore is populated and skips are 0; a skip
+        needs an ESPN defect (rate ~like game_shapes UNSHAPEABLE) and costs ~1
+        shot of ~150, not the game.
+    (2) A later ESPN CORRECTION to an already-ingested play (shooter/team fix,
+        make/miss flip, point-value fix) is never re-applied — same root cause
+        (no re-fetch of ingested games); upsert_shots' skip-existing is therefore
+        inert for corrections, not the cause. Rarer than (1).
+    (3) The candidate queue is newest-first with a cap (DAILY_EXCITEMENT_RETRY_CAP)
+        and NO last-attempt rotation field (unlike excitement/game_shape, which
+        re-attempt games and thus need it). Shots never re-attempt an ingested
+        game, so the queue holds only not-yet-ingested games and drains newest-
+        first at ~cap/run; a permanent-failure wastes 1 slot but can't starve the
+        backlog unless 50+ newest games fail simultaneously (implausible).
+    Repair path for all three if ever needed: a bounded recent-window re-ingest
+    (upsert is already idempotent/gap-filling) — like refresh_recent_excitement —
+    which would also want upsert_shots to update mutable fields, not skip. Decided
+    against for v1 (Codex adversarial R2–R4): impact is a handful of shots in rare
+    ESPN-defect cases; mirrors game_shapes' accepted-partial posture."""
+    season = int(today_et()[:4])
+    games = get_completed_games_missing_shots(session, season_year=season, limit=limit)
+    if not games:
+        logger.info("No completed games need shot ingestion")
+        return
+    logger.info(f"Ingesting shots for {len(games)} completed games")
+    total = 0
+    for game in games:
+        # Ingest each game in its OWN transaction (commit=True) and roll back on
+        # failure, so one bad game can't corrupt the shared session for the rest
+        # of the loop, nor leave partially-staged rows that get committed anyway
+        # (mirrors the startup probes' rollback discipline; see scripts/CLAUDE.md).
+        # The retry gate is mere row-existence, so a game that rolls back to zero
+        # rows correctly stays a candidate next run.
+        try:
+            shots = fetch_shots(game.espn_id, timeout=timeout)
+            total += upsert_shots(session, game.espn_id, season, shots, commit=True)
+        except (ESPNAPIError, ESPNNotFoundError) as e:
+            session.rollback()
+            logger.warning(
+                f"Could not fetch shots (espn_id={game.espn_id}): {e} — skipping"
+            )
+        except Exception as e:
+            session.rollback()
+            logger.warning(
+                f"Failed to ingest shots (espn_id={game.espn_id}): {e} — skipping"
+            )
+    logger.info(f"Ingested {total} shots")
+
+
+def recompute_shot_making(session, season: int) -> int:
+    """Rebuild the shot_making leaderboard for a season from `shots`. Wholesale
+    recompute: the season slice is DELETED and re-inserted in one transaction
+    (mirrors populate_team_style / store_elo_history) so a player who drops below
+    the eligibility cutoff — or is removed by a corrected re-ingest — can't leave
+    a stale row the DB-only endpoint keeps serving. Trivial at this scale.
+    Returns the eligible player count."""
+    shot_rows = get_shots_for_season(session, season)
+    shots = [
+        {
+            "athlete_id": s.athlete_id,
+            "athlete_name": s.athlete_name,
+            "team_id": s.team_id,
+            "team_abbr": s.team_abbr,
+            "shot_type": s.shot_type,
+            "distance_ft": s.distance_ft,
+            "points": s.points,
+            "point_value": s.point_value,
+            "made": s.made,
+        }
+        for s in shot_rows
+    ]
+    board = compute_leaderboard(shots)
+    # Replace the whole season slice atomically — drop stale rows first, then
+    # insert the freshly computed board; the single commit makes it atomic. A
+    # failure AFTER the delete must roll back its OWN transaction: otherwise the
+    # pending DELETE (an emptied board) survives on the shared session and the
+    # next caller's commit (refresh_recent_excitement_scores) would publish it.
+    # Re-raise so the non-fatal wrapper in main() logs it; the previous board
+    # stays intact (mirrors populate_team_style's self-contained rollback).
+    try:
+        delete_shot_making_season(session, season)
+        for r in board:
+            upsert_shot_making(
+                session,
+                season,
+                r["athlete_id"],
+                athlete_name=r["athlete_name"],
+                team_id=r["team_id"],
+                team_abbr=r["team_abbr"],
+                fga=r["fga"],
+                made=r["made"],
+                actual_pts=r["actual_pts"],
+                expected_pts=r["expected_pts"],
+                points_added=r["points_added"],
+                points_added_per_100=r["points_added_per_100"],
+                actual_pps=r["actual_pps"],
+                expected_pps=r["expected_pps"],
+                diet=json.dumps(r["diet"]),
+                commit=False,
+            )
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    logger.info(f"Recomputed shot-making for {len(board)} players")
+    return len(board)
 
 
 def refresh_recent_excitement_scores(
@@ -1345,6 +1475,15 @@ def main() -> int:
                 populate_game_shapes_for_recent_completions(session)
             except Exception as e:
                 logger.warning(f"Game-shape backfill failed (non-fatal): {e}")
+            try:
+                populate_shots_for_recent_completions(session)
+                recompute_shot_making(session, int(today[:4]))
+            except Exception as e:
+                # Defensive: recompute_shot_making already rolls back its own
+                # failed transaction, but roll back here too so no pending state
+                # leaks into refresh_recent_excitement_scores' commit below.
+                session.rollback()
+                logger.warning(f"Shot-making update failed (non-fatal): {e}")
             try:
                 refresh_recent_excitement_scores(session)
             except Exception as e:
