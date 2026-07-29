@@ -56,6 +56,7 @@ def seed(session) -> None:
         upsert_game_shape,
         upsert_playoff_probability,
         upsert_shot_making,
+        upsert_shots,
         upsert_team_style,
     )
     from src.db.schema import (
@@ -264,6 +265,28 @@ def seed(session) -> None:
             diet=json.dumps(_diets[i % len(_diets)]),
             commit=False,
         )
+
+    # Raw shots for one seeded shooter so the /shot-making expand panel has a
+    # chart + zones to render in the browser walk.
+    first = teams[0]
+    _panel_shots = [
+        {
+            "play_id": f"pw{j}",
+            "athlete_id": "smoke-shooter-0",
+            "athlete_name": f"Shooter {first.abbreviation} 0",
+            "team_id": str(first.id),
+            "team_abbr": first.abbreviation,
+            "shot_type": "Jump Shot" if j % 2 else "Layup Shot",
+            "distance_ft": 24.0 if j % 2 else 3.0,
+            "coord_x": 2 + (j * 7) % 46,
+            "coord_y": (j * 5) % 26,
+            "points": (3 if j % 2 else 2) if j % 3 else 0,
+            "point_value": 3 if j % 2 else 2,
+            "made": bool(j % 3),
+        }
+        for j in range(120)
+    ]
+    upsert_shots(session, "smoke-shot-game", season, _panel_shots, commit=False)
 
     session.commit()
 
