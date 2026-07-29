@@ -44,6 +44,8 @@ from src.db.queries import (
     get_rankings_by_broadcaster,
     get_shape_seasons,
     get_shot_making,
+    get_shots_for_player,
+    get_shots_for_season,
     get_team_abbrev_map,
     get_team_records,
     get_team_style_season_counts,
@@ -63,6 +65,7 @@ from src.notify.thriller import (
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
 from src.scoring.game_shape import compute_live_shape
+from src.scoring.shot_making import build_baseline, compute_player_shot_chart
 from src.scoring.team_style import compute_style_view
 
 logger = logging.getLogger(__name__)
@@ -492,6 +495,83 @@ def _get_known_espn_ids() -> frozenset[str]:
     with _known_espn_ids_lock:
         _known_espn_ids_cache = (time.monotonic() + _KNOWN_IDS_TTL_S, ids)
     return ids
+
+
+_SHOT_BASELINE_TTL_S = 300
+_shot_baseline_cache: tuple[float, int, dict] | None = None
+_shot_baseline_lock = threading.Lock()
+
+
+def _shot_row_to_dict(row) -> dict:
+    return {
+        "athlete_id": row.athlete_id,
+        "athlete_name": row.athlete_name,
+        "team_id": row.team_id,
+        "team_abbr": row.team_abbr,
+        "shot_type": row.shot_type,
+        "distance_ft": row.distance_ft,
+        "coord_x": row.coord_x,
+        "coord_y": row.coord_y,
+        "points": row.points,
+        "point_value": row.point_value,
+        "made": row.made,
+    }
+
+
+def _get_shot_baseline(season: int) -> dict:
+    """League xPPS baseline for `season`, cached in-process (the `shots` table is
+    static between daily runs). Same build_baseline the leaderboard uses, so
+    per-shot added ties to shot_making.points_added."""
+    global _shot_baseline_cache
+    with _shot_baseline_lock:
+        cached = _shot_baseline_cache
+        if cached and cached[1] == season and cached[0] > time.monotonic():
+            return cached[2]
+    session = get_session()
+    try:
+        shots = [_shot_row_to_dict(r) for r in get_shots_for_season(session, season)]
+    finally:
+        session.close()
+    baseline = build_baseline(shots)
+    with _shot_baseline_lock:
+        _shot_baseline_cache = (
+            time.monotonic() + _SHOT_BASELINE_TTL_S,
+            season,
+            baseline,
+        )
+    return baseline
+
+
+@app.get("/api/player-shots")
+def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
+    """One player's shot chart for the CURRENT season (DB-only). Colors each shot
+    by points added vs. the league xPPS baseline; empty for an unknown player."""
+    season = int(today_et()[:4])
+    session = get_session()
+    try:
+        rows = get_shots_for_player(session, season, athlete_id)
+    finally:
+        session.close()
+    if not rows:
+        return {
+            "athlete_id": athlete_id,
+            "athlete_name": "",
+            "team_abbr": "",
+            "season": season,
+            "fga": 0,
+            "points_added": 0.0,
+            "shots": [],
+            "zones": [],
+        }
+    baseline = _get_shot_baseline(season)
+    chart = compute_player_shot_chart([_shot_row_to_dict(r) for r in rows], baseline)
+    return {
+        "athlete_id": athlete_id,
+        "athlete_name": rows[0].athlete_name,
+        "team_abbr": rows[0].team_abbr or rows[0].team_id,
+        "season": season,
+        **chart,
+    }
 
 
 @app.get("/api/live-wp")
