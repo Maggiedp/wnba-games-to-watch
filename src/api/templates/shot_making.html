@@ -147,6 +147,49 @@
                 .shots-table th.made-col,
                 .shots-table td.made-cell { display: none; }
             }
+
+            /* ---------- Per-player shot-chart expand panel ---------- */
+            .shots-table tr.player-row { cursor: pointer; }
+            .shots-table tr.player-row:hover td { background: rgba(232,100,30,0.05); }
+            .shots-table tr.player-row:focus-visible { outline: 2px solid var(--navy); outline-offset: -2px; }
+            .shots-table tr.player-row .chev { color: var(--text-subtle); font-size: 11px; margin-left: 6px; }
+            .shot-panel-row > td { padding: 0; background: var(--surface); }
+            .shot-panel {
+                display: grid;
+                grid-template-columns: 1.4fr 1fr;
+                gap: 20px;
+                padding: 18px 8px;
+                align-items: start;
+            }
+            .shot-panel .chart-wrap { max-width: 420px; }
+            .shot-chart-svg { width: 100%; height: auto; display: block; }
+            .shot-legend {
+                display: flex; align-items: center; gap: 8px; justify-content: center;
+                margin-top: 8px; font-size: 11px; color: var(--text-muted);
+            }
+            .shot-legend .grad {
+                width: 120px; height: 10px; border-radius: 5px;
+                background: linear-gradient(90deg,#5b6472,#c9cdd4,#f4c9a6,#e8641e);
+            }
+            .shot-zones { font-size: 13px; }
+            .shot-zones .zt, .shot-zones .zr {
+                display: grid; grid-template-columns: 1.4fr .7fr .7fr .8fr; gap: 4px; align-items: center;
+            }
+            .shot-zones .zt {
+                font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em;
+                color: var(--text-subtle); border-bottom: 1px solid var(--navy-3); padding-bottom: 5px;
+            }
+            .shot-zones .zr { padding: 7px 0; border-bottom: 1px solid rgba(0,0,0,0.06); }
+            .shot-zones .zt span:not(:first-child), .shot-zones .zr span:not(:first-child) { text-align: right; }
+            .shot-zones .zr .pos { color: var(--orange-deep); font-weight: 600; }
+            .shot-zones .zr .neg { color: #7a7f88; }
+            .shot-zones .sw { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:middle; }
+            .shot-panel .cap { font-size: 11.5px; color: var(--text-subtle); margin: 10px 0 0; line-height: 1.5; }
+            .shot-panel .status { color: var(--text-subtle); font-size: 13px; padding: 8px 0; }
+            @media (max-width: 768px) {
+                .shot-panel { grid-template-columns: 1fr; gap: 12px; }
+                .shot-panel .chart-wrap { max-width: 100%; }
+            }
         </style>
 </head>
 <body>
@@ -203,6 +246,7 @@
 <script>
 %%SHARED_JS%%
 %%SHOT_MAKING_JS%%
+%%SHOT_CHART_JS%%
 (function () {
   let players = [];
   let sortBy = 'added';  // 'added' | 'per100'
@@ -226,9 +270,10 @@
     const addedClass = p.points_added >= 0 ? 'is-positive' : 'is-negative';
     const per100 = fmtSigned(p.points_added_per_100);
     const fgPct = Math.round((p.made_pct || 0) * 100) + '%';
-    return `<tr>
+    const aid = escapeHtml(String(p.athlete_id));
+    return `<tr class="player-row" data-aid="${aid}" role="button" tabindex="0" aria-expanded="false">
       <td class="rank-cell">${rank}</td>
-      <td class="player-cell">${escapeHtml(p.athlete_name)}</td>
+      <td class="player-cell">${escapeHtml(p.athlete_name)}<span class="chev">▾</span></td>
       <td class="team-cell">${escapeHtml(p.team_abbr || p.team_id)}</td>
       <td class="fga-cell">${p.fga}</td>
       <td class="made-cell">${fgPct}</td>
@@ -237,7 +282,8 @@
       <td class="added-cell ${addedClass}">${added}</td>
       <td>${per100}</td>
       <td class="diet-cell"><div class="diet-bar">${dietBar(p.diet || {})}</div></td>
-    </tr>`;
+    </tr>
+    <tr class="shot-panel-row" data-panel="${aid}" hidden><td colspan="10"></td></tr>`;
   }
 
   function render() {
@@ -246,6 +292,80 @@
         ? b.points_added_per_100 - a.points_added_per_100
         : b.points_added - a.points_added);
     tbody.innerHTML = sorted.map((p, i) => rowHtml(p, i + 1)).join('');
+  }
+
+  const shotCache = {};   // athlete_id -> chart payload
+
+  function zonesHtml(zones) {
+    const label = { rim: 'Rim', floater: 'Floater', mid: 'Mid-range', three: 'Three', other: 'Other' };
+    const rows = zones.map((z) => {
+      const cls = z.added >= 0 ? 'pos' : 'neg';
+      return `<div class="zr">
+        <span><i class="sw diet-${escapeHtml(z.family)}"></i>${label[z.family] || escapeHtml(z.family)}</span>
+        <span>${z.fga}</span>
+        <span>${Math.round(z.fg_pct * 100)}%</span>
+        <span class="${cls}">${fmtSigned(z.added)}</span>
+      </div>`;
+    }).join('');
+    return `<div class="shot-zones">
+      <div class="zt"><span>Zone</span><span>FGA</span><span>FG%</span><span>+pts</span></div>
+      ${rows}
+    </div>`;
+  }
+
+  function panelHtml(data) {
+    return `<div class="shot-panel">
+      <div class="chart-wrap">
+        ${buildShotChartSvg(data.shots)}
+        <div class="shot-legend"><span>Gave value back</span><span class="grad"></span><span>Added value</span></div>
+        <p class="cap">Each dot is one shot, colored by points added vs. a league-average shooter from that spot &amp; type.</p>
+      </div>
+      ${zonesHtml(data.zones)}
+    </div>`;
+  }
+
+  async function openPanel(aid, cell) {
+    if (shotCache[aid]) { cell.innerHTML = panelHtml(shotCache[aid]); return; }
+    cell.innerHTML = '<div class="shot-panel"><p class="status">Loading shots…</p></div>';
+    try {
+      const res = await fetch('/api/player-shots?athlete_id=' + encodeURIComponent(aid));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      shotCache[aid] = data;
+      cell.innerHTML = panelHtml(data);
+    } catch (e) {
+      console.error('player-shots load failed', e);
+      cell.innerHTML = '<div class="shot-panel"><p class="status">Couldn’t load shots. Try again.</p></div>';
+    }
+  }
+
+  function toggleRow(row) {
+    const aid = row.dataset.aid;
+    const panel = tbody.querySelector(`tr.shot-panel-row[data-panel="${CSS.escape(aid)}"]`);
+    if (!panel) return;
+    const isOpen = !panel.hidden;
+    // close any other open panel (accordion)
+    tbody.querySelectorAll('tr.shot-panel-row:not([hidden])').forEach((p) => {
+      p.hidden = true; p.firstElementChild.innerHTML = '';
+      const r = p.previousElementSibling;
+      if (r) r.setAttribute('aria-expanded', 'false');
+    });
+    if (isOpen) return;   // it was the one open -> now closed
+    panel.hidden = false;
+    row.setAttribute('aria-expanded', 'true');
+    openPanel(aid, panel.firstElementChild);
+  }
+
+  function wireRowToggles() {
+    tbody.addEventListener('click', (e) => {
+      const row = e.target.closest('tr.player-row');
+      if (row) toggleRow(row);
+    });
+    tbody.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const row = e.target.closest('tr.player-row');
+      if (row) { e.preventDefault(); toggleRow(row); }
+    });
   }
 
   function setupSortToggle() {
@@ -279,6 +399,7 @@
   }
 
   setupSortToggle();
+  wireRowToggles();
   load();
 })();
 </script>

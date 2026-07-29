@@ -442,6 +442,10 @@ _PLAYOFF_ODDS_HELPERS_JS = _load_template("js/playoff_odds_helpers.js")
 # injected via %%SHOT_MAKING_JS%%.
 _SHOT_MAKING_JS = _load_template("js/shot_making_helpers.js")
 
+# buildShotChartSvg for the /shot-making per-player expand panel, pure,
+# node-tested; injected via %%SHOT_CHART_JS%%.
+_SHOT_CHART_JS = _load_template("js/shot_chart_helpers.js")
+
 # Primary site views, promoted out of the footer into a top nav shared by every
 # page (homepage masthead + inner pages + detail). Each page marks its own entry
 # active; `in_masthead` is the homepage variant that nests inside the navy
@@ -543,6 +547,7 @@ _SHOT_MAKING_HTML = (
     .replace("%%SHARED_HEAD%%", _SHARED_HEAD)
     .replace("%%SHARED_JS%%", _SHARED_JS)
     .replace("%%SHOT_MAKING_JS%%", _SHOT_MAKING_JS)
+    .replace("%%SHOT_CHART_JS%%", _SHOT_CHART_JS)
 )
 
 
