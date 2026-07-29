@@ -46,6 +46,7 @@ from src.db.queries import (
     get_shot_making,
     get_shots_for_player,
     get_shots_for_season,
+    shot_row_to_dict,
     get_team_abbrev_map,
     get_team_records,
     get_team_style_season_counts,
@@ -503,29 +504,17 @@ _shot_baseline_lock = threading.Lock()
 _shot_baseline_build_lock = threading.Lock()
 
 
-def _shot_row_to_dict(row) -> dict:
-    return {
-        "athlete_id": row.athlete_id,
-        "athlete_name": row.athlete_name,
-        "team_id": row.team_id,
-        "team_abbr": row.team_abbr,
-        "shot_type": row.shot_type,
-        "distance_ft": row.distance_ft,
-        "coord_x": row.coord_x,
-        "coord_y": row.coord_y,
-        "points": row.points,
-        "point_value": row.point_value,
-        "made": row.made,
-    }
-
-
 def _get_shot_baseline(season: int) -> dict:
-    """League xPPS baseline for `season`, cached in-process (the `shots` table is
-    static between daily runs). Same build_baseline the leaderboard uses, so
-    per-shot added ties to shot_making.points_added. Single-flighted: one request
-    reloads the whole season + rebuilds while the rest wait on the build lock and
-    reuse its result, so a cold/expired cache under concurrent panel-opens can't
-    stampede a full-season reload per request (mirrors _build_replay_live)."""
+    """League xPPS baseline for `season`, cached in-process. `shots` only changes
+    at the daily run, so caching is safe; the 300s TTL isn't there to bound
+    staleness (the data is static for ~24h) but to auto-refresh the baseline
+    within ~5 min of the daily run without an explicit invalidation hook — a
+    longer TTL would just widen the post-run window where the baseline lags fresh
+    shots. Same build_baseline the leaderboard uses, so per-shot added ties to
+    shot_making.points_added. Single-flighted: one request reloads the whole
+    season + rebuilds while the rest wait on the build lock and reuse its result,
+    so a cold/expired cache under concurrent panel-opens can't stampede a
+    full-season reload per request (mirrors _build_replay_live)."""
     global _shot_baseline_cache
     with _shot_baseline_lock:
         cached = _shot_baseline_cache
@@ -538,9 +527,7 @@ def _get_shot_baseline(season: int) -> dict:
                 return cached[2]  # another request built it while we waited
         session = get_session()
         try:
-            shots = [
-                _shot_row_to_dict(r) for r in get_shots_for_season(session, season)
-            ]
+            shots = [shot_row_to_dict(r) for r in get_shots_for_season(session, season)]
         finally:
             session.close()
         baseline = build_baseline(shots)
@@ -584,7 +571,7 @@ def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
             "zones": [],
         }
     baseline = _get_shot_baseline(season)
-    chart = compute_player_shot_chart([_shot_row_to_dict(r) for r in rows], baseline)
+    chart = compute_player_shot_chart([shot_row_to_dict(r) for r in rows], baseline)
     return {
         "athlete_id": athlete_id,
         "athlete_name": rows[0].athlete_name,
