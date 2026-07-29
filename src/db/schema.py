@@ -503,6 +503,15 @@ def init_db():
                     "ON games (espn_id)"
                 )
             )
+            # `shots` shipped in PR #116, so create_all skips the already-existing
+            # table and won't add an index declared later. Add it explicitly like
+            # the columns above (idx backs get_shots_for_player / /api/player-shots).
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_shot_season_athlete "
+                    "ON shots (season, athlete_id)"
+                )
+            )
             conn.commit()
 
     # PostgreSQL: supports ALTER COLUMN TYPE, DO blocks, and IF NOT EXISTS.
@@ -616,6 +625,15 @@ def init_db():
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_espn_id "
                     "ON games (espn_id)"
+                )
+            )
+            # `shots` shipped in PR #116, so create_all skips the already-existing
+            # table and won't add an index declared later. Add it explicitly like
+            # the columns above (idx backs get_shots_for_player / /api/player-shots).
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_shot_season_athlete "
+                    "ON shots (season, athlete_id)"
                 )
             )
             conn.commit()

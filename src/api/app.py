@@ -500,6 +500,7 @@ def _get_known_espn_ids() -> frozenset[str]:
 _SHOT_BASELINE_TTL_S = 300
 _shot_baseline_cache: tuple[float, int, dict] | None = None
 _shot_baseline_lock = threading.Lock()
+_shot_baseline_build_lock = threading.Lock()
 
 
 def _shot_row_to_dict(row) -> dict:
@@ -521,25 +522,35 @@ def _shot_row_to_dict(row) -> dict:
 def _get_shot_baseline(season: int) -> dict:
     """League xPPS baseline for `season`, cached in-process (the `shots` table is
     static between daily runs). Same build_baseline the leaderboard uses, so
-    per-shot added ties to shot_making.points_added."""
+    per-shot added ties to shot_making.points_added. Single-flighted: one request
+    reloads the whole season + rebuilds while the rest wait on the build lock and
+    reuse its result, so a cold/expired cache under concurrent panel-opens can't
+    stampede a full-season reload per request (mirrors _build_replay_live)."""
     global _shot_baseline_cache
     with _shot_baseline_lock:
         cached = _shot_baseline_cache
         if cached and cached[1] == season and cached[0] > time.monotonic():
             return cached[2]
-    session = get_session()
-    try:
-        shots = [_shot_row_to_dict(r) for r in get_shots_for_season(session, season)]
-    finally:
-        session.close()
-    baseline = build_baseline(shots)
-    with _shot_baseline_lock:
-        _shot_baseline_cache = (
-            time.monotonic() + _SHOT_BASELINE_TTL_S,
-            season,
-            baseline,
-        )
-    return baseline
+    with _shot_baseline_build_lock:
+        with _shot_baseline_lock:
+            cached = _shot_baseline_cache
+            if cached and cached[1] == season and cached[0] > time.monotonic():
+                return cached[2]  # another request built it while we waited
+        session = get_session()
+        try:
+            shots = [
+                _shot_row_to_dict(r) for r in get_shots_for_season(session, season)
+            ]
+        finally:
+            session.close()
+        baseline = build_baseline(shots)
+        with _shot_baseline_lock:
+            _shot_baseline_cache = (
+                time.monotonic() + _SHOT_BASELINE_TTL_S,
+                season,
+                baseline,
+            )
+        return baseline
 
 
 @app.get("/api/player-shots")
