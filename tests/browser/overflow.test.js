@@ -47,6 +47,23 @@ const PAGES = [
   { path: '/transparency', readySelector: '#calibration-chart svg' },
   { path: '/style', readySelector: '#style-grid svg' },
   { path: '/shot-making', readySelector: '#shots-tbody tr' },
+  {
+    path: '/shot-making',
+    readySelector: '#shots-tbody tr',
+    apply: async (page) => {
+      await page.waitForSelector('#shots-tbody tr.player-row');
+      await page.click('#shots-tbody tr.player-row');
+      await page.waitForSelector('.shot-panel .shot-chart-svg, .shot-panel .status');
+      await page.waitForFunction(
+        () => !!document.querySelector('.shot-panel .shot-chart-svg'),
+      );
+      // The empty court renders one <circle> (the hoop); >1 proves a real shot
+      // dot painted, so the walk covers a populated chart, not just the court.
+      await page.waitForFunction(
+        () => document.querySelectorAll('.shot-panel .shot-chart-svg circle').length > 1,
+      );
+    },
+  },
   { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
   { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: 'main' },
   { path: '/playoff-odds', readySelector: '#playoff-tbody tr' },

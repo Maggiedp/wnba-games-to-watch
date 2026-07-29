@@ -4,6 +4,7 @@ from src.scoring.shot_making import (
     build_baseline,
     expected_pps,
     compute_leaderboard,
+    compute_player_shot_chart,
 )
 
 
@@ -100,3 +101,103 @@ def test_traded_player_team_is_deterministic_plurality():
         assert board[0]["team_id"] == "17"  # plurality team, stable across orders
         assert board[0]["team_abbr"] == "LV"
         assert board[0]["fga"] == 120  # both teams' shots still counted
+
+
+def _shot_chart(aid="p1", made=True, pv=2, dist=3.0, x=25, y=4, stype="Layup Shot"):
+    return {
+        "athlete_id": aid,
+        "athlete_name": "P One",
+        "team_id": "t1",
+        "team_abbr": "AAA",
+        "shot_type": stype,
+        "distance_ft": dist,
+        "coord_x": x,
+        "coord_y": y,
+        "points": pv if made else 0,
+        "point_value": pv,
+        "made": made,
+    }
+
+
+def _league(n=60):
+    # enough shots per bucket so build_baseline doesn't fall back to _pv only
+    shots = []
+    for i in range(n):
+        shots.append(
+            _shot_chart(
+                aid=f"g{i}", made=(i % 2 == 0), pv=2, dist=3.0, stype="Layup Shot"
+            )
+        )
+        shots.append(
+            _shot_chart(
+                aid=f"g{i}",
+                made=(i % 3 == 0),
+                pv=3,
+                dist=24.0,
+                x=2,
+                y=2,
+                stype="Jump Shot",
+            )
+        )
+    return shots
+
+
+def test_chart_dots_skip_null_coords_and_clamp_negative_y():
+    baseline = build_baseline(_league())
+    player = [
+        _shot_chart(made=True, x=25, y=4),
+        _shot_chart(
+            made=False, x=None, y=None
+        ),  # null coords -> no dot, still in zones
+        _shot_chart(
+            made=True, x=3, y=-2, pv=3, dist=23.0, stype="Jump Shot"
+        ),  # y clamped to 0
+    ]
+    out = compute_player_shot_chart(player, baseline)
+    assert len(out["shots"]) == 2  # null-coord dot dropped
+    assert out["fga"] == 3  # zones/fga count all 3
+    ys = sorted(s["y"] for s in out["shots"])
+    assert ys[0] == 0  # -2 clamped to 0
+
+
+def test_chart_zone_added_sums_to_leaderboard_points_added():
+    league = _league()
+    player = [
+        _shot_chart(
+            aid="star", made=True, pv=3, dist=24.0, x=2, y=2, stype="Jump Shot"
+        ),
+        _shot_chart(
+            aid="star", made=True, pv=3, dist=24.0, x=48, y=2, stype="Jump Shot"
+        ),
+        _shot_chart(
+            aid="star", made=False, pv=2, dist=3.0, x=25, y=4, stype="Layup Shot"
+        ),
+    ]
+    all_shots = league + player
+    baseline = build_baseline(all_shots)
+    row = next(
+        r
+        for r in compute_leaderboard(all_shots, min_fga=1)
+        if r["athlete_id"] == "star"
+    )
+    chart = compute_player_shot_chart(player, baseline)
+    zone_sum = round(sum(z["added"] for z in chart["zones"]), 2)
+    # Accepted cent-level rounding drift: each zone's `added` is rounded to 2
+    # decimals independently, so their sum can differ from the separately-rounded
+    # total by +-0.01. The panel shows no reconciling total, so the gap is cosmetic.
+    assert abs(zone_sum - row["points_added"]) <= 0.01
+    assert chart["points_added"] == row["points_added"]
+
+
+def test_chart_zone_shape_and_order():
+    baseline = build_baseline(_league())
+    player = [
+        _shot_chart(made=True, pv=3, dist=24.0, x=2, y=2, stype="Jump Shot"),
+        _shot_chart(made=False, pv=2, dist=3.0, x=25, y=4, stype="Layup Shot"),
+        _shot_chart(made=True, pv=2, dist=3.0, x=25, y=4, stype="Layup Shot"),
+    ]
+    out = compute_player_shot_chart(player, baseline)
+    fams = [z["family"] for z in out["zones"]]
+    assert fams == ["rim", "three"]  # reading order, only present families
+    rim = next(z for z in out["zones"] if z["family"] == "rim")
+    assert rim["fga"] == 2 and rim["fg_pct"] == 0.5

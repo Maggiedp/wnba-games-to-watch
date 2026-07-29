@@ -1312,6 +1312,36 @@ def get_shots_for_season(session: Session, season: int) -> list[Shot]:
     return session.query(Shot).filter(Shot.season == season).all()
 
 
+def get_shots_for_player(session: Session, season: int, athlete_id: str) -> list[Shot]:
+    """All of one player's shots for a season (backs /api/player-shots)."""
+    return (
+        session.query(Shot)
+        .filter(Shot.season == season, Shot.athlete_id == athlete_id)
+        .all()
+    )
+
+
+def shot_row_to_dict(row: Shot) -> dict:
+    """A `shots` row → the plain dict the pure scoring helpers consume
+    (build_baseline / compute_leaderboard / compute_player_shot_chart). Includes
+    coords for the shot chart; the leaderboard path ignores the extra keys. One
+    converter for both callers (the /api/player-shots baseline + the daily
+    recompute) so a new Shot field is threaded in one place, not two."""
+    return {
+        "athlete_id": row.athlete_id,
+        "athlete_name": row.athlete_name,
+        "team_id": row.team_id,
+        "team_abbr": row.team_abbr,
+        "shot_type": row.shot_type,
+        "distance_ft": row.distance_ft,
+        "coord_x": row.coord_x,
+        "coord_y": row.coord_y,
+        "points": row.points,
+        "point_value": row.point_value,
+        "made": row.made,
+    }
+
+
 def get_completed_games_missing_shots(
     session: Session, season_year: int = 2026, limit: int | None = None
 ) -> list[Game]:

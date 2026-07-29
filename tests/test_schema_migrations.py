@@ -75,3 +75,58 @@ def test_sqlite_migration_adds_seed_distribution_to_stale_playoff_probabilities(
     finally:
         schema._engine = None
         schema._session_factory = None
+
+
+def test_sqlite_migration_adds_shot_season_athlete_index_to_stale_shots(
+    tmp_path, monkeypatch
+):
+    """A pre-existing SQLite `shots` table (shipped in PR #116, before the
+    (season, athlete_id) index existed) must gain idx_shot_season_athlete on
+    init_db(). create_all skips the already-created table, so without an explicit
+    CREATE INDEX the /api/player-shots hot path would run unindexed on upgraded
+    databases. Guards SQLite/Postgres migration parity for the index.
+    """
+    db_path = tmp_path / "stale_shots.db"
+
+    # Build a stale `shots` schema: the columns + the original single-column
+    # season index, but NOT the composite (season, athlete_id) index.
+    raw = create_engine(f"sqlite:///{db_path}")
+    with raw.connect() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE shots ("
+                "id INTEGER PRIMARY KEY, "
+                "espn_game_id VARCHAR(20) NOT NULL, "
+                "play_id VARCHAR(24) NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "athlete_id VARCHAR(20) NOT NULL, "
+                "athlete_name VARCHAR(64) NOT NULL, "
+                "team_id VARCHAR(20) NOT NULL, "
+                "team_abbr VARCHAR(16) NOT NULL DEFAULT '', "
+                "shot_type VARCHAR(64) NOT NULL, "
+                "distance_ft FLOAT, "
+                "coord_x INTEGER, coord_y INTEGER, "
+                "points INTEGER NOT NULL, "
+                "point_value INTEGER NOT NULL, "
+                "made BOOLEAN NOT NULL)"
+            )
+        )
+        conn.execute(text("CREATE INDEX idx_shot_season ON shots (season)"))
+        conn.commit()
+    raw.dispose()
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    from src.db import schema
+
+    schema._engine = None
+    schema._session_factory = None
+    try:
+        schema.init_db()  # must CREATE INDEX idx_shot_season_athlete on the stale table
+
+        index_names = {
+            ix["name"] for ix in inspect(schema.get_engine()).get_indexes("shots")
+        }
+        assert "idx_shot_season_athlete" in index_names
+    finally:
+        schema._engine = None
+        schema._session_factory = None

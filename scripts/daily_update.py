@@ -37,6 +37,7 @@ from src.db.queries import (
     get_completed_postseason_games,
     get_games_for_excitement_refresh,
     get_shots_for_season,
+    shot_row_to_dict,
     get_team_abbrev_map,
     get_team_by_id,
     get_team_by_name,
@@ -602,20 +603,7 @@ def recompute_shot_making(session, season: int) -> int:
     a stale row the DB-only endpoint keeps serving. Trivial at this scale.
     Returns the eligible player count."""
     shot_rows = get_shots_for_season(session, season)
-    shots = [
-        {
-            "athlete_id": s.athlete_id,
-            "athlete_name": s.athlete_name,
-            "team_id": s.team_id,
-            "team_abbr": s.team_abbr,
-            "shot_type": s.shot_type,
-            "distance_ft": s.distance_ft,
-            "points": s.points,
-            "point_value": s.point_value,
-            "made": s.made,
-        }
-        for s in shot_rows
-    ]
+    shots = [shot_row_to_dict(s) for s in shot_rows]
     board = compute_leaderboard(shots)
     # Replace the whole season slice atomically — drop stale rows first, then
     # insert the freshly computed board; the single commit makes it atomic. A

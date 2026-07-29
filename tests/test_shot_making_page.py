@@ -59,3 +59,12 @@ def test_shot_making_page_og_image_points_to_own_card(client):
     html = client.get("/shot-making").text
     assert "/og-shot-making.png" in html
     assert "/og-home.png" not in html
+
+
+def test_shot_making_page_injects_shot_chart_js():
+    from src.api.routes import render_shot_making
+
+    html = render_shot_making()
+    assert "%%SHOT_CHART_JS%%" not in html  # token was substituted
+    assert "buildShotChartSvg" in html  # helper shipped into page
+    assert "shot-panel" in html  # panel scaffold present

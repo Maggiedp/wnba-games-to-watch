@@ -157,3 +157,53 @@ def compute_leaderboard(shots: list[dict], min_fga: int = 100) -> list[dict]:
         )
     rows.sort(key=lambda r: r["points_added"], reverse=True)
     return rows
+
+
+_ZONE_ORDER = ["rim", "floater", "mid", "three", "other"]
+
+
+def compute_player_shot_chart(player_shots: list[dict], baseline: dict) -> dict:
+    """One player's shot chart + zone summary against a league `baseline`
+    (build_baseline output). Per-shot `added = points - expected_pps(shot)`, so
+    the zone `added` totals sum to this player's leaderboard `points_added`.
+    Dots require non-null coords (y clamped at 0); zones aggregate every shot."""
+    dots = []
+    zones: dict = {}
+    total_added = 0.0
+    for s in player_shots:
+        pv = _point_value(s)
+        added = (s.get("points") or 0) - expected_pps(s, baseline)
+        total_added += added
+        fam = _family_label(s, pv)
+        z = zones.setdefault(fam, {"fga": 0, "made": 0, "added": 0.0})
+        z["fga"] += 1
+        z["made"] += 1 if s.get("made") else 0
+        z["added"] += added
+        cx, cy = s.get("coord_x"), s.get("coord_y")
+        if cx is None or cy is None:
+            continue
+        dots.append(
+            {
+                "x": int(cx),
+                "y": max(0, int(cy)),
+                "made": bool(s.get("made")),
+                "pv": pv,
+                "added": round(added, 2),
+            }
+        )
+    zone_rows = [
+        {
+            "family": fam,
+            "fga": zones[fam]["fga"],
+            "fg_pct": round(zones[fam]["made"] / zones[fam]["fga"], 3),
+            "added": round(zones[fam]["added"], 2),
+        }
+        for fam in _ZONE_ORDER
+        if fam in zones
+    ]
+    return {
+        "fga": len(player_shots),
+        "points_added": round(total_added, 2),
+        "shots": dots,
+        "zones": zone_rows,
+    }

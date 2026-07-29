@@ -44,6 +44,9 @@ from src.db.queries import (
     get_rankings_by_broadcaster,
     get_shape_seasons,
     get_shot_making,
+    get_shots_for_player,
+    get_shots_for_season,
+    shot_row_to_dict,
     get_team_abbrev_map,
     get_team_records,
     get_team_style_season_counts,
@@ -63,6 +66,7 @@ from src.notify.thriller import (
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
 from src.scoring.game_shape import compute_live_shape
+from src.scoring.shot_making import build_baseline, compute_player_shot_chart
 from src.scoring.team_style import compute_style_view
 
 logger = logging.getLogger(__name__)
@@ -492,6 +496,90 @@ def _get_known_espn_ids() -> frozenset[str]:
     with _known_espn_ids_lock:
         _known_espn_ids_cache = (time.monotonic() + _KNOWN_IDS_TTL_S, ids)
     return ids
+
+
+_SHOT_BASELINE_TTL_S = 300
+_shot_baseline_cache: tuple[float, int, dict] | None = None
+_shot_baseline_lock = threading.Lock()
+_shot_baseline_build_lock = threading.Lock()
+
+
+def _get_shot_baseline(season: int) -> dict:
+    """League xPPS baseline for `season`, cached in-process. `shots` only changes
+    at the daily run, so caching is safe; the 300s TTL isn't there to bound
+    staleness (the data is static for ~24h) but to auto-refresh the baseline
+    within ~5 min of the daily run without an explicit invalidation hook — a
+    longer TTL would just widen the post-run window where the baseline lags fresh
+    shots. Same build_baseline the leaderboard uses, so per-shot added ties to
+    shot_making.points_added. Single-flighted: one request reloads the whole
+    season + rebuilds while the rest wait on the build lock and reuse its result,
+    so a cold/expired cache under concurrent panel-opens can't stampede a
+    full-season reload per request (mirrors _build_replay_live)."""
+    global _shot_baseline_cache
+    with _shot_baseline_lock:
+        cached = _shot_baseline_cache
+        if cached and cached[1] == season and cached[0] > time.monotonic():
+            return cached[2]
+    with _shot_baseline_build_lock:
+        with _shot_baseline_lock:
+            cached = _shot_baseline_cache
+            if cached and cached[1] == season and cached[0] > time.monotonic():
+                return cached[2]  # another request built it while we waited
+        session = get_session()
+        try:
+            shots = [shot_row_to_dict(r) for r in get_shots_for_season(session, season)]
+        finally:
+            session.close()
+        baseline = build_baseline(shots)
+        with _shot_baseline_lock:
+            _shot_baseline_cache = (
+                time.monotonic() + _SHOT_BASELINE_TTL_S,
+                season,
+                baseline,
+            )
+        return baseline
+
+
+@app.get("/api/player-shots")
+def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
+    """One player's shot chart for the CURRENT season (DB-only). Colors each shot
+    by points added vs. the league xPPS baseline; empty for an unknown player.
+
+    The panel renders ONLY `shots` + `zones`, so the response deliberately omits
+    `team_abbr` and `points_added`: `team_abbr` would be `rows[0]`'s team, which
+    is nondeterministic for a traded player (get_shots_for_player has no ORDER BY)
+    and the panel never shows a team; `points_added` here is live-recomputed from
+    raw `shots` while the leaderboard row shows the daily `shot_making` snapshot,
+    so exposing it invited a spurious mismatch during the 6 AM ingest→recompute
+    window (see the /api/player-shots gotcha in src/api/CLAUDE.md). `zones` still
+    reflect that same window skew, but only for a just-ingested player and only by
+    mentally summing — accepted daily-window known-limitation. Between daily runs
+    the zones tie to the leaderboard exactly (shared build_baseline)."""
+    season = int(today_et()[:4])
+    session = get_session()
+    try:
+        rows = get_shots_for_player(session, season, athlete_id)
+    finally:
+        session.close()
+    if not rows:
+        return {
+            "athlete_id": athlete_id,
+            "athlete_name": "",
+            "season": season,
+            "fga": 0,
+            "shots": [],
+            "zones": [],
+        }
+    baseline = _get_shot_baseline(season)
+    chart = compute_player_shot_chart([shot_row_to_dict(r) for r in rows], baseline)
+    return {
+        "athlete_id": athlete_id,
+        "athlete_name": rows[0].athlete_name,
+        "season": season,
+        "fga": chart["fga"],
+        "shots": chart["shots"],
+        "zones": chart["zones"],
+    }
 
 
 @app.get("/api/live-wp")
