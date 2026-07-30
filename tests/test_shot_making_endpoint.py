@@ -56,12 +56,24 @@ def test_shot_making_endpoint_ranks_desc(client, env):
     assert body["players"][0]["team_abbr"] == "LV"
 
 
+def test_shot_making_endpoint_reports_league_avg_xpps(client, env):
+    _seed(env)
+    body = client.get("/api/shot-making").json()
+    total_ex = 1.133 * 150 + 1.0 * 150
+    total_fga = 150 + 150
+    assert body["league_avg_xpps"] == round(total_ex / total_fga, 3)
+
+
 def test_shot_making_endpoint_empty(client, env):
     from src.data.espn_api import today_et
 
     r = client.get("/api/shot-making")
     assert r.status_code == 200
-    assert r.json() == {"season": int(today_et()[:4]), "players": []}
+    assert r.json() == {
+        "season": int(today_et()[:4]),
+        "league_avg_xpps": None,
+        "players": [],
+    }
 
 
 def test_endpoint_does_not_fall_back_to_prior_season(client, env, monkeypatch):

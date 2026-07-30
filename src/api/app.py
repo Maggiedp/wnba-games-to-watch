@@ -995,6 +995,12 @@ async def get_shot_making_endpoint():
         season = int(today_et()[:4])
         rows = get_shot_making(session, season)
         rows.sort(key=lambda r: r.points_added, reverse=True)
+        total_fga = sum(r.fga for r in rows)
+        league_avg_xpps = (
+            round(sum(r.expected_pps * r.fga for r in rows) / total_fga, 3)
+            if total_fga
+            else None
+        )
         players = []
         for i, r in enumerate(rows, start=1):
             try:
@@ -1018,7 +1024,11 @@ async def get_shot_making_endpoint():
                     "diet": diet,
                 }
             )
-        return {"season": season, "players": players}
+        return {
+            "season": season,
+            "league_avg_xpps": league_avg_xpps,
+            "players": players,
+        }
     finally:
         session.close()
 
