@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { loadHelpers } = require('./helpers');
 
-const { fmtSigned, dietBar } = loadHelpers('shot_making_helpers.js');
+const { fmtSigned, dietBar, xppsMarker } = loadHelpers('shot_making_helpers.js');
 
 test('fmtSigned adds sign and unicode minus', () => {
   assert.strictEqual(fmtSigned(12.4), '+12.4');
@@ -24,4 +24,15 @@ test('dietBar omits zero/absent families and follows rim/floater/mid/three/other
   const midIdx = html.indexOf('diet-mid');
   const threeIdx = html.indexOf('diet-three');
   assert.ok(rimIdx < midIdx && midIdx < threeIdx, 'segments appear in rim/mid/three order');
+});
+
+test('xppsMarker points up above, down below, dash within epsilon', () => {
+  assert.strictEqual(xppsMarker(1.10, 1.05), '▲');
+  assert.strictEqual(xppsMarker(1.00, 1.05), '▽');
+  assert.strictEqual(xppsMarker(1.052, 1.05), '–');   // within default eps 0.005
+});
+
+test('xppsMarker returns empty string when leagueAvg is missing', () => {
+  assert.strictEqual(xppsMarker(1.10, null), '');
+  assert.strictEqual(xppsMarker(1.10, undefined), '');
 });
