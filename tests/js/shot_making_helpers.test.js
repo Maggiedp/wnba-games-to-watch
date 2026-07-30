@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { loadHelpers } = require('./helpers');
 
-const { fmtSigned, dietBar } = loadHelpers('shot_making_helpers.js');
+const { fmtSigned, dietBar, xppsMarker } = loadHelpers('shot_making_helpers.js');
 
 test('fmtSigned adds sign and unicode minus', () => {
   assert.strictEqual(fmtSigned(12.4), '+12.4');
@@ -24,4 +24,24 @@ test('dietBar omits zero/absent families and follows rim/floater/mid/three/other
   const midIdx = html.indexOf('diet-mid');
   const threeIdx = html.indexOf('diet-three');
   assert.ok(rimIdx < midIdx && midIdx < threeIdx, 'segments appear in rim/mid/three order');
+});
+
+test('xppsMarker matches the displayed 3-decimal comparison', () => {
+  assert.strictEqual(xppsMarker(1.10, 1.05), '▲');
+  assert.strictEqual(xppsMarker(1.00, 1.05), '▽');
+  assert.strictEqual(xppsMarker(1.055, 1.05), '▲');   // 0.005 above reads above, not neutral
+  assert.strictEqual(xppsMarker(1.045, 1.05), '▽');   // 0.005 below reads below, not neutral
+  assert.strictEqual(xppsMarker(1.051, 1.05), '▲');   // any 3-dp difference shows a direction
+  assert.strictEqual(xppsMarker(1.05, 1.05), '–');    // identical as displayed → neutral
+});
+
+test('xppsMarker uses displayed precision, not a rounded raw subtraction', () => {
+  // 1.0045 displays as "1.004" and 1.005 as "1.005" — different, so above.
+  // Math.round((1.005 - 1.0045) * 1000) neutralizes this half-thousandth gap.
+  assert.strictEqual(xppsMarker(1.005, 1.0045), '▲');
+});
+
+test('xppsMarker returns empty string when leagueAvg is missing', () => {
+  assert.strictEqual(xppsMarker(1.10, null), '');
+  assert.strictEqual(xppsMarker(1.10, undefined), '');
 });

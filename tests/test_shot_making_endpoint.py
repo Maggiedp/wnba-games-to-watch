@@ -56,12 +56,33 @@ def test_shot_making_endpoint_ranks_desc(client, env):
     assert body["players"][0]["team_abbr"] == "LV"
 
 
+def test_shot_making_page_has_xpps_anchor(client, env):
+    html = client.get("/shot-making").text
+    assert "xppsMarker(" in html  # glyph rendered per row
+    assert ".xpps-mark" in html  # neutral marker style present
+    assert 'id="lg-xpps-note"' in html  # league-average explainer slot
+
+
+def test_shot_making_endpoint_reports_league_avg_xpps(client, env):
+    _seed(env)
+    body = client.get("/api/shot-making").json()
+    # Aggregated from the stored expected-points totals (Hot 170.0, Cold 150.0),
+    # NOT from the rounded per-player expected_pps.
+    total_ex = 170.0 + 150.0
+    total_fga = 150 + 150
+    assert body["league_avg_xpps"] == round(total_ex / total_fga, 3)
+
+
 def test_shot_making_endpoint_empty(client, env):
     from src.data.espn_api import today_et
 
     r = client.get("/api/shot-making")
     assert r.status_code == 200
-    assert r.json() == {"season": int(today_et()[:4]), "players": []}
+    assert r.json() == {
+        "season": int(today_et()[:4]),
+        "league_avg_xpps": None,
+        "players": [],
+    }
 
 
 def test_endpoint_does_not_fall_back_to_prior_season(client, env, monkeypatch):

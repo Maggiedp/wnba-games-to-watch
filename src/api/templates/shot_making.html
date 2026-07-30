@@ -87,6 +87,7 @@
                 margin: 14px 0 0;
             }
             .shots-defs b { color: var(--navy-3); font-weight: 600; }
+            .xpps-mark { color: var(--text-subtle); font-size: 0.85em; margin-left: 3px; }
             .shots-table-scroll { overflow-x: auto; }
             .shots-table {
                 width: 100%;
@@ -239,6 +240,7 @@
       <b>PPS</b> her actual points per shot ·
       <b>Points added</b> (PPS − xPPS) × attempts ·
       <b>Per 100</b> points added per 100 shots.
+      <span id="lg-xpps-note"></span>
     </p>
   </section>
 </div>
@@ -250,6 +252,7 @@
 (function () {
   let players = [];
   let sortBy = 'added';  // 'added' | 'per100'
+  let leagueAvgXpps = null;
 
   const status = document.getElementById('shots-status');
   const table = document.getElementById('board');
@@ -277,7 +280,7 @@
       <td class="team-cell">${escapeHtml(p.team_abbr || p.team_id)}</td>
       <td class="fga-cell">${p.fga}</td>
       <td class="made-cell">${fgPct}</td>
-      <td>${p.expected_pps.toFixed(3)}</td>
+      <td>${p.expected_pps.toFixed(3)}<span class="xpps-mark">${xppsMarker(p.expected_pps, leagueAvgXpps)}</span></td>
       <td>${p.actual_pps.toFixed(3)}</td>
       <td class="added-cell ${addedClass}">${added}</td>
       <td>${per100}</td>
@@ -389,6 +392,13 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       players = data.players || [];
+      leagueAvgXpps = (typeof data.league_avg_xpps === 'number') ? data.league_avg_xpps : null;
+      const note = document.getElementById('lg-xpps-note');
+      if (note && leagueAvgXpps != null) {
+        note.textContent =
+          ` League-average xPPS this season: ${leagueAvgXpps.toFixed(3)} — ▲ above it (a higher-value shot diet), ▽ below.`
+          + ' That reflects shot selection, not shot quality; whether she converts is Points added.';
+      }
       if (!players.length) { showStatus('Shot-making appears once enough shots are logged this season.'); return; }
       hideStatus();
       render();

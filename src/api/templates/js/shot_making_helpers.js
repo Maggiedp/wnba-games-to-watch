@@ -20,3 +20,22 @@ function dietBar(diet) {
     .map((k) => `<span class="diet-seg diet-${k}" style="flex:${diet[k]}" title="${k}"></span>`)
     .join('');
 }
+
+// Neutral above/below-league-average marker for a player's xPPS. Position-only
+// (▲/▽/–) in a muted tone — deliberately NOT green/red, because xPPS is shot
+// SELECTION (diet value), not making; coloring it would collide with the
+// Points-added semantics. Empty string when there's no league reference yet.
+// Compares each operand rounded to the 3-decimal string the UI displays (via
+// toFixed), NOT a rounded raw subtraction — the latter can neutralize a
+// half-thousandth gap that the two displayed values actually show as different.
+// So the glyph never contradicts the numbers in the cell; '–' = identical as
+// displayed.
+function xppsMarker(xpps, leagueAvg) {
+  if (typeof leagueAvg !== 'number' || !isFinite(leagueAvg)) return '';
+  if (typeof xpps !== 'number' || !isFinite(xpps)) return '';
+  const a = Number(xpps.toFixed(3));
+  const b = Number(leagueAvg.toFixed(3));
+  if (a > b) return '▲';
+  if (a < b) return '▽';
+  return '–';
+}
