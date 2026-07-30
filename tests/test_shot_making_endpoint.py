@@ -66,7 +66,9 @@ def test_shot_making_page_has_xpps_anchor(client, env):
 def test_shot_making_endpoint_reports_league_avg_xpps(client, env):
     _seed(env)
     body = client.get("/api/shot-making").json()
-    total_ex = 1.133 * 150 + 1.0 * 150
+    # Aggregated from the stored expected-points totals (Hot 170.0, Cold 150.0),
+    # NOT from the rounded per-player expected_pps.
+    total_ex = 170.0 + 150.0
     total_fga = 150 + 150
     assert body["league_avg_xpps"] == round(total_ex / total_fga, 3)
 

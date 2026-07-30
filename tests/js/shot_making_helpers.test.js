@@ -35,6 +35,12 @@ test('xppsMarker matches the displayed 3-decimal comparison', () => {
   assert.strictEqual(xppsMarker(1.05, 1.05), '–');    // identical as displayed → neutral
 });
 
+test('xppsMarker uses displayed precision, not a rounded raw subtraction', () => {
+  // 1.0045 displays as "1.004" and 1.005 as "1.005" — different, so above.
+  // Math.round((1.005 - 1.0045) * 1000) neutralizes this half-thousandth gap.
+  assert.strictEqual(xppsMarker(1.005, 1.0045), '▲');
+});
+
 test('xppsMarker returns empty string when leagueAvg is missing', () => {
   assert.strictEqual(xppsMarker(1.10, null), '');
   assert.strictEqual(xppsMarker(1.10, undefined), '');

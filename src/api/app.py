@@ -996,8 +996,12 @@ async def get_shot_making_endpoint():
         rows = get_shot_making(session, season)
         rows.sort(key=lambda r: r.points_added, reverse=True)
         total_fga = sum(r.fga for r in rows)
+        # Aggregate the stored expected-points totals (round(_, 2)) rather than
+        # expected_pps * fga: the latter re-inflates each player's 3-decimal
+        # rounding error by fga, which can shift the league baseline enough to
+        # flip a near-average marker. expected_pts is the less-lossy total.
         league_avg_xpps = (
-            round(sum(r.expected_pps * r.fga for r in rows) / total_fga, 3)
+            round(sum(r.expected_pts for r in rows) / total_fga, 3)
             if total_fga
             else None
         )
