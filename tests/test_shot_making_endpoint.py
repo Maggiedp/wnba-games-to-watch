@@ -56,6 +56,13 @@ def test_shot_making_endpoint_ranks_desc(client, env):
     assert body["players"][0]["team_abbr"] == "LV"
 
 
+def test_shot_making_page_has_xpps_anchor(client, env):
+    html = client.get("/shot-making").text
+    assert "xppsMarker(" in html  # glyph rendered per row
+    assert ".xpps-mark" in html  # neutral marker style present
+    assert 'id="lg-xpps-note"' in html  # league-average explainer slot
+
+
 def test_shot_making_endpoint_reports_league_avg_xpps(client, env):
     _seed(env)
     body = client.get("/api/shot-making").json()
