@@ -26,10 +26,13 @@ test('dietBar omits zero/absent families and follows rim/floater/mid/three/other
   assert.ok(rimIdx < midIdx && midIdx < threeIdx, 'segments appear in rim/mid/three order');
 });
 
-test('xppsMarker points up above, down below, dash within epsilon', () => {
+test('xppsMarker matches the displayed 3-decimal comparison', () => {
   assert.strictEqual(xppsMarker(1.10, 1.05), '▲');
   assert.strictEqual(xppsMarker(1.00, 1.05), '▽');
-  assert.strictEqual(xppsMarker(1.052, 1.05), '–');   // within default eps 0.005
+  assert.strictEqual(xppsMarker(1.055, 1.05), '▲');   // 0.005 above reads above, not neutral
+  assert.strictEqual(xppsMarker(1.045, 1.05), '▽');   // 0.005 below reads below, not neutral
+  assert.strictEqual(xppsMarker(1.051, 1.05), '▲');   // any 3-dp difference shows a direction
+  assert.strictEqual(xppsMarker(1.05, 1.05), '–');    // identical as displayed → neutral
 });
 
 test('xppsMarker returns empty string when leagueAvg is missing', () => {

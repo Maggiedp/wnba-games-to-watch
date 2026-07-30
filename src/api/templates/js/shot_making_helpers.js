@@ -25,9 +25,13 @@ function dietBar(diet) {
 // (▲/▽/–) in a muted tone — deliberately NOT green/red, because xPPS is shot
 // SELECTION (diet value), not making; coloring it would collide with the
 // Points-added semantics. Empty string when there's no league reference yet.
-function xppsMarker(xpps, leagueAvg, eps = 0.005) {
+// Compares at the 3-decimal precision the UI displays (both xpps and leagueAvg
+// are already round(_, 3)), so the glyph never contradicts the shown numbers:
+// '–' means "identical as displayed", not a sub-display "neutral band".
+function xppsMarker(xpps, leagueAvg) {
   if (typeof leagueAvg !== 'number' || !isFinite(leagueAvg)) return '';
-  if (xpps > leagueAvg + eps) return '▲';
-  if (xpps < leagueAvg - eps) return '▽';
+  const d = Math.round((xpps - leagueAvg) * 1000);   // thousandths = displayed precision
+  if (d > 0) return '▲';
+  if (d < 0) return '▽';
   return '–';
 }
