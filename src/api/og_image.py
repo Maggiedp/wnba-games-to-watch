@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import io
 import os
+from collections import Counter
 from datetime import datetime
 
 from PIL import Image, ImageDraw, ImageFont
@@ -324,7 +325,14 @@ def render_player_card_png(session: Session, athlete_id: str) -> bytes | None:
         team = me.team_abbr
         headline = player_headline(me.fga, me.points_added, rank, len(board))
     else:
-        team = rows[0].team_abbr
+        # get_shots_for_player has no ORDER BY, so rows[0].team_abbr is
+        # nondeterministic for a traded player — pick deterministically like
+        # render_player_page's sub-threshold branch (routes.py): the team the
+        # player took the most shots for, ties broken by abbreviation. Must
+        # stay byte-for-byte identical to that branch so the page and this
+        # card never disagree.
+        shot_counts = Counter(r.team_abbr for r in rows)
+        team = max(shot_counts, key=lambda t: (shot_counts[t], t))
         headline = player_headline(len(rows), None, None, None)
 
     return render_player_card(name=name, team=team, headline=headline)

@@ -532,6 +532,27 @@ def _seed_sub_threshold_player(session_or_schema, get=lambda x: x):
     upsert_shots(s, "g2", 2026, [_shot("s2", "p-sub", "Sub Player", "3", "LV")])
 
 
+def _seed_sub_threshold_traded_player(session_or_schema, get=lambda x: x):
+    """A sub-threshold player traded mid-season: 1 shot for their OLD team (LV,
+    inserted first — so a `rows[0]`-based team pick would wrongly report LV)
+    and 3 shots for their CURRENT team (NY, the plurality). Mirrors
+    tests/test_player_page.py's _seed_sub_threshold_traded, which proves the
+    page's team attribution is deterministic by shot count, not insertion
+    order — the OG card must match it exactly."""
+    s = get(session_or_schema)
+    upsert_shots(
+        s,
+        "g3",
+        2026,
+        [
+            _shot("t1", "p-traded", "Traded Player", "3", "LV"),
+            _shot("t2", "p-traded", "Traded Player", "1", "NY", x=26),
+            _shot("t3", "p-traded", "Traded Player", "1", "NY", x=27),
+            _shot("t4", "p-traded", "Traded Player", "1", "NY", x=28),
+        ],
+    )
+
+
 def test_render_player_card_returns_1200x630_png():
     png = render_player_card(
         name="Sabrina Ionescu",
@@ -558,6 +579,31 @@ def test_render_player_card_png_sub_threshold_returns_png_bytes(session):
     _seed_sub_threshold_player(session)
     png = render_player_card_png(session, "p-sub")
     assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
+
+
+def test_render_player_card_png_sub_threshold_team_is_deterministic_plurality(
+    session, monkeypatch
+):
+    """get_shots_for_player has no ORDER BY, so the sub-threshold branch must
+    NOT report `rows[0].team_abbr` (nondeterministic for a traded player) —
+    it must report the team the player took the most shots for, exactly like
+    render_player_page's sub-threshold branch (routes.py). The seed puts the
+    minority team (LV, 1 shot) FIRST in insertion order and the majority team
+    (NY, 3 shots) after, so a `rows[0]`-based bug would resolve "LV"."""
+    _seed_sub_threshold_traded_player(session)
+
+    original = render_player_card
+    captured = {}
+
+    def _spy(*, name, team, headline):
+        captured["team"] = team
+        return original(name=name, team=team, headline=headline)
+
+    monkeypatch.setattr("src.api.og_image.render_player_card", _spy)
+
+    png = render_player_card_png(session, "p-traded")
+    assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
+    assert captured["team"] == "NY"
 
 
 def test_player_og_png(env, client):
