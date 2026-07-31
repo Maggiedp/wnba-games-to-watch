@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+from collections import Counter
 from datetime import datetime
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -1357,7 +1358,13 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
         stat_header = _player_stat_header_html(me, rank, total, league_avg_xpps, diet)
     else:
         rank = None
-        team_abbr = rows[0].team_abbr
+        # get_shots_for_player has no ORDER BY, so rows[0].team_abbr is
+        # nondeterministic for a traded player (same reason /api/player-shots
+        # dropped team_abbr entirely — see src/api/CLAUDE.md). This page still
+        # needs a team for the subtitle, so pick deterministically: the team
+        # the player took the most shots for, ties broken by abbreviation.
+        shot_counts = Counter(r.team_abbr for r in rows)
+        team_abbr = max(shot_counts, key=lambda t: (shot_counts[t], t))
         headline = player_headline(len(rows), None, None, None)
         stat_header = (
             '<p class="degrade-note">Needs 100 FGA to rank — showing shot chart '

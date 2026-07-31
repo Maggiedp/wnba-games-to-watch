@@ -110,6 +110,26 @@ def _seed_sub_threshold(env):
     session.close()
 
 
+def _seed_sub_threshold_traded(env):
+    """A sub-threshold player traded mid-season: 1 shot for their OLD team (LV,
+    inserted first — so a `rows[0]`-based team pick would wrongly report LV)
+    and 3 shots for their CURRENT team (NY, the plurality). Proves the page's
+    team attribution is deterministic by shot count, not insertion order."""
+    session = get_session()
+    q.upsert_shots(
+        session,
+        "g3",
+        2026,
+        [
+            _shot("t1", "p-traded", "Traded Player", "3", "LV", x=25, y=1),
+            _shot("t2", "p-traded", "Traded Player", "1", "NY", x=25, y=1),
+            _shot("t3", "p-traded", "Traded Player", "1", "NY", x=26, y=1),
+            _shot("t4", "p-traded", "Traded Player", "1", "NY", x=27, y=1),
+        ],
+    )
+    session.close()
+
+
 def test_player_page_qualified(client, env):
     from src.api import app as app_module
 
@@ -121,7 +141,7 @@ def test_player_page_qualified(client, env):
     body = r.text
     assert "<title>" in body and "Sabrina" in body
     assert 'property="og:title" content="Sabrina' in body
-    assert "points added" in body and "#" in body
+    assert "points added" in body and "#1 of 2" in body
     assert 'og:image" content="' in body and "/player/p-qual/og.png" in body
     assert 'type="application/json" id="shot-data"' in body
 
@@ -142,6 +162,24 @@ def test_player_page_sub_threshold(client, env):
     assert r.status_code == 200
     assert "showing shot chart only" in r.text
     assert "shot-making rank" not in r.text
+
+
+def test_player_page_sub_threshold_team_is_deterministic_plurality(client, env):
+    """get_shots_for_player has no ORDER BY, so the sub-threshold branch must
+    NOT report `rows[0].team_abbr` (nondeterministic for a traded player) —
+    it must report the team the player took the most shots for. The seed puts
+    the minority team (LV, 1 shot) FIRST in insertion order and the majority
+    team (NY, 3 shots) after, so a `rows[0]`-based bug would show LV."""
+    from src.api import app as app_module
+
+    app_module._shot_baseline_cache = None
+    _seed_sub_threshold_traded(env)
+
+    r = client.get("/player/p-traded")
+    assert r.status_code == 200
+    sub = re.search(r'<p class="player-sub">(.*?)</p>', r.text, re.S).group(1)
+    assert "NY" in sub
+    assert "LV" not in sub
 
 
 def test_player_page_unknown_404(client, env):
