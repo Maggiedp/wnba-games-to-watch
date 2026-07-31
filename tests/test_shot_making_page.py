@@ -68,3 +68,11 @@ def test_shot_making_page_injects_shot_chart_js():
     assert "%%SHOT_CHART_JS%%" not in html  # token was substituted
     assert "buildShotChartSvg" in html  # helper shipped into page
     assert "shot-panel" in html  # panel scaffold present
+
+
+def test_shot_making_panel_has_full_page_permalink():
+    from src.api.routes import render_shot_making
+
+    html = render_shot_making()
+    assert "/player/${encodeURIComponent(data.athlete_id)}" in html
+    assert "Full page" in html
