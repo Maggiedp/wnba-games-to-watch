@@ -64,6 +64,7 @@ const PAGES = [
       );
     },
   },
+  { path: '/player/smoke-shooter-0', readySelector: '#shot-chart svg' },
   { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
   { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: 'main' },
   { path: '/playoff-odds', readySelector: '#playoff-tbody tr' },
