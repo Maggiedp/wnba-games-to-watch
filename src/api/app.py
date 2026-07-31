@@ -169,6 +169,20 @@ def game_detail(espn_id: str):
     return html
 
 
+@app.get("/player/{athlete_id}", response_class=HTMLResponse)
+def player_page(athlete_id: str):
+    from src.api.routes import render_player_page
+
+    session = get_session()
+    try:
+        html = render_player_page(session, athlete_id, _get_shot_baseline)
+    finally:
+        session.close()
+    if html is None:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return html
+
+
 def _png_response(content: bytes, max_age: int) -> Response:
     """A PNG response with a public Cache-Control max-age (shared by og.png routes)."""
     return Response(

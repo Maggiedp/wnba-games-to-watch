@@ -19,9 +19,13 @@ from src.db.queries import (
     get_playoff_probabilities,
     get_shape_by_espn_id,
     get_shapes_by_espn_ids,
+    get_shot_making,
+    get_shots_for_player,
     get_teams_by_ids,
+    shot_row_to_dict,
 )
 from src.db.schema import DailyRanking, Game
+from src.scoring.shot_making import compute_player_shot_chart, player_headline
 
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -1235,3 +1239,145 @@ def render_shot_making() -> str:
     """Render the /shot-making leaderboard shell. STATIC — the leaderboard is
     fetched client-side from /api/shot-making (same import-frozen caveat)."""
     return _SHOT_MAKING_HTML
+
+
+# Page-visible signed formatter — Unicode minus (U+2212) to match the site's
+# number styling. Distinct from shot_making.player_headline's ASCII sign, which
+# must stay ASCII for the Pillow OG card (Fraunces has no U+2212). HTML renders
+# U+2212 fine, so the on-page stats use it here.
+def _fmt_signed(v: float) -> str:
+    return f"+{v:.1f}" if v >= 0 else f"\u2212{abs(v):.1f}"
+
+
+# Neutral above/below-league-average xPPS marker, mirroring xppsMarker() in
+# shot_making_helpers.js: compare each operand at the displayed 3-decimal
+# precision (NOT a rounded raw subtraction, NOT an epsilon band — see the PR #118
+# gotcha in src/api/CLAUDE.md). Grey glyph only; NEVER the green/red points-added
+# colors (xPPS is shot selection, not making).
+def _xpps_marker(xpps: float, league_avg: float | None) -> str:
+    if league_avg is None:
+        return ""
+    a = round(xpps, 3)
+    b = round(league_avg, 3)
+    if a > b:
+        return "\u25b2"
+    if a < b:
+        return "\u25bd"
+    return "\u2013"
+
+
+# Server-side shot-diet bar, mirroring dietBar() in shot_making_helpers.js: one
+# flex-weighted <span> per family with a positive share, in fixed reading order.
+def _diet_bar_html(diet: dict) -> str:
+    order = ("rim", "floater", "mid", "three", "other")
+    segs = "".join(
+        f'<span class="diet-seg diet-{k}" style="flex:{diet[k]}" title="{k}"></span>'
+        for k in order
+        if diet.get(k, 0) > 0
+    )
+    return f'<div class="diet-bar">{segs}</div>'
+
+
+def _player_stat_header_html(row, rank, total, league_avg_xpps, diet) -> str:
+    pa_cls = "is-positive" if row.points_added >= 0 else "is-negative"
+    made_pct = round(row.made / row.fga * 100) if row.fga else 0
+    marker = _xpps_marker(row.expected_pps, league_avg_xpps)
+    marker_html = f'<span class="xpps-mark">{marker}</span>' if marker else ""
+    return f"""
+    <div class="stat-header">
+      <div class="stat big"><span class="v {pa_cls}">{_fmt_signed(row.points_added)}</span>
+        <span class="k">points added</span></div>
+      <div class="stat"><span class="v">{row.expected_pps:.3f}{marker_html}</span>
+        <span class="k">xPPS</span></div>
+      <div class="stat"><span class="v">{row.actual_pps:.3f}</span>
+        <span class="k">PPS</span></div>
+      <div class="stat"><span class="v">{row.made}/{row.fga}</span>
+        <span class="k">FG ({made_pct}%)</span></div>
+      <div class="stat"><span class="v">#{rank} of {total}</span>
+        <span class="k">shot-making rank</span></div>
+    </div>
+    {_diet_bar_html(diet)}
+    """
+
+
+def _player_zones_html(zones) -> str:
+    label = {
+        "rim": "Rim",
+        "floater": "Floater",
+        "mid": "Mid-range",
+        "three": "Three",
+        "other": "Other",
+    }
+    rows = "".join(
+        f'<div class="zr"><span><i class="sw diet-{z["family"]}"></i>'
+        f"{label.get(z['family'], z['family'])}</span>"
+        f"<span>{z['fga']}</span><span>{round(z['fg_pct'] * 100)}%</span>"
+        f'<span class="{"pos" if z["added"] >= 0 else "neg"}">'
+        f"{_fmt_signed(z['added'])}</span></div>"
+        for z in zones
+    )
+    return (
+        '<div class="shot-zones"><div class="zt"><span>Zone</span><span>FGA</span>'
+        "<span>FG%</span><span>+pts</span></div>" + rows + "</div>"
+    )
+
+
+def render_player_page(session, athlete_id, get_baseline) -> str | None:
+    """Render the shareable shot-chart page for one player, or None if the
+    athlete has no shots this season (→ 404). `get_baseline(season)` is injected
+    (the app-layer _get_shot_baseline cache) so this module doesn't import app.py
+    and the full-season baseline only builds for a real player."""
+    season = int(today_et()[:4])
+    rows = get_shots_for_player(session, season, athlete_id)
+    if not rows:
+        return None
+    name = rows[0].athlete_name
+
+    board = get_shot_making(session, season)
+    board.sort(key=lambda r: r.points_added, reverse=True)
+    total = len(board)
+    me = next((r for r in board if r.athlete_id == athlete_id), None)
+
+    total_fga = sum(r.fga for r in board)
+    league_avg_xpps = (
+        round(sum(r.expected_pts for r in board) / total_fga, 3) if total_fga else None
+    )
+
+    baseline = get_baseline(season)
+    chart = compute_player_shot_chart([shot_row_to_dict(r) for r in rows], baseline)
+
+    if me is not None:
+        rank = board.index(me) + 1
+        try:
+            diet = json.loads(me.diet) if me.diet else {}
+        except (ValueError, TypeError):
+            diet = {}
+        team_abbr = me.team_abbr
+        headline = player_headline(me.fga, me.points_added, rank, total)
+        stat_header = _player_stat_header_html(me, rank, total, league_avg_xpps, diet)
+    else:
+        rank = None
+        team_abbr = rows[0].team_abbr
+        headline = player_headline(len(rows), None, None, None)
+        stat_header = (
+            '<p class="degrade-note">Needs 100 FGA to rank — showing shot chart '
+            "only.</p>"
+        )
+
+    title = f"{name} — Shot making — {_SITE_TITLE}"
+    subtitle = f"{team_abbr} · {season} · Shot making"
+
+    return _jinja_env.get_template("player.html").render(
+        title=title,
+        summary=headline,
+        name=name,
+        subtitle=subtitle,
+        athlete_id=athlete_id,
+        site_url=_SITE_URL,
+        stat_header=stat_header,
+        zones_html=_player_zones_html(chart["zones"]),
+        chart=chart["shots"],  # jinja `| tojson` -> </-safe embedded blob
+        site_nav=_site_nav("shot-making"),
+        shared_head=_SHARED_HEAD,
+        shot_chart_js=_SHOT_CHART_JS,
+    )
