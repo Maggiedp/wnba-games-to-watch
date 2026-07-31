@@ -15,8 +15,10 @@ from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.orm import Session
 
-from src.db.queries import get_teams_by_ids
+from src.data.espn_api import today_et
+from src.db.queries import get_shot_making, get_shots_for_player, get_teams_by_ids
 from src.db.schema import DailyRanking, Game
+from src.scoring.shot_making import player_headline
 
 WIDTH, HEIGHT = 1200, 630
 
@@ -284,3 +286,45 @@ def render_game_card_png(session: Session, espn_id: str) -> bytes | None:
         date_str=game.date,
         broadcaster=game.broadcaster or "",
     )
+
+
+def render_player_card(name: str, team: str, headline: str) -> bytes:
+    """Render the 1200x630 shareable player card as PNG bytes. Text only (name,
+    team, headline). `headline` is ASCII-signed (see shot_making.player_headline)
+    because Fraunces has no U+2212 glyph — a Unicode minus would tofu on the
+    rasterized card."""
+    img, draw = _draw_base()
+    name_font = _fit_font(draw, name, max_width=1080, start_size=110, weight=900.0)
+    _centered(draw, name, 210, name_font, _OFFWHITE)
+    if team:
+        _centered(draw, team, 360, _load_font(40, 600.0), _MUTED)
+    _centered(draw, headline, 470, _load_font(46, 700.0), _ORANGE)
+    _centered(draw, "Shot making · wumbers", 560, _load_font(28, 400.0), _MUTED)
+    return _to_png(img)
+
+
+def render_player_card_png(session: Session, athlete_id: str) -> bytes | None:
+    """Fetch a player and render the shareable OG card, or None if no shots.
+
+    Resolves the same qualified/sub-threshold headline as render_player_page
+    (routes.py) — a deliberate 2-caller duplication of that rank/team logic
+    per the repo's extract-on-3rd-caller convention.
+    """
+    season = int(today_et()[:4])
+    rows = get_shots_for_player(session, season, athlete_id)
+    if not rows:
+        return None
+    name = rows[0].athlete_name
+
+    board = get_shot_making(session, season)
+    board.sort(key=lambda r: r.points_added, reverse=True)
+    me = next((r for r in board if r.athlete_id == athlete_id), None)
+    if me is not None:
+        rank = board.index(me) + 1
+        team = me.team_abbr
+        headline = player_headline(me.fga, me.points_added, rank, len(board))
+    else:
+        team = rows[0].team_abbr
+        headline = player_headline(len(rows), None, None, None)
+
+    return render_player_card(name=name, team=team, headline=headline)
