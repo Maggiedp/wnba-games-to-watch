@@ -1366,9 +1366,15 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
         shot_counts = Counter(r.team_abbr for r in rows)
         team_abbr = max(shot_counts, key=lambda t: (shot_counts[t], t))
         headline = player_headline(len(rows), None, None, None)
+        # Copy deliberately asserts NO per-player FGA count: this sub-threshold
+        # branch also covers the transient 6 AM window where a player has 100+
+        # raw shots but isn't in the just-being-recomputed shot_making board yet
+        # (see the known-limitation in src/api/CLAUDE.md), so a "needs 100 FGA"
+        # claim would be self-contradictory then. "Not yet ranked" is honest in
+        # both the genuinely-sub-threshold and transient cases; the zone table
+        # still renders below, so it also drops the old inaccurate "only".
         stat_header = (
-            '<p class="degrade-note">Needs 100 FGA to rank — showing shot chart '
-            "only.</p>"
+            '<p class="degrade-note">Not yet ranked on the shot-making leaderboard.</p>'
         )
 
     title = f"{name} — Shot making — {_SITE_TITLE}"
