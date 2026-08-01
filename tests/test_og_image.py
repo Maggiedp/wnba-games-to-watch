@@ -7,9 +7,21 @@ from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.api.og_image import _format_date, render_game_card, render_game_card_png
+from src.api.og_image import (
+    _format_date,
+    render_game_card,
+    render_game_card_png,
+    render_player_card,
+    render_player_card_png,
+)
 from src.api.routes import render_game_detail
-from src.db.queries import upsert_daily_ranking, upsert_game, upsert_team
+from src.db.queries import (
+    upsert_daily_ranking,
+    upsert_game,
+    upsert_shot_making,
+    upsert_shots,
+    upsert_team,
+)
 from src.db.schema import Base
 
 
@@ -21,8 +33,10 @@ def _clear_og_cache():
     import src.api.app as app_module
 
     app_module._og_cache.clear()
+    app_module._player_og_cache.clear()
     yield
     app_module._og_cache.clear()
+    app_module._player_og_cache.clear()
 
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -464,3 +478,151 @@ def test_og_playoff_odds_endpoint_returns_png(client):
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
     assert r.headers["cache-control"] == f"public, max-age={_OG_STATIC_CACHE_S}"
+
+
+# --- Per-player shareable card (/player/{athlete_id}/og.png) ---
+
+
+def _shot(
+    pid, athlete_id, athlete_name, team_id, team_abbr, *, x=25, y=1, made=True, pv=2
+):
+    return {
+        "play_id": pid,
+        "athlete_id": athlete_id,
+        "athlete_name": athlete_name,
+        "team_id": team_id,
+        "team_abbr": team_abbr,
+        "shot_type": "Layup Shot",
+        "distance_ft": 1.0,
+        "coord_x": x,
+        "coord_y": y,
+        "points": pv if made else 0,
+        "point_value": pv,
+        "made": made,
+    }
+
+
+def _seed_qualified_player(session_or_schema, get=lambda x: x):
+    """Seed a qualified (≥100 FGA) player with a shot_making board row plus a
+    raw shot, mirroring tests/test_player_page.py's _seed_qualified."""
+    s = get(session_or_schema)
+    upsert_shot_making(
+        s,
+        2026,
+        "p-qual",
+        athlete_name="Sabrina Ionescu",
+        team_id="1",
+        team_abbr="NY",
+        fga=150,
+        made=90,
+        actual_pts=190.0,
+        expected_pts=170.0,
+        points_added=20.0,
+        points_added_per_100=13.33,
+        actual_pps=1.266,
+        expected_pps=1.133,
+        diet="{}",
+    )
+    s.commit()
+    upsert_shots(s, "g1", 2026, [_shot("s1", "p-qual", "Sabrina Ionescu", "1", "NY")])
+
+
+def _seed_sub_threshold_player(session_or_schema, get=lambda x: x):
+    s = get(session_or_schema)
+    upsert_shots(s, "g2", 2026, [_shot("s2", "p-sub", "Sub Player", "3", "LV")])
+
+
+def _seed_sub_threshold_traded_player(session_or_schema, get=lambda x: x):
+    """A sub-threshold player traded mid-season: 1 shot for their OLD team (LV,
+    inserted first — so a `rows[0]`-based team pick would wrongly report LV)
+    and 3 shots for their CURRENT team (NY, the plurality). Mirrors
+    tests/test_player_page.py's _seed_sub_threshold_traded, which proves the
+    page's team attribution is deterministic by shot count, not insertion
+    order — the OG card must match it exactly."""
+    s = get(session_or_schema)
+    upsert_shots(
+        s,
+        "g3",
+        2026,
+        [
+            _shot("t1", "p-traded", "Traded Player", "3", "LV"),
+            _shot("t2", "p-traded", "Traded Player", "1", "NY", x=26),
+            _shot("t3", "p-traded", "Traded Player", "1", "NY", x=27),
+            _shot("t4", "p-traded", "Traded Player", "1", "NY", x=28),
+        ],
+    )
+
+
+def test_render_player_card_returns_1200x630_png():
+    png = render_player_card(
+        name="Sabrina Ionescu",
+        team="NY",
+        headline="+20.0 points added · #1 of 2 · 150 FGA",
+    )
+    assert isinstance(png, bytes)
+    img = _open(png)
+    assert img.format == "PNG"
+    assert img.size == (1200, 630)
+
+
+def test_render_player_card_png_unknown_id_returns_none(session):
+    assert render_player_card_png(session, "nobody") is None
+
+
+def test_render_player_card_png_qualified_returns_png_bytes(session):
+    _seed_qualified_player(session)
+    png = render_player_card_png(session, "p-qual")
+    assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
+
+
+def test_render_player_card_png_sub_threshold_returns_png_bytes(session):
+    _seed_sub_threshold_player(session)
+    png = render_player_card_png(session, "p-sub")
+    assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
+
+
+def test_render_player_card_png_sub_threshold_team_is_deterministic_plurality(
+    session, monkeypatch
+):
+    """get_shots_for_player has no ORDER BY, so the sub-threshold branch must
+    NOT report `rows[0].team_abbr` (nondeterministic for a traded player) —
+    it must report the team the player took the most shots for, exactly like
+    render_player_page's sub-threshold branch (routes.py). The seed puts the
+    minority team (LV, 1 shot) FIRST in insertion order and the majority team
+    (NY, 3 shots) after, so a `rows[0]`-based bug would resolve "LV"."""
+    _seed_sub_threshold_traded_player(session)
+
+    original = render_player_card
+    captured = {}
+
+    def _spy(*, name, team, headline):
+        captured["team"] = team
+        return original(name=name, team=team, headline=headline)
+
+    monkeypatch.setattr("src.api.og_image.render_player_card", _spy)
+
+    png = render_player_card_png(session, "p-traded")
+    assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
+    assert captured["team"] == "NY"
+
+
+def test_player_og_png(env, client):
+    _seed_qualified_player(env, get=lambda s: s.get_session())
+
+    r = client.get("/player/p-qual/og.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content[:8] == _PNG_MAGIC
+
+
+def test_player_og_cache_control_matches_ttl(env, client):
+    _seed_qualified_player(env, get=lambda s: s.get_session())
+    from src.api.app import _OG_CACHE_TTL_S
+
+    r = client.get("/player/p-qual/og.png")
+    assert r.headers["cache-control"] == f"public, max-age={_OG_CACHE_TTL_S}"
+
+
+def test_player_og_unknown_404(client):
+    r = client.get("/player/nobody/og.png")
+    assert r.status_code == 404

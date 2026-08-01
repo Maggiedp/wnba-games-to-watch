@@ -207,3 +207,22 @@ def compute_player_shot_chart(player_shots: list[dict], baseline: dict) -> dict:
         "shots": dots,
         "zones": zone_rows,
     }
+
+
+def player_headline(
+    fga: int,
+    points_added: float | None,
+    rank: int | None,
+    total: int | None,
+) -> str:
+    """Headline stat line for the shareable player page's meta description and OG
+    card. ASCII-signed on purpose: it's rasterized into the Pillow OG card and
+    Fraunces has no U+2212 glyph (tofu), so use '+'/'-' not the site's Unicode
+    minus. When `rank` is None the player is below the leaderboard's FGA cutoff —
+    chart-only, so drop the ranked stats and just state the sample size."""
+    if rank is None:
+        return f"{fga} FGA this season"
+    sign = "+" if points_added >= 0 else "-"
+    return (
+        f"{sign}{abs(points_added):.1f} points added · #{rank} of {total} · {fga} FGA"
+    )

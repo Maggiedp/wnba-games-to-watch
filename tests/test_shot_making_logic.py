@@ -5,6 +5,7 @@ from src.scoring.shot_making import (
     expected_pps,
     compute_leaderboard,
     compute_player_shot_chart,
+    player_headline,
 )
 
 
@@ -201,3 +202,24 @@ def test_chart_zone_shape_and_order():
     assert fams == ["rim", "three"]  # reading order, only present families
     rim = next(z for z in out["zones"] if z["family"] == "rim")
     assert rim["fga"] == 2 and rim["fg_pct"] == 0.5
+
+
+def test_player_headline_qualified_positive():
+    assert player_headline(312, 2.34, 4, 38) == "+2.3 points added · #4 of 38 · 312 FGA"
+
+
+def test_player_headline_qualified_negative():
+    assert (
+        player_headline(210, -1.75, 33, 38) == "-1.8 points added · #33 of 38 · 210 FGA"
+    )
+
+
+def test_player_headline_qualified_zero_is_plus():
+    assert (
+        player_headline(150, 0.0, 20, 38) == "+0.0 points added · #20 of 38 · 150 FGA"
+    )
+
+
+def test_player_headline_sub_threshold():
+    # rank is None -> below the leaderboard cutoff: chart-only, no rank line.
+    assert player_headline(41, None, None, None) == "41 FGA this season"

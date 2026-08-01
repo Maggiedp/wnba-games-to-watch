@@ -169,6 +169,20 @@ def game_detail(espn_id: str):
     return html
 
 
+@app.get("/player/{athlete_id}", response_class=HTMLResponse)
+def player_page(athlete_id: str):
+    from src.api.routes import render_player_page
+
+    session = get_session()
+    try:
+        html = render_player_page(session, athlete_id, _get_shot_baseline)
+    finally:
+        session.close()
+    if html is None:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return html
+
+
 def _png_response(content: bytes, max_age: int) -> Response:
     """A PNG response with a public Cache-Control max-age (shared by og.png routes)."""
     return Response(
@@ -208,6 +222,35 @@ def game_og_image(espn_id: str):
     # Advertise the same freshness the server cache actually enforces. The
     # underlying overall_score can change between daily runs, so a longer public
     # max-age would let browsers/proxies serve a stale card after the data moved.
+    return _png_response(png, _OG_CACHE_TTL_S)
+
+
+@app.api_route("/player/{athlete_id}/og.png", methods=["GET", "HEAD"])
+def player_og_image(athlete_id: str):
+    from src.api.og_image import render_player_card_png
+
+    with _og_cache_lock:
+        cached = _player_og_cache.get(athlete_id)
+        if cached and cached[0] > time.monotonic():
+            _player_og_cache.move_to_end(athlete_id)
+            png = cached[1]
+        else:
+            png = None
+
+    if png is None:
+        session = get_session()
+        try:
+            png = render_player_card_png(session, athlete_id)
+        finally:
+            session.close()
+        if png is None:
+            raise HTTPException(status_code=404, detail="Player not found")
+        with _og_cache_lock:
+            _player_og_cache[athlete_id] = (time.monotonic() + _OG_CACHE_TTL_S, png)
+            _player_og_cache.move_to_end(athlete_id)
+            while len(_player_og_cache) > _OG_CACHE_MAX_ENTRIES:
+                _player_og_cache.popitem(last=False)
+
     return _png_response(png, _OG_CACHE_TTL_S)
 
 
@@ -479,6 +522,12 @@ _og_cache: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
 # Sync `def` endpoints run in FastAPI's threadpool, so guard the cache's
 # read-modify-write (move_to_end / eviction loop) like _live_wp_cache does.
 _og_cache_lock = threading.Lock()
+
+# Dedicated cache for /player/{athlete_id}/og.png, keyed by athlete_id — kept
+# separate from _og_cache so an athlete_id can never collide with a game
+# espn_id in the shared dict. Reuses _og_cache_lock + _OG_CACHE_TTL_S /
+# _OG_CACHE_MAX_ENTRIES (same freshness/size policy, different keyspace).
+_player_og_cache: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
 
 
 def _get_known_espn_ids() -> frozenset[str]:
