@@ -1339,11 +1339,6 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
     total = len(board)
     me = next((r for r in board if r.athlete_id == athlete_id), None)
 
-    total_fga = sum(r.fga for r in board)
-    league_avg_xpps = (
-        round(sum(r.expected_pts for r in board) / total_fga, 3) if total_fga else None
-    )
-
     baseline = get_baseline(season)
     chart = compute_player_shot_chart([shot_row_to_dict(r) for r in rows], baseline)
 
@@ -1354,10 +1349,20 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
         except (ValueError, TypeError):
             diet = {}
         team_abbr = me.team_abbr
+        # League-average xPPS (FGA-weighted over the qualified board) anchors the
+        # neutral above/below marker; only the qualified header renders it, so
+        # compute it here, not unconditionally. Sums expected_pts (not
+        # expected_pps*fga, which re-inflates each row's rounding) — same
+        # rationale as the /api/shot-making endpoint.
+        total_fga = sum(r.fga for r in board)
+        league_avg_xpps = (
+            round(sum(r.expected_pts for r in board) / total_fga, 3)
+            if total_fga
+            else None
+        )
         headline = player_headline(me.fga, me.points_added, rank, total)
         stat_header = _player_stat_header_html(me, rank, total, league_avg_xpps, diet)
     else:
-        rank = None
         # get_shots_for_player has no ORDER BY, so rows[0].team_abbr is
         # nondeterministic for a traded player (same reason /api/player-shots
         # dropped team_abbr entirely — see src/api/CLAUDE.md). This page still

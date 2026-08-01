@@ -312,19 +312,32 @@ def render_player_card_png(session: Session, athlete_id: str) -> bytes | None:
     per the repo's extract-on-3rd-caller convention.
     """
     season = int(today_et()[:4])
-    rows = get_shots_for_player(session, season, athlete_id)
-    if not rows:
-        return None
-    name = rows[0].athlete_name
 
+    # Check the ranked board first: a qualified player (the common path — the
+    # leaderboard only links ≥100-FGA players) carries name/team/stats on the
+    # board row, so we can skip the full raw-shots query entirely. One pass
+    # yields both the row and its rank.
     board = get_shot_making(session, season)
     board.sort(key=lambda r: r.points_added, reverse=True)
-    me = next((r for r in board if r.athlete_id == athlete_id), None)
+    me = None
+    rank = None
+    for i, r in enumerate(board):
+        if r.athlete_id == athlete_id:
+            me, rank = r, i + 1
+            break
+
     if me is not None:
-        rank = board.index(me) + 1
+        name = me.athlete_name
         team = me.team_abbr
         headline = player_headline(me.fga, me.points_added, rank, len(board))
     else:
+        # Not on the board: sub-threshold (has shots but no ranked row) or
+        # unknown. Only now fetch the raw shots — needed for the name, the FGA
+        # count, and to 404 an unknown athlete.
+        rows = get_shots_for_player(session, season, athlete_id)
+        if not rows:
+            return None
+        name = rows[0].athlete_name
         # get_shots_for_player has no ORDER BY, so rows[0].team_abbr is
         # nondeterministic for a traded player — pick deterministically like
         # render_player_page's sub-threshold branch (routes.py): the team the
