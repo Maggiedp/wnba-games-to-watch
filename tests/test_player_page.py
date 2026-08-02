@@ -152,6 +152,23 @@ def test_player_page_qualified(client, env):
     assert 'aria-current="page"' in body and "/shot-making" in body
 
 
+def test_player_page_style_tags_are_balanced(client, env):
+    """Regression: player.html must NOT open its own <style> after
+    {{ shared_head }} — the shared head opens one and leaves it open for the
+    page to close. A stray nested <style> corrupts CSS parsing; the browser
+    error-recovers by dropping the first rule (`main`, the layout container),
+    which made the whole page render full-width and left-pinned. The
+    structural invariant is balanced style tags + the `main` rule surviving."""
+    from src.api import app as app_module
+
+    app_module._shot_baseline_cache = None
+    _seed_qualified(env)
+
+    body = client.get("/player/p-qual").text
+    assert body.count("<style") == body.count("</style")
+    assert "main { max-width: 760px" in body
+
+
 def test_player_page_sub_threshold(client, env):
     from src.api import app as app_module
 

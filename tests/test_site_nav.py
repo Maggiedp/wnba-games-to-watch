@@ -34,6 +34,19 @@ def test_site_nav_on_every_page(client):
         ) in r.text, active_path
 
 
+def test_style_tags_balanced_on_every_page(client):
+    """Every page appends its CSS after _SHARED_HEAD's open <style> and closes
+    it exactly once — no page opens a second <style>, which would nest and
+    corrupt CSS parsing (the browser error-recovers by dropping the first rule).
+    That footgun dropped `main` on /player, pinning the layout full-width. The
+    structural invariant is balanced tags, and it applies to the whole page
+    family, not just the one template that regressed. (Data-bearing /player and
+    /game/{id} share the contract; /player is guarded in test_player_page.py.)"""
+    for path, _ in NAV:
+        html = client.get(path).text
+        assert html.count("<style") == html.count("</style"), path
+
+
 def test_homepage_nav_masthead_variant_and_slim_footer(client):
     """Homepage nav uses the in-masthead variant, and the footer is slimmed to
     meta links (the three view links moved to the nav)."""
