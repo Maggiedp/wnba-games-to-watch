@@ -15,6 +15,7 @@ from src.db.schema import (
     GameShape,
     PlayoffProbability,
     Shot,
+    ShotLeagueAvg,  # noqa: F401
     ShotMaking,
     Team,
     TeamStyle,
@@ -1410,6 +1411,34 @@ def upsert_shot_making(
 def get_shot_making(session: Session, season: int) -> list[ShotMaking]:
     """All shot_making rows for a season."""
     return session.query(ShotMaking).filter(ShotMaking.season == season).all()
+
+
+def upsert_shot_league_avg(
+    session: Session,
+    season: int,
+    *,
+    avg_xpps: float,
+    avg_pps: float,
+    fga: int,
+    commit: bool = True,
+) -> ShotLeagueAvg:
+    """Upsert the single all-league anchor row for a season. Idempotent.
+    Defaults to commit=False usage inside the daily recompute's transaction."""
+    row = session.query(ShotLeagueAvg).filter(ShotLeagueAvg.season == season).first()
+    if row is None:
+        row = ShotLeagueAvg(season=season)
+        session.add(row)
+    row.avg_xpps = avg_xpps
+    row.avg_pps = avg_pps
+    row.fga = fga
+    if commit:
+        session.commit()
+    return row
+
+
+def get_shot_league_avg(session: Session, season: int) -> ShotLeagueAvg | None:
+    """The all-league anchor row for a season, or None before the first daily run."""
+    return session.query(ShotLeagueAvg).filter(ShotLeagueAvg.season == season).first()
 
 
 def has_alerted(session: Session, espn_id: str) -> bool:
