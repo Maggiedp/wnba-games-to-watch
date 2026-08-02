@@ -350,11 +350,38 @@ def test_recompute_shot_making_writes_league_anchors(session):
 
 
 def test_recompute_shot_making_rolls_back_anchors_with_the_board(session, monkeypatch):
-    _seed_shots_for_recompute(session)
-    du.recompute_shot_making(session, 2026)
-    before = q.get_shot_league_avg(session, 2026).fga
+    # Sentinel "previous run" state, seeded directly (not via a successful
+    # recompute) so it's DISTINCT from what the shots seeded below would
+    # produce if committed — mirroring test_recompute_failure_preserves_
+    # previous_board. Without this divergence the assertions below would
+    # hold trivially (recompute is idempotent on unchanged shots), giving
+    # zero regression protection for the rollback itself.
+    q.upsert_shot_making(
+        session,
+        2026,
+        "old",
+        athlete_name="Old",
+        team_id="1",
+        team_abbr="LV",
+        fga=150,
+        made=80,
+        actual_pts=170.0,
+        expected_pts=160.0,
+        points_added=10.0,
+        points_added_per_100=6.67,
+        actual_pps=1.133,
+        expected_pps=1.067,
+        diet="{}",
+    )
+    q.upsert_shot_league_avg(session, 2026, avg_xpps=1.0, avg_pps=1.0, fga=999)
 
-    # Force a failure after the delete+insert so the whole transaction rolls back.
+    _seed_shots_for_recompute(
+        session
+    )  # athlete "10" — would replace "old" if committed
+
+    # Force a failure after the board's delete+reinsert is staged so the
+    # whole transaction — anchors AND the board it describes — must roll
+    # back together.
     monkeypatch.setattr(
         du,
         "upsert_shot_league_avg",
@@ -362,6 +389,13 @@ def test_recompute_shot_making_rolls_back_anchors_with_the_board(session, monkey
     )
     with pytest.raises(RuntimeError):
         du.recompute_shot_making(session, 2026)
-    session.rollback()
-    # the previous anchors survive; a failed run never publishes a half-state
-    assert q.get_shot_league_avg(session, 2026).fga == before
+    # Mirrors test_recompute_failure_preserves_previous_board: commit (not
+    # rollback) here forces any state production left staged to become
+    # permanent, so a broken production rollback in recompute_shot_making's
+    # except block would actually fail the assertions below instead of being
+    # silently cleaned up by a rollback the test performs itself.
+    session.commit()
+    # the previous anchors AND board survive; a failed run never publishes a
+    # half-state
+    assert {r.athlete_id for r in q.get_shot_making(session, 2026)} == {"old"}
+    assert q.get_shot_league_avg(session, 2026).fga == 999
