@@ -1,3 +1,5 @@
+import pytest
+
 from src.scoring.shot_making import (
     shot_family,
     bucket_key,
@@ -6,6 +8,9 @@ from src.scoring.shot_making import (
     compute_leaderboard,
     compute_player_shot_chart,
     player_headline,
+    bridge_gaps,
+    bridge_scale,
+    compute_league_averages,
 )
 
 
@@ -223,3 +228,86 @@ def test_player_headline_qualified_zero_is_plus():
 def test_player_headline_sub_threshold():
     # rank is None -> below the leaderboard cutoff: chart-only, no rank line.
     assert player_headline(41, None, None, None) == "41 FGA this season"
+
+
+def _shots(n_rim, n_three):
+    """n_rim made-half rim shots + n_three made-third threes."""
+    out = []
+    for i in range(n_rim):
+        out.append(
+            {
+                "athlete_id": "a",
+                "athlete_name": "A",
+                "team_id": "1",
+                "shot_type": "Layup Shot",
+                "distance_ft": 2.0,
+                "point_value": 2,
+                "points": 2 if i % 2 == 0 else 0,
+                "made": i % 2 == 0,
+            }
+        )
+    for i in range(n_three):
+        out.append(
+            {
+                "athlete_id": "b",
+                "athlete_name": "B",
+                "team_id": "1",
+                "shot_type": "Jump Shot",
+                "distance_ft": 24.0,
+                "point_value": 3,
+                "points": 3 if i % 3 == 0 else 0,
+                "made": i % 3 == 0,
+            }
+        )
+    return out
+
+
+def test_compute_league_averages_spans_every_shot():
+    shots = _shots(60, 60)
+    avg = compute_league_averages(shots)
+    assert avg["fga"] == 120
+    # avg_pps is the plain realized rate over all shots, stored to 4 decimals
+    total_pts = sum(s["points"] for s in shots)
+    assert avg["avg_pps"] == pytest.approx(total_pts / 120, abs=1e-4)
+    # the baseline is fitted to these same shots, so expected tracks actual
+    assert avg["avg_xpps"] == pytest.approx(avg["avg_pps"], abs=0.05)
+
+
+def test_compute_league_averages_empty_is_none():
+    avg = compute_league_averages([])
+    assert avg["fga"] == 0
+    assert avg["avg_xpps"] is None
+    assert avg["avg_pps"] is None
+
+
+def test_bridge_gaps_are_exactly_additive():
+    g = bridge_gaps(0.932, 1.144, 1.027, 1.037)
+    assert g["selection"] == pytest.approx(-0.095, abs=1e-9)
+    assert g["total"] == pytest.approx(0.107, abs=1e-9)
+    # the defining property: the two components chain to the total, exactly
+    assert g["selection"] + g["making"] == pytest.approx(g["total"], abs=1e-12)
+
+
+def test_bridge_gaps_making_absorbs_the_league_making_residual():
+    # L_m = avg_pps - avg_xpps = 0.010; a player whose raw points-added-per-shot
+    # equals that residual sits exactly on the making centerline.
+    g = bridge_gaps(1.000, 1.010, 1.000, 1.010)
+    assert g["making"] == pytest.approx(0.0, abs=1e-12)
+
+
+class _Row:
+    def __init__(self, expected_pps, actual_pps):
+        self.expected_pps = expected_pps
+        self.actual_pps = actual_pps
+
+
+def test_bridge_scale_bounds_selection_and_total():
+    rows = [_Row(0.932, 1.144), _Row(1.177, 1.152), _Row(1.111, 0.762)]
+    # selection gaps: -0.095, +0.150, +0.084 ; total gaps: +0.107, +0.115, -0.275
+    scale = bridge_scale(rows, 1.027, 1.037)
+    assert scale == pytest.approx(0.275, abs=1e-9)
+
+
+def test_bridge_scale_is_none_when_board_is_empty_or_anchorless():
+    assert bridge_scale([], 1.027, 1.037) is None
+    assert bridge_scale([_Row(1.0, 1.0)], None, 1.037) is None

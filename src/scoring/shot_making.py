@@ -209,6 +209,70 @@ def compute_player_shot_chart(player_shots: list[dict], baseline: dict) -> dict:
     }
 
 
+def compute_league_averages(shots: list[dict]) -> dict:
+    """All-league anchors for a season: the FGA-weighted mean expected and actual
+    points per shot over EVERY shot, not the >=100-FGA qualified pool that
+    /api/shot-making returns.
+
+    Builds its own baseline rather than threading one through compute_leaderboard's
+    signature: the daily job runs once and build_baseline over a season of shots is
+    a fraction of a second, which is cheaper than churning a well-tested signature.
+
+    Because the baseline is fitted so leaguewide expected ~= actual, avg_pps -
+    avg_xpps lands near zero. That residual is what keeps the bridge's making axis
+    anchored on its published meaning (zero = a league-average shooter).
+    """
+    if not shots:
+        return {"avg_xpps": None, "avg_pps": None, "fga": 0}
+    baseline = build_baseline(shots)
+    fga = len(shots)
+    actual = sum(s.get("points") or 0 for s in shots)
+    expected = sum(expected_pps(s, baseline) for s in shots)
+    return {
+        "avg_xpps": round(expected / fga, 4),
+        "avg_pps": round(actual / fga, 4),
+        "fga": fga,
+    }
+
+
+def bridge_gaps(
+    expected_pps_val: float,
+    actual_pps_val: float,
+    avg_xpps: float,
+    avg_pps: float,
+) -> dict:
+    """The three bridge gaps for one player, vs the all-league anchors.
+
+    selection = what her shot diet is worth, vs the league's
+    making    = how far she beats the expectation on those shots, vs the league's
+    total     = her points per shot, vs the league's
+
+    `making` is derived as total - selection rather than computed independently,
+    which makes selection + making == total exact in floating point. The bridge
+    draws the two as chained segments, so any drift would show as a visible seam.
+    """
+    selection = expected_pps_val - avg_xpps
+    total = actual_pps_val - avg_pps
+    return {"selection": selection, "making": total - selection, "total": total}
+
+
+def bridge_scale(rows, avg_xpps, avg_pps):
+    """Symmetric half-domain for the bridge track, or None if it can't be drawn.
+
+    The bridge's running positions are 0 -> selection -> total, so bounding
+    |selection| and |total| bounds every segment including making's, which spans
+    between them. Derived from the board so the track self-calibrates to the
+    season's real spread instead of clamping against a fixed guess.
+    """
+    if avg_xpps is None or avg_pps is None:
+        return None
+    widest = 0.0
+    for r in rows:
+        g = bridge_gaps(r.expected_pps, r.actual_pps, avg_xpps, avg_pps)
+        widest = max(widest, abs(g["selection"]), abs(g["total"]))
+    return widest or None
+
+
 def player_headline(
     fga: int,
     points_added: float | None,
