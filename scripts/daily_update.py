@@ -48,6 +48,7 @@ from src.db.queries import (
     upsert_game,
     upsert_game_shape,
     upsert_playoff_probability,
+    upsert_shot_league_avg,
     upsert_shot_making,
     upsert_shots,
     upsert_team,
@@ -80,7 +81,7 @@ from src.scoring.monte_carlo import (
     to_team_standings,
 )
 from src.scoring.quality import compute_quality_score
-from src.scoring.shot_making import compute_leaderboard
+from src.scoring.shot_making import compute_leaderboard, compute_league_averages
 from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
 
 os.makedirs("logs", exist_ok=True)
@@ -631,6 +632,21 @@ def recompute_shot_making(session, season: int) -> int:
                 actual_pps=r["actual_pps"],
                 expected_pps=r["expected_pps"],
                 diet=json.dumps(r["diet"]),
+                commit=False,
+            )
+        # All-league anchors for the bridge. Computed from the SAME `shots` list
+        # the baseline was built from (every shot, not just the qualified board),
+        # and written inside this transaction so anchors and board are always
+        # committed together — a reader must never see fresh anchors against a
+        # stale board.
+        league = compute_league_averages(shots)
+        if league["avg_xpps"] is not None:
+            upsert_shot_league_avg(
+                session,
+                season,
+                avg_xpps=league["avg_xpps"],
+                avg_pps=league["avg_pps"],
+                fga=league["fga"],
                 commit=False,
             )
         session.commit()

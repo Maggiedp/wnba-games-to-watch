@@ -306,3 +306,62 @@ def test_recompute_failure_preserves_previous_board(session, monkeypatch):
     # (simulating refresh_recent_excitement_scores) can't publish an empty board.
     session.commit()
     assert {r.athlete_id for r in q.get_shot_making(session, 2026)} == {"old"}
+
+
+def _seed_shots_for_recompute(session):
+    # Mirrors test_recompute_shot_making_writes_rows's inline seeding — 120
+    # shots for one player, no Game/Team rows needed since recompute only
+    # reads the shots table.
+    for i in range(120):
+        q.upsert_shots(
+            session,
+            "G1",
+            2026,
+            [
+                {
+                    "play_id": str(i),
+                    "athlete_id": "10",
+                    "athlete_name": "X",
+                    "team_id": "1",
+                    "team_abbr": "LV",
+                    "shot_type": "Layup Shot",
+                    "distance_ft": 2.0,
+                    "coord_x": None,
+                    "coord_y": None,
+                    "points": 2 if i < 80 else 0,
+                    "point_value": 2,
+                    "made": i < 80,
+                }
+            ],
+            commit=False,
+        )
+    session.commit()
+
+
+def test_recompute_shot_making_writes_league_anchors(session):
+    _seed_shots_for_recompute(session)
+    du.recompute_shot_making(session, 2026)
+    row = q.get_shot_league_avg(session, 2026)
+    assert row is not None
+    assert row.fga > 0
+    # anchors span every shot, so fga exceeds the qualified board's coverage only
+    # when sub-threshold shooters exist; at minimum it is the full seeded count.
+    assert row.avg_xpps > 0 and row.avg_pps > 0
+
+
+def test_recompute_shot_making_rolls_back_anchors_with_the_board(session, monkeypatch):
+    _seed_shots_for_recompute(session)
+    du.recompute_shot_making(session, 2026)
+    before = q.get_shot_league_avg(session, 2026).fga
+
+    # Force a failure after the delete+insert so the whole transaction rolls back.
+    monkeypatch.setattr(
+        du,
+        "upsert_shot_league_avg",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    with pytest.raises(RuntimeError):
+        du.recompute_shot_making(session, 2026)
+    session.rollback()
+    # the previous anchors survive; a failed run never publishes a half-state
+    assert q.get_shot_league_avg(session, 2026).fga == before
