@@ -1,5 +1,6 @@
 import json
 from src.db import queries as q
+from src.db.queries import upsert_shot_league_avg
 from src.db.schema import get_session
 
 
@@ -64,13 +65,17 @@ def test_shot_making_page_has_xpps_anchor(client, env):
 
 
 def test_shot_making_endpoint_reports_league_avg_xpps(client, env):
+    # league_avg_xpps now comes from the stored shot_league_avg anchor row (the
+    # TRUE all-league average, written by the daily recompute), NOT computed
+    # request-time from the qualified (>=100 FGA) board. Seed a value that
+    # deliberately differs from the qualified-pool average (1.067) to prove the
+    # endpoint reads the stored anchor rather than re-deriving it from `rows`.
     _seed(env)
+    session = get_session()
+    upsert_shot_league_avg(session, 2026, avg_xpps=1.055, avg_pps=1.06, fga=25790)
+    session.close()
     body = client.get("/api/shot-making").json()
-    # Aggregated from the stored expected-points totals (Hot 170.0, Cold 150.0),
-    # NOT from the rounded per-player expected_pps.
-    total_ex = 170.0 + 150.0
-    total_fga = 150 + 150
-    assert body["league_avg_xpps"] == round(total_ex / total_fga, 3)
+    assert body["league_avg_xpps"] == 1.055
 
 
 def test_shot_making_endpoint_empty(client, env):
@@ -81,6 +86,8 @@ def test_shot_making_endpoint_empty(client, env):
     assert r.json() == {
         "season": int(today_et()[:4]),
         "league_avg_xpps": None,
+        "league_avg_pps": None,
+        "vs_league_scale": None,
         "players": [],
     }
 
@@ -117,6 +124,27 @@ def test_endpoint_does_not_fall_back_to_prior_season(client, env, monkeypatch):
     body = r.json()
     assert body["season"] == 2099  # current season, not the populated 2026
     assert body["players"] == []
+
+
+def test_endpoint_returns_all_league_anchors_and_scale(client, env):
+    _seed(env)
+    session = get_session()
+    upsert_shot_league_avg(session, 2026, avg_xpps=1.027, avg_pps=1.037, fga=25790)
+    session.close()
+    data = client.get("/api/shot-making").json()
+    assert data["league_avg_xpps"] == 1.027
+    assert data["league_avg_pps"] == 1.037
+    assert data["vs_league_scale"] > 0
+
+
+def test_endpoint_anchors_are_null_before_the_first_daily_run(client, env):
+    _seed(env)  # board rows exist, anchor row does not
+    data = client.get("/api/shot-making").json()
+    assert data["league_avg_xpps"] is None
+    assert data["league_avg_pps"] is None
+    assert data["vs_league_scale"] is None
+    # the board itself still serves — only the bridge degrades
+    assert len(data["players"]) > 0
 
 
 def _p(play_id, aid, name, x=25, y=4, made=True, pv=2, dist=3.0, stype="Layup Shot"):
