@@ -67,7 +67,8 @@ test('bridgeDescriptor gates on the 0.03 near-zero band', () => {
 test('vsLeagueBridge chains the diet segment into the making segment', () => {
   const html = vsLeagueBridge(ROW, ANCHORS, 0.285, null);
   // selection -0.095 -> ends at 50 - (0.095/0.285)*50 = 33.33%
-  assert.match(html, /left:33\.33%/);
+  // Anchor to the diet segment's class to verify it has the correct position
+  assert.match(html, /class="bridge-seg is-diet"[^>]*left:33\.33%/);
   // making runs from 33.33% to the total position 50 + (0.107/0.285)*50 = 68.77%
   assert.match(html, /width:35\.44%/);
   assert.match(html, /−0\.095/);
