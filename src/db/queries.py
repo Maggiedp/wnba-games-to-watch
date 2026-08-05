@@ -15,7 +15,7 @@ from src.db.schema import (
     GameShape,
     PlayoffProbability,
     Shot,
-    ShotLeagueAvg,  # noqa: F401
+    ShotLeagueAvg,
     ShotMaking,
     Team,
     TeamStyle,

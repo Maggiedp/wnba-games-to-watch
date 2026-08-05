@@ -97,3 +97,7 @@ def test_shot_making_page_explains_the_league_anchor_honestly(client):
     # leaguewide, replacing the old qualified-pool-only phrasing
     assert "League average this season:" in html
     assert "League-average xPPS this season" not in html
+    # F2: the ▲/▽ marker column is the most likely place to misread "▲ = good",
+    # so the note itself must carry the honesty caveat, not just .bridge-key
+    # (which a reader only sees after expanding a row).
+    assert "that's her shot diet, not shot quality." in html

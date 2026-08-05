@@ -178,7 +178,7 @@ def test_player_page_sub_threshold(client, env):
     r = client.get("/player/p-sub")
     assert r.status_code == 200
     assert "Not yet ranked on the shot-making leaderboard" in r.text
-    assert "shot-making rank" not in r.text
+    assert "points-added rank" not in r.text
 
 
 def test_player_page_sub_threshold_team_is_deterministic_plurality(client, env):

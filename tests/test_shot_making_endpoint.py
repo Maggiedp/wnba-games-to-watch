@@ -134,7 +134,13 @@ def test_endpoint_returns_all_league_anchors_and_scale(client, env):
     data = client.get("/api/shot-making").json()
     assert data["league_avg_xpps"] == 1.027
     assert data["league_avg_pps"] == 1.037
-    assert data["vs_league_scale"] > 0
+    # F6b: pinned to the exact value bridge_scale(rows, avg_xpps, avg_pps)
+    # computes from the seeded rows, not just `> 0` — a bare positivity check
+    # would still pass if bridge_scale's two anchor arguments were transposed.
+    # Hot: selection=1.133-1.027=0.106, total=1.266-1.037=0.229
+    # Cold: selection=1.0-1.027=-0.027, total=0.866-1.037=-0.171
+    # widest = max(|selection|, |total|) across both rows = 0.229
+    assert data["vs_league_scale"] == 0.2290000000000001
 
 
 def test_endpoint_anchors_are_null_before_the_first_daily_run(client, env):

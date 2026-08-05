@@ -451,7 +451,7 @@
       const note = document.getElementById('lg-xpps-note');
       if (note && typeof leagueAvgXpps === 'number' && typeof data.league_avg_pps === 'number') {
         note.textContent =
-          ` League average this season: ${leagueAvgXpps.toFixed(3)} xPPS, ${data.league_avg_pps.toFixed(3)} PPS — ▲ above it, ▽ below.`;
+          ` League average this season: ${leagueAvgXpps.toFixed(3)} xPPS, ${data.league_avg_pps.toFixed(3)} PPS — ▲ above it, ▽ below — that's her shot diet, not shot quality.`;
       }
       if (!players.length) { showStatus('Shot-making appears once enough shots are logged this season.'); return; }
       hideStatus();

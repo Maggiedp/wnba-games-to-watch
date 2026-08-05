@@ -1261,12 +1261,15 @@ def _fmt_signed(v: float) -> str:
 # shot_making_helpers.js: compare each operand at the displayed 3-decimal
 # precision (NOT a rounded raw subtraction, NOT an epsilon band — see the PR #118
 # gotcha in src/api/CLAUDE.md). Grey glyph only; NEVER the green/red points-added
-# colors (xPPS is shot selection, not making).
+# colors (xPPS is shot selection, not making). Compares via _js_to_fixed (JS
+# toFixed semantics, ties away from zero), NOT Python's banker's round() — at an
+# exact tie (e.g. avg_xpps == 1.0625) the two disagree, which would let the
+# glyph differ between /player and /shot-making for the same player.
 def _xpps_marker(xpps: float, league_avg: float | None) -> str:
     if league_avg is None:
         return ""
-    a = round(xpps, 3)
-    b = round(league_avg, 3)
+    a = float(_js_to_fixed(xpps, 3))
+    b = float(_js_to_fixed(league_avg, 3))
     if a > b:
         return "\u25b2"
     if a < b:
@@ -1421,7 +1424,7 @@ def _player_stat_header_html(row, rank, total, league_avg_xpps, diet) -> str:
       <div class="stat"><span class="v">{row.made}/{row.fga}</span>
         <span class="k">FG ({made_pct}%)</span></div>
       <div class="stat"><span class="v">#{rank} of {total}</span>
-        <span class="k">shot-making rank</span></div>
+        <span class="k">points-added rank</span></div>
     </div>
     {_diet_bar_html(diet)}
     """
