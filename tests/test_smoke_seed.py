@@ -43,6 +43,13 @@ def test_seed_populates_walked_surfaces(env, client):
     style = client.get("/api/team-style").json()
     assert len(style["teams"]) == 15
 
+    # League-avg anchors must be present or the /shot-making + /player bridge
+    # (waterfall) takes the graceful no-bridge path and the browser walk's
+    # `.bridge-seg.is-total` readySelector times out.
+    shot_making = client.get("/api/shot-making").json()
+    assert shot_making["league_avg_xpps"] is not None
+    assert shot_making["league_avg_pps"] is not None
+
     detail = client.get(f"/game/{UPCOMING_DETAIL_ID}")
     assert detail.status_code == 200
     assert "playoff odds" in detail.text  # "What's at stake" movers block

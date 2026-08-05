@@ -55,6 +55,7 @@ def seed(session) -> None:
     from src.db.queries import (
         upsert_game_shape,
         upsert_playoff_probability,
+        upsert_shot_league_avg,
         upsert_shot_making,
         upsert_shots,
         upsert_team_style,
@@ -245,7 +246,14 @@ def seed(session) -> None:
     for i, t in enumerate(teams):
         fga = 300 + 8 * i
         made = int(fga * (0.42 + 0.004 * i))
-        expected = fga * 1.05
+        # xPPS multiplier varies by player (rather than a flat 1.05) so the
+        # "shot diet" bridge segment for shooter 0 — the rank-1 player, and the
+        # only one the browser walk actually renders (top leaderboard row's
+        # expand panel + /player/smoke-shooter-0) — is a sizeable LEFT-extending
+        # gap vs the seeded avg_xpps=1.027 anchor, not a uniform small
+        # right-extending one. points_added still spans positive/negative below.
+        xpps_mult = 0.90 + 0.01 * i
+        expected = fga * xpps_mult
         actual = expected + (7.0 - i) * 3.0  # spans positive and negative
         upsert_shot_making(
             session,
@@ -287,6 +295,13 @@ def seed(session) -> None:
         for j in range(120)
     ]
     upsert_shots(session, "smoke-shot-game", season, _panel_shots, commit=False)
+
+    # All-league anchors so the bridge actually renders in the walk. Without this
+    # row both surfaces take the graceful no-bridge path and the walk silently
+    # stops covering it.
+    upsert_shot_league_avg(
+        session, season, avg_xpps=1.027, avg_pps=1.037, fga=25790, commit=False
+    )
 
     session.commit()
 

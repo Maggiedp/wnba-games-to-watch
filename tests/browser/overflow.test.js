@@ -53,6 +53,7 @@ const PAGES = [
     apply: async (page) => {
       await page.waitForSelector('#shots-tbody tr.player-row');
       await page.click('#shots-tbody tr.player-row');
+      await page.waitForSelector('.shot-panel .bridge-seg.is-total');
       await page.waitForSelector('.shot-panel .shot-chart-svg, .shot-panel .status');
       await page.waitForFunction(
         () => !!document.querySelector('.shot-panel .shot-chart-svg'),
@@ -64,7 +65,7 @@ const PAGES = [
       );
     },
   },
-  { path: '/player/smoke-shooter-0', readySelector: '#shot-chart svg' },
+  { path: '/player/smoke-shooter-0', readySelector: '.bridge-seg.is-total' },
   { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
   { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: 'main' },
   { path: '/playoff-odds', readySelector: '#playoff-tbody tr' },
