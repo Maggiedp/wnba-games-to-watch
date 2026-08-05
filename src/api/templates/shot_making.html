@@ -196,6 +196,39 @@
                 .shot-panel { grid-template-columns: 1fr; gap: 12px; }
                 .shot-panel .chart-wrap { max-width: 100%; }
             }
+
+            /* ---------- Vs-league bridge (waterfall) ---------- */
+            .bridge { margin: 0 0 18px; }
+            .bridge-head { font-family: var(--display); font-size: 1rem; font-weight: 700;
+                           margin: 0 0 10px; }
+            .bridge-row { display: grid; grid-template-columns: 104px 52px 1fr 62px;
+                          align-items: center; gap: 8px; margin: 0 0 4px; }
+            .bridge-label { font-size: 0.78rem; text-transform: uppercase;
+                            letter-spacing: 0.08em; color: var(--text-subtle); }
+            .bridge-abs, .bridge-gap { font-family: var(--display); font-size: 0.9rem;
+                                       font-feature-settings: 'tnum' on; text-align: right; }
+            .bridge-track { position: relative; height: 14px; }
+            /* the league-average rule the whole bridge is measured from */
+            .bridge-track::before { content: ''; position: absolute; left: 50%; top: -3px;
+                                    bottom: -3px; width: 1px; background: var(--text-subtle);
+                                    opacity: 0.45; }
+            .bridge-seg { position: absolute; top: 3px; height: 8px; border-radius: 2px; }
+            /* hollow = described, filled = judged. The diet axis tracks role more than
+               judgment, so it is outlined and never colored by sign. */
+            .bridge-seg.is-diet { border: 1px solid var(--text-subtle); background: transparent; }
+            .bridge-seg.is-positive { background: var(--orange-deep); }
+            .bridge-seg.is-negative { background: #7a7f88; }
+            .bridge-seg.is-total { height: 10px; top: 2px; }
+            .bridge-drop { position: absolute; top: -8px; height: 11px; width: 1px;
+                           background: var(--text-subtle); opacity: 0.55; }
+            .bridge-note { grid-column: 3 / 5; font-size: 0.75rem; color: var(--text-muted);
+                           margin: -2px 0 4px; }
+            .bridge-key { font-size: 0.75rem; color: var(--text-subtle); line-height: 1.5;
+                          margin: 8px 0 0; }
+            @media (max-width: 560px) {
+              .bridge-row { grid-template-columns: 84px 46px 1fr 56px; gap: 6px; }
+              .bridge-label { font-size: 0.7rem; }
+            }
         </style>
 </head>
 <body>
@@ -258,6 +291,8 @@
   let players = [];
   let sortBy = 'added';  // 'added' | 'per100'
   let leagueAvgXpps = null;
+  let leagueAnchors = null;
+  let vsLeagueScale = null;
 
   const status = document.getElementById('shots-status');
   const table = document.getElementById('board');
@@ -321,8 +356,9 @@
     </div>`;
   }
 
-  function panelHtml(data) {
+  function panelHtml(data, bridgeHtml) {
     return `<div class="shot-panel">
+      ${bridgeHtml || ''}
       <div class="chart-wrap">
         <a class="full-page-link" href="/player/${encodeURIComponent(data.athlete_id)}">Full page ↗</a>
         ${buildShotChartSvg(data.shots)}
@@ -333,15 +369,24 @@
     </div>`;
   }
 
+  function bridgeFor(aid) {
+    const p = players.find((x) => String(x.athlete_id) === String(aid));
+    if (!p) return '';
+    const byPps = players.slice().sort((a, b) => b.actual_pps - a.actual_pps);
+    const rank = byPps.findIndex((x) => String(x.athlete_id) === String(aid)) + 1;
+    const label = rank ? `#${rank} of ${players.length} in points per shot` : '';
+    return vsLeagueBridge(p, leagueAnchors, vsLeagueScale, label);
+  }
+
   async function openPanel(aid, cell) {
-    if (shotCache[aid]) { cell.innerHTML = panelHtml(shotCache[aid]); return; }
+    if (shotCache[aid]) { cell.innerHTML = panelHtml(shotCache[aid], bridgeFor(aid)); return; }
     cell.innerHTML = '<div class="shot-panel"><p class="status">Loading shots…</p></div>';
     try {
       const res = await fetch('/api/player-shots?athlete_id=' + encodeURIComponent(aid));
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       shotCache[aid] = data;
-      cell.innerHTML = panelHtml(data);
+      cell.innerHTML = panelHtml(data, bridgeFor(aid));
     } catch (e) {
       console.error('player-shots load failed', e);
       cell.innerHTML = '<div class="shot-panel"><p class="status">Couldn’t load shots. Try again.</p></div>';
@@ -399,11 +444,14 @@
       const data = await res.json();
       players = data.players || [];
       leagueAvgXpps = (typeof data.league_avg_xpps === 'number') ? data.league_avg_xpps : null;
+      leagueAnchors = (typeof data.league_avg_xpps === 'number' && typeof data.league_avg_pps === 'number')
+        ? { avg_xpps: data.league_avg_xpps, avg_pps: data.league_avg_pps }
+        : null;
+      vsLeagueScale = (typeof data.vs_league_scale === 'number') ? data.vs_league_scale : null;
       const note = document.getElementById('lg-xpps-note');
-      if (note && leagueAvgXpps != null) {
+      if (note && typeof leagueAvgXpps === 'number' && typeof data.league_avg_pps === 'number') {
         note.textContent =
-          ` League-average xPPS this season: ${leagueAvgXpps.toFixed(3)} — ▲ above it (a higher-value shot diet), ▽ below.`
-          + ' That reflects shot selection, not shot quality; whether she converts is Points added.';
+          ` League average this season: ${leagueAvgXpps.toFixed(3)} xPPS, ${data.league_avg_pps.toFixed(3)} PPS — ▲ above it, ▽ below.`;
       }
       if (!players.length) { showStatus('Shot-making appears once enough shots are logged this season.'); return; }
       hideStatus();

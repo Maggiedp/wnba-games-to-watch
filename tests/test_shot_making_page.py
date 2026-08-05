@@ -76,3 +76,24 @@ def test_shot_making_panel_has_full_page_permalink():
     html = render_shot_making()
     assert "/player/${encodeURIComponent(data.athlete_id)}" in html
     assert "Full page" in html
+
+
+def test_shot_making_page_ships_the_bridge_css_and_helper(client):
+    html = client.get("/shot-making").text
+    # the helper must be injected, not just referenced (already true via
+    # %%SHOT_MAKING_JS%% before this task; kept as an injection guard)
+    assert "function vsLeagueBridge(" in html
+    # the CSS rules below are new in this task — the JS emits class="bridge-track"
+    # / class="bridge-seg is-diet" (no leading dots), so these dotted selectors
+    # only exist once the page's own <style> block carries them
+    assert ".bridge-track" in html
+    assert ".bridge-seg.is-diet" in html
+    assert ".bridge-head" in html
+
+
+def test_shot_making_page_explains_the_league_anchor_honestly(client):
+    html = client.get("/shot-making").text
+    # the rewritten note (Step 5) states both anchors now that they're genuinely
+    # leaguewide, replacing the old qualified-pool-only phrasing
+    assert "League average this season:" in html
+    assert "League-average xPPS this season" not in html
