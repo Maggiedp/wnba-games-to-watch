@@ -27,6 +27,7 @@ from src.data.wnba_schedule import (
     fetch_wnba_schedule_broadcasters,
 )
 from src.db.queries import (
+    delete_shot_league_avg_season,
     delete_shot_making_season,
     delete_team_style_season,
     get_all_teams,
@@ -615,6 +616,12 @@ def recompute_shot_making(session, season: int) -> int:
     # stays intact (mirrors populate_team_style's self-contained rollback).
     try:
         delete_shot_making_season(session, season)
+        # The anchors are replaced wholesale with the board they describe. Doing
+        # this unconditionally (rather than only alongside a successful upsert)
+        # is what keeps the pair consistent when a season legitimately empties —
+        # a corrected re-ingest or data repair wipes the board, and anchors that
+        # outlived it would report a league average under an empty leaderboard.
+        delete_shot_league_avg_season(session, season)
         for r in board:
             upsert_shot_making(
                 session,

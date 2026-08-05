@@ -275,3 +275,51 @@ def test_player_shots_omits_team_and_total_for_traded_player(client, monkeypatch
     assert "team_abbr" not in data
     assert "points_added" not in data
     assert data["fga"] == 3
+
+
+def test_endpoint_drops_anchors_when_the_season_empties(env, client):
+    """End-to-end: a season that loses every shot must not keep reporting the
+    previous run's league averages. Without the anchor delete in the recompute,
+    the board comes back empty while league_avg_* still serve last run's numbers
+    — a league average for a leaderboard with nobody on it."""
+    import scripts.daily_update as du
+    from src.db.schema import Shot, get_session
+
+    session = get_session()
+    for i in range(120):
+        q.upsert_shots(
+            session,
+            "G1",
+            2026,
+            [
+                {
+                    "play_id": str(i),
+                    "athlete_id": "10",
+                    "athlete_name": "X",
+                    "team_id": "1",
+                    "team_abbr": "LV",
+                    "shot_type": "Layup Shot",
+                    "distance_ft": 2.0,
+                    "coord_x": None,
+                    "coord_y": None,
+                    "points": 2 if i < 80 else 0,
+                    "point_value": 2,
+                    "made": i < 80,
+                }
+            ],
+        )
+    du.recompute_shot_making(session, 2026)
+
+    populated = client.get("/api/shot-making").json()
+    assert populated["league_avg_xpps"] is not None
+    assert len(populated["players"]) == 1
+
+    session.query(Shot).filter(Shot.season == 2026).delete(synchronize_session=False)
+    session.commit()
+    du.recompute_shot_making(session, 2026)
+
+    emptied = client.get("/api/shot-making").json()
+    assert emptied["players"] == []
+    assert emptied["league_avg_xpps"] is None
+    assert emptied["league_avg_pps"] is None
+    assert emptied["vs_league_scale"] is None

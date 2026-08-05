@@ -1,6 +1,6 @@
 import pytest
 from sqlalchemy.orm import sessionmaker
-from src.db.schema import Base, get_engine, Team, Game
+from src.db.schema import Base, get_engine, Team, Game, Shot
 from src.db import queries as q
 import scripts.daily_update as du
 
@@ -399,3 +399,23 @@ def test_recompute_shot_making_rolls_back_anchors_with_the_board(session, monkey
     # half-state
     assert {r.athlete_id for r in q.get_shot_making(session, 2026)} == {"old"}
     assert q.get_shot_league_avg(session, 2026).fga == 999
+
+
+def test_recompute_shot_making_clears_anchors_when_the_season_empties(session):
+    # A season that loses every shot (a corrected re-ingest, a data repair) must
+    # not keep serving the PREVIOUS run's league anchors: the board is wiped
+    # wholesale, so anchors describing it have to go with it. Without this, the
+    # DB-only endpoint reports a league average for an empty leaderboard —
+    # exactly the "stale row the endpoint keeps serving" the board's own
+    # wholesale-delete exists to prevent.
+    _seed_shots_for_recompute(session)
+    du.recompute_shot_making(session, 2026)
+    assert q.get_shot_league_avg(session, 2026) is not None  # precondition
+
+    # Empty the season, then recompute successfully (no exception).
+    session.query(Shot).filter(Shot.season == 2026).delete(synchronize_session=False)
+    session.commit()
+    du.recompute_shot_making(session, 2026)
+
+    assert q.get_shot_making(session, 2026) == []
+    assert q.get_shot_league_avg(session, 2026) is None

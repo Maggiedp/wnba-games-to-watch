@@ -1261,6 +1261,16 @@ def delete_shot_making_season(session: Session, season: int) -> None:
     )
 
 
+def delete_shot_league_avg_season(session: Session, season: int) -> None:
+    """Delete the season's all-league anchor row (no commit). Called alongside
+    delete_shot_making_season so the anchors are replaced wholesale with the
+    board they describe: a season that loses every shot must not keep serving
+    the previous run's league averages under an empty leaderboard."""
+    session.query(ShotLeagueAvg).filter(ShotLeagueAvg.season == season).delete(
+        synchronize_session=False
+    )
+
+
 def upsert_shots(
     session: Session,
     espn_game_id: str,
