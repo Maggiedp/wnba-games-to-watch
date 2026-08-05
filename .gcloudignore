@@ -22,3 +22,13 @@ data/games_to_watch.db
 src/darko/_stats_cache
 src/darko/_cache
 scripts/spikes/cache
+
+# Local-only, never needed in the prod image. NOTE: when a .gcloudignore
+# exists, gcloud does NOT fall back to .gitignore — so gitignored dirs must be
+# listed here explicitly or `--source .` uploads them into the build context.
+# docs/ in particular holds local OAuth credentials for the award-ranking
+# scripts; nothing in the app reads any of these.
+docs
+.superpowers
+.claude
+tests
