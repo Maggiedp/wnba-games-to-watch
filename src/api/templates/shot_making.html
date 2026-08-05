@@ -162,6 +162,13 @@
                 padding: 18px 8px;
                 align-items: start;
             }
+            /* The bridge is a THIRD child of this 2-column grid. Without an
+               explicit span, auto-placement puts it in column 1 and pushes the
+               chart into the narrow column with the zones dropping to row 2 —
+               only visible above the 768px collapse, so the phone-width browser
+               walk can't catch it. Span the full width and the original
+               chart | zones row is preserved beneath it. */
+            .shot-panel .bridge { grid-column: 1 / -1; }
             .shot-panel .chart-wrap { max-width: 420px; }
             .shot-chart-svg { width: 100%; height: auto; display: block; }
             .shot-legend {

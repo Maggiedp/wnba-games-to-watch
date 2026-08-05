@@ -101,3 +101,15 @@ def test_shot_making_page_explains_the_league_anchor_honestly(client):
     # so the note itself must carry the honesty caveat, not just .bridge-key
     # (which a reader only sees after expanding a row).
     assert "that's her shot diet, not shot quality." in html
+
+
+def test_bridge_spans_the_full_expand_panel_width(client):
+    """The bridge is a THIRD child of `.shot-panel`'s 2-column grid. Without an
+    explicit full-width span, auto-placement puts it in column 1 and pushes the
+    chart into the narrow column with the zones dropping to a second row.
+
+    This is invisible to the browser walk: `.shot-panel` collapses to one column
+    at <=768px and the walk only runs 320/360/390/430. String-assert instead,
+    mirroring the `.sort-toggle[hidden]` guard in test_playoff_odds_page.py."""
+    html = client.get("/shot-making").text
+    assert ".shot-panel .bridge { grid-column: 1 / -1; }" in html
