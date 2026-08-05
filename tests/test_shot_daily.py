@@ -3,6 +3,7 @@ from sqlalchemy.orm import sessionmaker
 from src.db.schema import Base, get_engine, Team, Game, Shot
 from src.db import queries as q
 import scripts.daily_update as du
+from tests.conftest import seed_shots_for_recompute as _seed_shots_for_recompute
 
 
 @pytest.fixture
@@ -306,36 +307,6 @@ def test_recompute_failure_preserves_previous_board(session, monkeypatch):
     # (simulating refresh_recent_excitement_scores) can't publish an empty board.
     session.commit()
     assert {r.athlete_id for r in q.get_shot_making(session, 2026)} == {"old"}
-
-
-def _seed_shots_for_recompute(session):
-    # Mirrors test_recompute_shot_making_writes_rows's inline seeding — 120
-    # shots for one player, no Game/Team rows needed since recompute only
-    # reads the shots table.
-    for i in range(120):
-        q.upsert_shots(
-            session,
-            "G1",
-            2026,
-            [
-                {
-                    "play_id": str(i),
-                    "athlete_id": "10",
-                    "athlete_name": "X",
-                    "team_id": "1",
-                    "team_abbr": "LV",
-                    "shot_type": "Layup Shot",
-                    "distance_ft": 2.0,
-                    "coord_x": None,
-                    "coord_y": None,
-                    "points": 2 if i < 80 else 0,
-                    "point_value": 2,
-                    "made": i < 80,
-                }
-            ],
-            commit=False,
-        )
-    session.commit()
 
 
 def test_recompute_shot_making_writes_league_anchors(session):

@@ -1,3 +1,4 @@
+import pytest
 import json
 from src.db import queries as q
 from src.db.queries import upsert_shot_league_avg
@@ -140,7 +141,7 @@ def test_endpoint_returns_all_league_anchors_and_scale(client, env):
     # Hot: selection=1.133-1.027=0.106, total=1.266-1.037=0.229
     # Cold: selection=1.0-1.027=-0.027, total=0.866-1.037=-0.171
     # widest = max(|selection|, |total|) across both rows = 0.229
-    assert data["vs_league_scale"] == 0.2290000000000001
+    assert data["vs_league_scale"] == pytest.approx(0.229, abs=1e-9)
 
 
 def test_endpoint_anchors_are_null_before_the_first_daily_run(client, env):
@@ -284,30 +285,10 @@ def test_endpoint_drops_anchors_when_the_season_empties(env, client):
     — a league average for a leaderboard with nobody on it."""
     import scripts.daily_update as du
     from src.db.schema import Shot, get_session
+    from tests.conftest import seed_shots_for_recompute
 
     session = get_session()
-    for i in range(120):
-        q.upsert_shots(
-            session,
-            "G1",
-            2026,
-            [
-                {
-                    "play_id": str(i),
-                    "athlete_id": "10",
-                    "athlete_name": "X",
-                    "team_id": "1",
-                    "team_abbr": "LV",
-                    "shot_type": "Layup Shot",
-                    "distance_ft": 2.0,
-                    "coord_x": None,
-                    "coord_y": None,
-                    "points": 2 if i < 80 else 0,
-                    "point_value": 2,
-                    "made": i < 80,
-                }
-            ],
-        )
+    seed_shots_for_recompute(session)
     du.recompute_shot_making(session, 2026)
 
     populated = client.get("/api/shot-making").json()

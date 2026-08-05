@@ -310,7 +310,6 @@
 (function () {
   let players = [];
   let sortBy = 'added';  // 'added' | 'per100'
-  let leagueAvgXpps = null;
   let leagueAnchors = null;
   let vsLeagueScale = null;
 
@@ -340,7 +339,7 @@
       <td class="team-cell">${escapeHtml(p.team_abbr || p.team_id)}</td>
       <td class="fga-cell">${p.fga}</td>
       <td class="made-cell">${fgPct}</td>
-      <td>${p.expected_pps.toFixed(3)}<span class="xpps-mark">${xppsMarker(p.expected_pps, leagueAvgXpps)}</span></td>
+      <td>${p.expected_pps.toFixed(3)}<span class="xpps-mark">${xppsMarker(p.expected_pps, leagueAnchors && leagueAnchors.avg_xpps)}</span></td>
       <td>${p.actual_pps.toFixed(3)}</td>
       <td class="added-cell ${addedClass}">${added}</td>
       <td>${per100}</td>
@@ -463,15 +462,17 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       players = data.players || [];
-      leagueAvgXpps = (typeof data.league_avg_xpps === 'number') ? data.league_avg_xpps : null;
+      // The two anchors are written together by one daily transaction, so they
+      // are all-or-nothing — one object, one guard, used by both the markers
+      // and the bridge.
       leagueAnchors = (typeof data.league_avg_xpps === 'number' && typeof data.league_avg_pps === 'number')
         ? { avg_xpps: data.league_avg_xpps, avg_pps: data.league_avg_pps }
         : null;
       vsLeagueScale = (typeof data.vs_league_scale === 'number') ? data.vs_league_scale : null;
       const note = document.getElementById('lg-xpps-note');
-      if (note && typeof leagueAvgXpps === 'number' && typeof data.league_avg_pps === 'number') {
+      if (note && leagueAnchors) {
         note.textContent =
-          ` League average this season: ${leagueAvgXpps.toFixed(3)} xPPS, ${data.league_avg_pps.toFixed(3)} PPS — ▲ above it, ▽ below — that's her shot diet, not shot quality.`;
+          ` League average this season: ${leagueAnchors.avg_xpps.toFixed(3)} xPPS, ${leagueAnchors.avg_pps.toFixed(3)} PPS — ▲ above it, ▽ below — that's her shot diet, not shot quality.`;
       }
       if (!players.length) { showStatus('Shot-making appears once enough shots are logged this season.'); return; }
       hideStatus();
