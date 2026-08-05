@@ -256,6 +256,24 @@ class ShotMaking(Base):
     )
 
 
+class ShotLeagueAvg(Base):
+    """All-league shot anchors for one season — the FGA-weighted mean expected and
+    actual points per shot over EVERY shot, not just the >=100-FGA leaderboard pool.
+    Recomputed wholesale each daily run inside the same transaction as the board it
+    describes, so a reader never sees fresh anchors against a stale board. Powers
+    the bridge on /shot-making's expand panel and /player/{athlete_id}. A brand-new
+    table, so Base.metadata.create_all creates it — no ALTER needed in init_db."""
+
+    __tablename__ = "shot_league_avg"
+
+    id = Column(Integer, primary_key=True)
+    season = Column(Integer, nullable=False, unique=True)
+    avg_xpps = Column(Float, nullable=False)
+    avg_pps = Column(Float, nullable=False)
+    fga = Column(Integer, nullable=False)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
 class ThrillerAlert(Base):
     """One row per game we've already pinged about — dedup for the live
     'tune in' alerts. Keyed by espn_id (globally unique per game); date/label

@@ -1,5 +1,7 @@
+import pytest
 import json
 from src.db import queries as q
+from src.db.queries import upsert_shot_league_avg
 from src.db.schema import get_session
 
 
@@ -64,13 +66,17 @@ def test_shot_making_page_has_xpps_anchor(client, env):
 
 
 def test_shot_making_endpoint_reports_league_avg_xpps(client, env):
+    # league_avg_xpps now comes from the stored shot_league_avg anchor row (the
+    # TRUE all-league average, written by the daily recompute), NOT computed
+    # request-time from the qualified (>=100 FGA) board. Seed a value that
+    # deliberately differs from the qualified-pool average (1.067) to prove the
+    # endpoint reads the stored anchor rather than re-deriving it from `rows`.
     _seed(env)
+    session = get_session()
+    upsert_shot_league_avg(session, 2026, avg_xpps=1.055, avg_pps=1.06, fga=25790)
+    session.close()
     body = client.get("/api/shot-making").json()
-    # Aggregated from the stored expected-points totals (Hot 170.0, Cold 150.0),
-    # NOT from the rounded per-player expected_pps.
-    total_ex = 170.0 + 150.0
-    total_fga = 150 + 150
-    assert body["league_avg_xpps"] == round(total_ex / total_fga, 3)
+    assert body["league_avg_xpps"] == 1.055
 
 
 def test_shot_making_endpoint_empty(client, env):
@@ -81,6 +87,8 @@ def test_shot_making_endpoint_empty(client, env):
     assert r.json() == {
         "season": int(today_et()[:4]),
         "league_avg_xpps": None,
+        "league_avg_pps": None,
+        "vs_league_scale": None,
         "players": [],
     }
 
@@ -117,6 +125,33 @@ def test_endpoint_does_not_fall_back_to_prior_season(client, env, monkeypatch):
     body = r.json()
     assert body["season"] == 2099  # current season, not the populated 2026
     assert body["players"] == []
+
+
+def test_endpoint_returns_all_league_anchors_and_scale(client, env):
+    _seed(env)
+    session = get_session()
+    upsert_shot_league_avg(session, 2026, avg_xpps=1.027, avg_pps=1.037, fga=25790)
+    session.close()
+    data = client.get("/api/shot-making").json()
+    assert data["league_avg_xpps"] == 1.027
+    assert data["league_avg_pps"] == 1.037
+    # F6b: pinned to the exact value bridge_scale(rows, avg_xpps, avg_pps)
+    # computes from the seeded rows, not just `> 0` — a bare positivity check
+    # would still pass if bridge_scale's two anchor arguments were transposed.
+    # Hot: selection=1.133-1.027=0.106, total=1.266-1.037=0.229
+    # Cold: selection=1.0-1.027=-0.027, total=0.866-1.037=-0.171
+    # widest = max(|selection|, |total|) across both rows = 0.229
+    assert data["vs_league_scale"] == pytest.approx(0.229, abs=1e-9)
+
+
+def test_endpoint_anchors_are_null_before_the_first_daily_run(client, env):
+    _seed(env)  # board rows exist, anchor row does not
+    data = client.get("/api/shot-making").json()
+    assert data["league_avg_xpps"] is None
+    assert data["league_avg_pps"] is None
+    assert data["vs_league_scale"] is None
+    # the board itself still serves — only the bridge degrades
+    assert len(data["players"]) > 0
 
 
 def _p(play_id, aid, name, x=25, y=4, made=True, pv=2, dist=3.0, stype="Layup Shot"):
@@ -241,3 +276,31 @@ def test_player_shots_omits_team_and_total_for_traded_player(client, monkeypatch
     assert "team_abbr" not in data
     assert "points_added" not in data
     assert data["fga"] == 3
+
+
+def test_endpoint_drops_anchors_when_the_season_empties(env, client):
+    """End-to-end: a season that loses every shot must not keep reporting the
+    previous run's league averages. Without the anchor delete in the recompute,
+    the board comes back empty while league_avg_* still serve last run's numbers
+    — a league average for a leaderboard with nobody on it."""
+    import scripts.daily_update as du
+    from src.db.schema import Shot, get_session
+    from tests.conftest import seed_shots_for_recompute
+
+    session = get_session()
+    seed_shots_for_recompute(session)
+    du.recompute_shot_making(session, 2026)
+
+    populated = client.get("/api/shot-making").json()
+    assert populated["league_avg_xpps"] is not None
+    assert len(populated["players"]) == 1
+
+    session.query(Shot).filter(Shot.season == 2026).delete(synchronize_session=False)
+    session.commit()
+    du.recompute_shot_making(session, 2026)
+
+    emptied = client.get("/api/shot-making").json()
+    assert emptied["players"] == []
+    assert emptied["league_avg_xpps"] is None
+    assert emptied["league_avg_pps"] is None
+    assert emptied["vs_league_scale"] is None

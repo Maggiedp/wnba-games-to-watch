@@ -76,3 +76,40 @@ def test_shot_making_panel_has_full_page_permalink():
     html = render_shot_making()
     assert "/player/${encodeURIComponent(data.athlete_id)}" in html
     assert "Full page" in html
+
+
+def test_shot_making_page_ships_the_bridge_css_and_helper(client):
+    html = client.get("/shot-making").text
+    # the helper must be injected, not just referenced (already true via
+    # %%SHOT_MAKING_JS%% before this task; kept as an injection guard)
+    assert "function vsLeagueBridge(" in html
+    # the CSS rules below are new in this task — the JS emits class="bridge-track"
+    # / class="bridge-seg is-diet" (no leading dots), so these dotted selectors
+    # only exist once the page's own <style> block carries them
+    assert ".bridge-track" in html
+    assert ".bridge-seg.is-diet" in html
+    assert ".bridge-head" in html
+
+
+def test_shot_making_page_explains_the_league_anchor_honestly(client):
+    html = client.get("/shot-making").text
+    # the rewritten note (Step 5) states both anchors now that they're genuinely
+    # leaguewide, replacing the old qualified-pool-only phrasing
+    assert "League average this season:" in html
+    assert "League-average xPPS this season" not in html
+    # F2: the ▲/▽ marker column is the most likely place to misread "▲ = good",
+    # so the note itself must carry the honesty caveat, not just .bridge-key
+    # (which a reader only sees after expanding a row).
+    assert "that's her shot diet, not shot quality." in html
+
+
+def test_bridge_spans_the_full_expand_panel_width(client):
+    """The bridge is a THIRD child of `.shot-panel`'s 2-column grid. Without an
+    explicit full-width span, auto-placement puts it in column 1 and pushes the
+    chart into the narrow column with the zones dropping to a second row.
+
+    This is invisible to the browser walk: `.shot-panel` collapses to one column
+    at <=768px and the walk only runs 320/360/390/430. String-assert instead,
+    mirroring the `.sort-toggle[hidden]` guard in test_playoff_odds_page.py."""
+    html = client.get("/shot-making").text
+    assert ".shot-panel .bridge { grid-column: 1 / -1; }" in html

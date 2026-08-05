@@ -88,3 +88,35 @@ def frozen_datetime_class(fake_utc: datetime):
 
 def utc(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> datetime:
     return datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("UTC"))
+
+
+def seed_shots_for_recompute(session, *, n: int = 120, athlete_id: str = "10"):
+    """Seed `n` rim attempts for one athlete so `recompute_shot_making` has a
+    qualifying board to build. No Game/Team rows needed — recompute only reads
+    the `shots` table. Shared by the daily-job tests and the endpoint tests."""
+    from src.db import queries as q
+
+    for i in range(n):
+        q.upsert_shots(
+            session,
+            "G1",
+            2026,
+            [
+                {
+                    "play_id": str(i),
+                    "athlete_id": athlete_id,
+                    "athlete_name": "X",
+                    "team_id": "1",
+                    "team_abbr": "LV",
+                    "shot_type": "Layup Shot",
+                    "distance_ft": 2.0,
+                    "coord_x": None,
+                    "coord_y": None,
+                    "points": 2 if i < 80 else 0,
+                    "point_value": 2,
+                    "made": i < 80,
+                }
+            ],
+            commit=False,
+        )
+    session.commit()

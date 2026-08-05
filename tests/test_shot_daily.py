@@ -1,8 +1,9 @@
 import pytest
 from sqlalchemy.orm import sessionmaker
-from src.db.schema import Base, get_engine, Team, Game
+from src.db.schema import Base, get_engine, Team, Game, Shot
 from src.db import queries as q
 import scripts.daily_update as du
+from tests.conftest import seed_shots_for_recompute as _seed_shots_for_recompute
 
 
 @pytest.fixture
@@ -306,3 +307,86 @@ def test_recompute_failure_preserves_previous_board(session, monkeypatch):
     # (simulating refresh_recent_excitement_scores) can't publish an empty board.
     session.commit()
     assert {r.athlete_id for r in q.get_shot_making(session, 2026)} == {"old"}
+
+
+def test_recompute_shot_making_writes_league_anchors(session):
+    _seed_shots_for_recompute(session)
+    du.recompute_shot_making(session, 2026)
+    row = q.get_shot_league_avg(session, 2026)
+    assert row is not None
+    assert row.fga > 0
+    # anchors span every shot, so fga exceeds the qualified board's coverage only
+    # when sub-threshold shooters exist; at minimum it is the full seeded count.
+    assert row.avg_xpps > 0 and row.avg_pps > 0
+
+
+def test_recompute_shot_making_rolls_back_anchors_with_the_board(session, monkeypatch):
+    # Sentinel "previous run" state, seeded directly (not via a successful
+    # recompute) so it's DISTINCT from what the shots seeded below would
+    # produce if committed — mirroring test_recompute_failure_preserves_
+    # previous_board. Without this divergence the assertions below would
+    # hold trivially (recompute is idempotent on unchanged shots), giving
+    # zero regression protection for the rollback itself.
+    q.upsert_shot_making(
+        session,
+        2026,
+        "old",
+        athlete_name="Old",
+        team_id="1",
+        team_abbr="LV",
+        fga=150,
+        made=80,
+        actual_pts=170.0,
+        expected_pts=160.0,
+        points_added=10.0,
+        points_added_per_100=6.67,
+        actual_pps=1.133,
+        expected_pps=1.067,
+        diet="{}",
+    )
+    q.upsert_shot_league_avg(session, 2026, avg_xpps=1.0, avg_pps=1.0, fga=999)
+
+    _seed_shots_for_recompute(
+        session
+    )  # athlete "10" — would replace "old" if committed
+
+    # Force a failure after the board's delete+reinsert is staged so the
+    # whole transaction — anchors AND the board it describes — must roll
+    # back together.
+    monkeypatch.setattr(
+        du,
+        "upsert_shot_league_avg",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    with pytest.raises(RuntimeError):
+        du.recompute_shot_making(session, 2026)
+    # Mirrors test_recompute_failure_preserves_previous_board: commit (not
+    # rollback) here forces any state production left staged to become
+    # permanent, so a broken production rollback in recompute_shot_making's
+    # except block would actually fail the assertions below instead of being
+    # silently cleaned up by a rollback the test performs itself.
+    session.commit()
+    # the previous anchors AND board survive; a failed run never publishes a
+    # half-state
+    assert {r.athlete_id for r in q.get_shot_making(session, 2026)} == {"old"}
+    assert q.get_shot_league_avg(session, 2026).fga == 999
+
+
+def test_recompute_shot_making_clears_anchors_when_the_season_empties(session):
+    # A season that loses every shot (a corrected re-ingest, a data repair) must
+    # not keep serving the PREVIOUS run's league anchors: the board is wiped
+    # wholesale, so anchors describing it have to go with it. Without this, the
+    # DB-only endpoint reports a league average for an empty leaderboard —
+    # exactly the "stale row the endpoint keeps serving" the board's own
+    # wholesale-delete exists to prevent.
+    _seed_shots_for_recompute(session)
+    du.recompute_shot_making(session, 2026)
+    assert q.get_shot_league_avg(session, 2026) is not None  # precondition
+
+    # Empty the season, then recompute successfully (no exception).
+    session.query(Shot).filter(Shot.season == 2026).delete(synchronize_session=False)
+    session.commit()
+    du.recompute_shot_making(session, 2026)
+
+    assert q.get_shot_making(session, 2026) == []
+    assert q.get_shot_league_avg(session, 2026) is None

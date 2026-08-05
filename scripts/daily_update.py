@@ -27,6 +27,7 @@ from src.data.wnba_schedule import (
     fetch_wnba_schedule_broadcasters,
 )
 from src.db.queries import (
+    delete_shot_league_avg_season,
     delete_shot_making_season,
     delete_team_style_season,
     get_all_teams,
@@ -48,6 +49,7 @@ from src.db.queries import (
     upsert_game,
     upsert_game_shape,
     upsert_playoff_probability,
+    upsert_shot_league_avg,
     upsert_shot_making,
     upsert_shots,
     upsert_team,
@@ -80,7 +82,7 @@ from src.scoring.monte_carlo import (
     to_team_standings,
 )
 from src.scoring.quality import compute_quality_score
-from src.scoring.shot_making import compute_leaderboard
+from src.scoring.shot_making import compute_leaderboard, compute_league_averages
 from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
 
 os.makedirs("logs", exist_ok=True)
@@ -614,6 +616,12 @@ def recompute_shot_making(session, season: int) -> int:
     # stays intact (mirrors populate_team_style's self-contained rollback).
     try:
         delete_shot_making_season(session, season)
+        # The anchors are replaced wholesale with the board they describe. Doing
+        # this unconditionally (rather than only alongside a successful upsert)
+        # is what keeps the pair consistent when a season legitimately empties —
+        # a corrected re-ingest or data repair wipes the board, and anchors that
+        # outlived it would report a league average under an empty leaderboard.
+        delete_shot_league_avg_season(session, season)
         for r in board:
             upsert_shot_making(
                 session,
@@ -631,6 +639,21 @@ def recompute_shot_making(session, season: int) -> int:
                 actual_pps=r["actual_pps"],
                 expected_pps=r["expected_pps"],
                 diet=json.dumps(r["diet"]),
+                commit=False,
+            )
+        # All-league anchors for the bridge. Computed from the SAME `shots` list
+        # the baseline was built from (every shot, not just the qualified board),
+        # and written inside this transaction so anchors and board are always
+        # committed together — a reader must never see fresh anchors against a
+        # stale board.
+        league = compute_league_averages(shots)
+        if league["avg_xpps"] is not None:
+            upsert_shot_league_avg(
+                session,
+                season,
+                avg_xpps=league["avg_xpps"],
+                avg_pps=league["avg_pps"],
+                fga=league["fga"],
                 commit=False,
             )
         session.commit()

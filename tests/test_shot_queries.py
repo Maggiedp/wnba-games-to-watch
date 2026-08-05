@@ -238,3 +238,22 @@ def test_get_shots_for_player_filters_by_season_and_athlete(session):
     rows = q.get_shots_for_player(session, 2026, "star")
     assert len(rows) == 1
     assert rows[0].athlete_id == "star" and rows[0].season == 2026
+
+
+def test_shot_league_avg_upsert_is_idempotent_per_season(session):
+
+    q.upsert_shot_league_avg(session, 2026, avg_xpps=1.0270, avg_pps=1.0374, fga=25790)
+    q.upsert_shot_league_avg(session, 2026, avg_xpps=1.0300, avg_pps=1.0400, fga=26000)
+    row = q.get_shot_league_avg(session, 2026)
+    assert row.avg_xpps == 1.0300
+    assert row.avg_pps == 1.0400
+    assert row.fga == 26000
+    # one row per season, not two
+    assert session.query(type(row)).filter_by(season=2026).count() == 1
+
+
+def test_shot_league_avg_is_scoped_by_season(session):
+
+    q.upsert_shot_league_avg(session, 2026, avg_xpps=1.02, avg_pps=1.03, fga=100)
+    assert q.get_shot_league_avg(session, 2025) is None
+    assert q.get_shot_league_avg(session, 2026).fga == 100

@@ -43,6 +43,7 @@ from src.db.queries import (
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
+    get_shot_league_avg,
     get_shot_making,
     get_shots_for_player,
     get_shots_for_season,
@@ -66,7 +67,11 @@ from src.notify.thriller import (
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
 from src.scoring.game_shape import compute_live_shape
-from src.scoring.shot_making import build_baseline, compute_player_shot_chart
+from src.scoring.shot_making import (
+    bridge_scale,
+    build_baseline,
+    compute_player_shot_chart,
+)
 from src.scoring.team_style import compute_style_view
 
 logger = logging.getLogger(__name__)
@@ -1044,16 +1049,15 @@ async def get_shot_making_endpoint():
         season = int(today_et()[:4])
         rows = get_shot_making(session, season)
         rows.sort(key=lambda r: r.points_added, reverse=True)
-        total_fga = sum(r.fga for r in rows)
-        # Aggregate the stored expected-points totals (round(_, 2)) rather than
-        # expected_pps * fga: the latter re-inflates each player's 3-decimal
-        # rounding error by fga, which can shift the league baseline enough to
-        # flip a near-average marker. expected_pts is the less-lossy total.
-        league_avg_xpps = (
-            round(sum(r.expected_pts for r in rows) / total_fga, 3)
-            if total_fga
-            else None
-        )
+        # All-league anchors, written by the daily recompute. Null until the first
+        # run after deploy — the page then simply omits the bridge (forward-only,
+        # same pattern as seed_distribution). NOTE: league_avg_xpps keeps its field
+        # name but now means the TRUE league average, not the >=100-FGA qualified
+        # pool's — which is what the name always claimed.
+        anchors = get_shot_league_avg(session, season)
+        league_avg_xpps = anchors.avg_xpps if anchors else None
+        league_avg_pps = anchors.avg_pps if anchors else None
+        vs_league_scale = bridge_scale(rows, league_avg_xpps, league_avg_pps)
         players = []
         for i, r in enumerate(rows, start=1):
             try:
@@ -1080,6 +1084,8 @@ async def get_shot_making_endpoint():
         return {
             "season": season,
             "league_avg_xpps": league_avg_xpps,
+            "league_avg_pps": league_avg_pps,
+            "vs_league_scale": vs_league_scale,
             "players": players,
         }
     finally:

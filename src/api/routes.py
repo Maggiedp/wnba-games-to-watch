@@ -7,6 +7,7 @@ import math
 import os
 from collections import Counter
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import BaseModel, ConfigDict
@@ -20,13 +21,19 @@ from src.db.queries import (
     get_playoff_probabilities,
     get_shape_by_espn_id,
     get_shapes_by_espn_ids,
+    get_shot_league_avg,
     get_shot_making,
     get_shots_for_player,
     get_teams_by_ids,
     shot_row_to_dict,
 )
 from src.db.schema import DailyRanking, Game
-from src.scoring.shot_making import compute_player_shot_chart, player_headline
+from src.scoring.shot_making import (
+    bridge_gaps,
+    bridge_scale,
+    compute_player_shot_chart,
+    player_headline,
+)
 
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -1254,12 +1261,15 @@ def _fmt_signed(v: float) -> str:
 # shot_making_helpers.js: compare each operand at the displayed 3-decimal
 # precision (NOT a rounded raw subtraction, NOT an epsilon band — see the PR #118
 # gotcha in src/api/CLAUDE.md). Grey glyph only; NEVER the green/red points-added
-# colors (xPPS is shot selection, not making).
+# colors (xPPS is shot selection, not making). Compares via _js_to_fixed (JS
+# toFixed semantics, ties away from zero), NOT Python's banker's round() — at an
+# exact tie (e.g. avg_xpps == 1.0625) the two disagree, which would let the
+# glyph differ between /player and /shot-making for the same player.
 def _xpps_marker(xpps: float, league_avg: float | None) -> str:
     if league_avg is None:
         return ""
-    a = round(xpps, 3)
-    b = round(league_avg, 3)
+    a = float(_js_to_fixed(xpps, 3))
+    b = float(_js_to_fixed(league_avg, 3))
     if a > b:
         return "\u25b2"
     if a < b:
@@ -1279,6 +1289,125 @@ def _diet_bar_html(diet: dict) -> str:
     return f'<div class="diet-bar">{segs}</div>'
 
 
+_BRIDGE_NEAR = 0.03
+
+
+def _js_to_fixed(x: float, digits: int) -> str:
+    """Mirrors JavaScript's Number.prototype.toFixed. JS resolves an exact
+    halfway tie by rounding away from zero (spec: "if there are two such n,
+    pick the larger n"); Python's f-string `.Nf` uses round-half-to-even and
+    can disagree at those exact boundaries — e.g. 0.0625 to 3 places: JS
+    "0.063" vs f"{0.0625:.3f}" "0.062". `Decimal(x)` captures the literal
+    IEEE-754 double both languages share (same bit pattern for the same
+    numeric literal), so quantizing it with ROUND_HALF_UP reproduces toFixed
+    bit-for-bit, ties included. See tests/test_bridge_parity.py's boundary
+    cases — do not revert to plain `:.Nf` formatting in the bridge renderer."""
+    quant = Decimal(1).scaleb(-digits)
+    return str(Decimal(x).quantize(quant, rounding=ROUND_HALF_UP))
+
+
+def _bridge_gap_text(n: float) -> str:
+    """Signed 3-decimal gap with a Unicode minus. Mirrors bridgeGapText() in
+    shot_making_helpers.js — see tests/test_bridge_parity.py."""
+    s = _js_to_fixed(abs(n), 3)
+    return f"+{s}" if n >= 0 else f"−{s}"
+
+
+def _bridge_descriptor(axis: str, gap: float) -> str:
+    near = abs(gap) < _BRIDGE_NEAR
+    if axis == "diet":
+        if near:
+            return "takes about average-difficulty shots"
+        return (
+            "takes easier shots than average"
+            if gap > 0
+            else "takes harder shots than average"
+        )
+    if near:
+        return "converts about as expected"
+    return "converts above expectation" if gap > 0 else "converts below expectation"
+
+
+def _bridge_seg(from_pct: float, to_pct: float, cls: str) -> str:
+    left = min(from_pct, to_pct)
+    width = abs(to_pct - from_pct)
+    return (
+        f'<i class="bridge-seg {cls}" style="left:{_js_to_fixed(left, 2)}%;'
+        f'width:{_js_to_fixed(width, 2)}%"></i>'
+    )
+
+
+def _bridge_row(label: str, abs_text: str, seg: str, gap: float, note: str) -> str:
+    return (
+        '<div class="bridge-row">'
+        f'<span class="bridge-label">{label}</span>'
+        f'<span class="bridge-abs">{abs_text}</span>'
+        f'<span class="bridge-track">{seg}</span>'
+        f'<span class="bridge-gap">{_bridge_gap_text(gap)}</span>'
+        + (f'<span class="bridge-note">{note}</span>' if note else "")
+        + "</div>"
+    )
+
+
+def _vs_league_bridge_html(
+    expected_pps: float,
+    actual_pps: float,
+    anchors: dict,
+    scale,
+    rank_label: str | None,
+) -> str:
+    """Server-rendered bridge for /player. Byte-identical to vsLeagueBridge() in
+    shot_making_helpers.js — tests/test_bridge_parity.py asserts it. Change both
+    together."""
+    ax = anchors.get("avg_xpps") if anchors else None
+    ap = anchors.get("avg_pps") if anchors else None
+    if not isinstance(ax, (int, float)) or not isinstance(ap, (int, float)):
+        return ""
+    if not isinstance(scale, (int, float)) or scale <= 0:
+        return ""
+
+    gaps = bridge_gaps(expected_pps, actual_pps, ax, ap)
+    selection, making, total = gaps["selection"], gaps["making"], gaps["total"]
+
+    def pct(v):
+        return 50 + (v / scale) * 50
+
+    mid, sel_end, tot_end = pct(0), pct(selection), pct(total)
+
+    def sign(v):
+        return "is-positive" if v >= 0 else "is-negative"
+
+    return (
+        '<div class="bridge">'
+        '<h3 class="bridge-head">How she scores</h3>'
+        + _bridge_row(
+            "Shot diet",
+            _js_to_fixed(expected_pps, 3),
+            _bridge_seg(mid, sel_end, "is-diet"),
+            selection,
+            _bridge_descriptor("diet", selection),
+        )
+        + _bridge_row(
+            "Shot-making",
+            "",
+            f'<i class="bridge-drop" style="left:{_js_to_fixed(sel_end, 2)}%"></i>'
+            + _bridge_seg(sel_end, tot_end, "is-making " + sign(making)),
+            making,
+            _bridge_descriptor("making", making),
+        )
+        + _bridge_row(
+            "Points per shot",
+            _js_to_fixed(actual_pps, 3),
+            _bridge_seg(mid, tot_end, "is-total " + sign(total)),
+            total,
+            rank_label or "",
+        )
+        + '<p class="bridge-key">Shot diet describes what she shoots. It tracks '
+        "role — mostly rim rate — more than judgment, so it isn't graded.</p>"
+        "</div>"
+    )
+
+
 def _player_stat_header_html(row, rank, total, league_avg_xpps, diet) -> str:
     pa_cls = "is-positive" if row.points_added >= 0 else "is-negative"
     made_pct = round(row.made / row.fga * 100) if row.fga else 0
@@ -1295,7 +1424,7 @@ def _player_stat_header_html(row, rank, total, league_avg_xpps, diet) -> str:
       <div class="stat"><span class="v">{row.made}/{row.fga}</span>
         <span class="k">FG ({made_pct}%)</span></div>
       <div class="stat"><span class="v">#{rank} of {total}</span>
-        <span class="k">shot-making rank</span></div>
+        <span class="k">points-added rank</span></div>
     </div>
     {_diet_bar_html(diet)}
     """
@@ -1349,16 +1478,22 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
         except (ValueError, TypeError):
             diet = {}
         team_abbr = me.team_abbr
-        # League-average xPPS (FGA-weighted over the qualified board) anchors the
-        # neutral above/below marker; only the qualified header renders it, so
-        # compute it here, not unconditionally. Sums expected_pts (not
-        # expected_pps*fga, which re-inflates each row's rounding) — same
-        # rationale as the /api/shot-making endpoint.
-        total_fga = sum(r.fga for r in board)
-        league_avg_xpps = (
-            round(sum(r.expected_pts for r in board) / total_fga, 3)
-            if total_fga
-            else None
+        anchors_row = get_shot_league_avg(session, season)
+        anchors = (
+            {"avg_xpps": anchors_row.avg_xpps, "avg_pps": anchors_row.avg_pps}
+            if anchors_row
+            else {"avg_xpps": None, "avg_pps": None}
+        )
+        league_avg_xpps = anchors["avg_xpps"]
+        scale = bridge_scale(board, anchors["avg_xpps"], anchors["avg_pps"])
+        # Rank here is by points per SHOT — deliberately not the stat header's
+        # rank, which is by total points added and so is volume-weighted. Both
+        # are labelled explicitly; see the spec's "two ranks" note.
+        by_pps = sorted(board, key=lambda r: r.actual_pps, reverse=True)
+        pps_rank = by_pps.index(me) + 1
+        rank_label = f"#{pps_rank} of {total} in points per shot"
+        bridge_html = _vs_league_bridge_html(
+            me.expected_pps, me.actual_pps, anchors, scale, rank_label
         )
         headline = player_headline(me.fga, me.points_added, rank, total)
         stat_header = _player_stat_header_html(me, rank, total, league_avg_xpps, diet)
@@ -1381,6 +1516,7 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
         stat_header = (
             '<p class="degrade-note">Not yet ranked on the shot-making leaderboard.</p>'
         )
+        bridge_html = ""
 
     title = f"{name} — Shot making — {_SITE_TITLE}"
     subtitle = f"{team_abbr} · {season} · Shot making"
@@ -1393,6 +1529,7 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
         athlete_id=athlete_id,
         site_url=_SITE_URL,
         stat_header=stat_header,
+        bridge_html=bridge_html,
         zones_html=_player_zones_html(chart["zones"]),
         chart=chart["shots"],  # jinja `| tojson` -> </-safe embedded blob
         site_nav=_site_nav("shot-making"),
