@@ -41,6 +41,41 @@
             .xpps-mark { color: var(--text-subtle); font-size: 0.9rem; margin-left: 4px; }
             .degrade-note { color: var(--text-muted); margin: 20px 0 0; }
 
+            /* ---------- Vs-league bridge (waterfall) — duplicated from
+               shot_making.html (3rd copy of shot-page CSS; see the follow-up note
+               in root CLAUDE.md — not lifted into _SHARED_HEAD in this PR). ---------- */
+            .bridge { margin: 0 0 18px; }
+            .bridge-head { font-family: var(--display); font-size: 1rem; font-weight: 700;
+                           margin: 0 0 10px; }
+            .bridge-row { display: grid; grid-template-columns: 104px 52px 1fr 62px;
+                          align-items: center; gap: 8px; margin: 0 0 4px; }
+            .bridge-label { font-size: 0.78rem; text-transform: uppercase;
+                            letter-spacing: 0.08em; color: var(--text-subtle); }
+            .bridge-abs, .bridge-gap { font-family: var(--display); font-size: 0.9rem;
+                                       font-feature-settings: 'tnum' on; text-align: right; }
+            .bridge-track { position: relative; height: 14px; }
+            /* the league-average rule the whole bridge is measured from */
+            .bridge-track::before { content: ''; position: absolute; left: 50%; top: -3px;
+                                    bottom: -3px; width: 1px; background: var(--text-subtle);
+                                    opacity: 0.45; }
+            .bridge-seg { position: absolute; top: 3px; height: 8px; border-radius: 2px; }
+            /* hollow = described, filled = judged. The diet axis tracks role more than
+               judgment, so it is outlined and never colored by sign. */
+            .bridge-seg.is-diet { border: 1px solid var(--text-subtle); background: transparent; }
+            .bridge-seg.is-positive { background: var(--orange-deep); }
+            .bridge-seg.is-negative { background: #7a7f88; }
+            .bridge-seg.is-total { height: 10px; top: 2px; }
+            .bridge-drop { position: absolute; top: -8px; height: 11px; width: 1px;
+                           background: var(--text-subtle); opacity: 0.55; }
+            .bridge-note { grid-column: 3 / 5; font-size: 0.75rem; color: var(--text-muted);
+                           margin: -2px 0 4px; }
+            .bridge-key { font-size: 0.75rem; color: var(--text-subtle); line-height: 1.5;
+                          margin: 8px 0 0; }
+            @media (max-width: 560px) {
+              .bridge-row { grid-template-columns: 84px 46px 1fr 56px; gap: 6px; }
+              .bridge-label { font-size: 0.7rem; }
+            }
+
             /* --- shot-chart + diet + zones: duplicated from shot_making.html
                (2nd caller; lift the shared subset into _SHARED_HEAD on a 3rd). --- */
             .diet-bar { display: flex; width: 160px; height: 12px; border-radius: 4px;
@@ -79,6 +114,8 @@
             <p class="player-headline">{{ summary }}</p>
 
             {{ stat_header | safe }}
+
+            {{ bridge_html | safe }}
 
             <div class="chart-wrap">
                 <div id="shot-chart"></div>
