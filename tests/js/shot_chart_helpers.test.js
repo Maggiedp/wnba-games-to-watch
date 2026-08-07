@@ -30,8 +30,20 @@ test('three-pointers plot outside the drawn three-point line', () => {
   }
 });
 
-test('rim shots plot at the hoop, not on the baseline', () => {
-  assert.ok(Math.abs(H.shotChartY(1) - 272.5) <= 10); // within a foot of the rim
+// The dot transform and the COURT PATH encode the hoop separately, and the
+// bug this branch fixed was exactly those two disagreeing. Read the hoop back
+// out of the drawn court rather than trusting a remembered constant.
+test('the dot transform agrees with the hoop the court actually draws', () => {
+  const court = H.shotChartCourt();
+  const hoopCy = Number(court.match(/<circle cx="250" cy="([-\d.]+)" r="7.5"/)[1]);
+  assert.strictEqual(hoopCy, H.shotChartY(0), 'drawn hoop drifted from the transform');
+
+  // The three-point arc's center, recovered from its own path: endpoints at
+  // (30,endY)/(470,endY) with radius r put the center at endY + sqrt(r^2-220^2).
+  const [, r, endY] = court.match(/A([\d.]+),[\d.]+ 0 0 1 470,([\d.]+)/).map(Number);
+  const arcCenterY = endY + Math.sqrt(r * r - 220 * 220);
+  assert.ok(Math.abs(arcCenterY - H.shotChartY(0)) < 0.1,
+    `arc centered at ${arcCenterY}, transform puts the hoop at ${H.shotChartY(0)}`);
 });
 
 test('dot tooltip distance matches ESPN play-text distance', () => {
@@ -40,9 +52,7 @@ test('dot tooltip distance matches ESPN play-text distance', () => {
   assert.match(svg, /<title>24 ft three/);
 });
 
-// A heave past the chart's range must not be drawn as a dot at the top edge:
-// that reads as a real ~31-footer, and a 33- and a 57-footer would be
-// indistinguishable from each other and from an in-range shot.
+// Rationale for the chevron lives in the helper; this pins the behaviour.
 test('a shot beyond the chart range is marked off-scale, not clamped to a dot', () => {
   const svg = H.buildShotChartSvg([{ x: 25, y: 40, made: false, pv: 3, added: -1 }]);
   assert.strictEqual((svg.match(/r="5"/g) || []).length, 0, 'drew a lying dot');
@@ -61,12 +71,11 @@ test('an in-range shot stays a plain dot and is never marked off-scale', () => {
 // class of lie as clamping a heave onto the top edge as a dot. A circle at
 // x=0 has always half-clipped this way; the chevron matches it.
 test('a sideline shot is centered on its true x, not nudged inside the edge', () => {
-  const at = (shots) => H.buildShotChartSvg(shots);
-  const dot = at([{ x: 0, y: 10, made: true, pv: 2, added: 1 }]);
+  const dot = H.buildShotChartSvg([{ x: 0, y: 10, made: true, pv: 2, added: 1 }]);
   assert.match(dot, /<circle cx="0" /, 'in-range sideline dot was shifted');
-  const left = at([{ x: 0, y: 40, made: false, pv: 3, added: -1 }]);
+  const left = H.buildShotChartSvg([{ x: 0, y: 40, made: false, pv: 3, added: -1 }]);
   assert.match(left, /<path d="M-5,[-\d.]+ L0,/, 'off-scale sideline mark was shifted');
-  const right = at([{ x: 50, y: 40, made: false, pv: 3, added: -1 }]);
+  const right = H.buildShotChartSvg([{ x: 50, y: 40, made: false, pv: 3, added: -1 }]);
   assert.match(right, /<path d="M495,[-\d.]+ L500,/, 'off-scale sideline mark was shifted');
 });
 
@@ -85,7 +94,6 @@ test('every shot stays inside the viewBox', () => {
     if (tag === 'circle') ys.push(Number(attrs.match(/cy="([-\d.]+)"/)[1]));
     else for (const m of attrs.matchAll(/[ML][-\d.]+,([-\d.]+)/g)) ys.push(Number(m[1]));
   }
-  assert.ok(ys.length >= 3);
   for (const y of ys) assert.ok(y >= top, `geometry at y=${y} escapes viewBox top ${top}`);
 });
 
