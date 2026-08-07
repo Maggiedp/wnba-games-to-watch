@@ -108,8 +108,13 @@ def test_bridge_spans_the_full_expand_panel_width(client):
     explicit full-width span, auto-placement puts it in column 1 and pushes the
     chart into the narrow column with the zones dropping to a second row.
 
-    This is invisible to the browser walk: `.shot-panel` collapses to one column
-    at <=768px and the walk only runs 320/360/390/430. String-assert instead,
-    mirroring the `.sort-toggle[hidden]` guard in test_playoff_odds_page.py."""
+    The AUTHORITY on this invariant is now `assertShotPanelLayout` in
+    tests/browser/overflow.test.js, which measures the rendered geometry at
+    desktop widths (verified by deliberate break). This string-assert is kept
+    only as the cheap non-browser duplicate — it still fails on a machine with
+    no Chrome, where the walk cannot run at all. Being a text match, it is the
+    weaker check: a browser can drop a rule whose text IS present (see the
+    stray-`<style>` bug in PR #120), and a benign reformat fails it. If the two
+    ever disagree, believe the browser."""
     html = client.get("/shot-making").text
     assert ".shot-panel .bridge { grid-column: 1 / -1; }" in html

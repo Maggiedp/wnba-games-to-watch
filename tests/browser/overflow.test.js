@@ -1,5 +1,5 @@
 // Real-browser smoke walk: page-level horizontal overflow + inline-script
-// syntax errors, across every user-facing page at phone widths.
+// syntax errors, across every user-facing page at phone and desktop widths.
 //
 // CI: launches the runner's preinstalled Chrome (--headless --no-sandbox).
 // Local (macOS): puppeteer.launch HANGS under the sandbox — never launch here.
@@ -23,7 +23,38 @@ const puppeteer = require('puppeteer-core');
 
 const PORT = Number(process.env.SMOKE_PORT || 8123);
 const BASE = `http://127.0.0.1:${PORT}`;
-const WIDTHS = [320, 360, 390, 430];
+// Six templates collapse their grids below 768px, so a phone-only walk can't
+// see a multi-column layout at all — that blind spot shipped the PR #121 bridge
+// bug (chart pushed into .shot-panel's narrow column at >=768px). 1200 loads
+// every page in its widest layout. Phone widths are emulated as phones (touch +
+// mobile viewport meta) and desktop widths are not, so a state that only exists
+// under a max-width media query must declare `widths: PHONE_WIDTHS`.
+// Every template that swaps a phone layout for a desktop one does it at 768px,
+// so one constant classifies any width — including one added later that is in
+// neither list below.
+const CARD_BREAKPOINT = 768;
+
+// Widths are the NARROWEST width of each layout configuration — the point where
+// that configuration is tightest and fails first — not evenly spaced samples:
+//   769  first width past the card breakpoint: tables render at their
+//        narrowest, .style-grid is 2-col and .shot-panel already 2-col.
+//   961  first width past `@media (max-width: 960px)`, so all 7 homepage table
+//        columns return: 914px available against the completed table's 889px
+//        min-content is the tightest margin anywhere in the layout, and
+//        .style-grid is at its narrowest 3-col.
+// Mid-band widths (800, 820, 960) are deliberately omitted: each renders the
+// same configuration as one of the above with strictly more room, so they cost
+// ~13 subtests each and can only fail if the tighter width already has.
+// (The 431-768 tablet bands stay uncovered — see the root CLAUDE.md note.)
+const PHONE_WIDTHS = [320, 360, 390, 430];
+const DESKTOP_WIDTHS = [769, 961];
+const WIDTHS = [...PHONE_WIDTHS, ...DESKTOP_WIDTHS];
+
+// The homepage is the ONLY page with a container wider than `.wrap`'s 920px cap
+// (its .content is 1100px; the detail and player pages cap at 760px), so 1200 is
+// a distinct layout here and a byte-identical repeat of 961 everywhere else —
+// measured with per-element geometry fingerprints, not assumed.
+const HOMEPAGE_WIDTHS = [...WIDTHS, 1200];
 
 // Seeded by tests/browser/smoke_server.py; tests/test_smoke_seed.py guards
 // that both ids exist and their surfaces are populated.
@@ -64,6 +95,7 @@ const PAGES = [
         () => document.querySelectorAll('.shot-panel .shot-chart-svg circle').length > 1,
       );
     },
+    extraAssert: assertShotPanelLayout,
   },
   {
     path: '/player/smoke-shooter-0',
@@ -144,7 +176,9 @@ function collectSyntaxErrors(page) {
 }
 
 async function loadAt(page, urlPath, width, readySelector) {
-  await page.setViewport({ width, height: 800, deviceScaleFactor: 1, isMobile: true });
+  await page.setViewport({
+    width, height: 800, deviceScaleFactor: 1, isMobile: width <= CARD_BREAKPOINT,
+  });
   await page.goto(`${BASE}${urlPath}`, { waitUntil: 'networkidle0', timeout: 20_000 });
   if (readySelector) await page.waitForSelector(readySelector, { timeout: 10_000 });
   await page.evaluate(() => document.fonts.ready);
@@ -172,7 +206,7 @@ async function checkPage(label, width, { path: urlPath, readySelector, apply, ex
     if (apply) await apply(page);
     assert.deepStrictEqual(syntaxErrors.map(String), []);
     await assertNoOverflow(page, label);
-    if (extraAssert) await extraAssert(page, label);
+    if (extraAssert) await extraAssert(page, label, width);
   } finally {
     await page.close();
   }
@@ -201,13 +235,91 @@ async function assertDateInputsFit(page, label) {
   }
 }
 
+// Regression (PR #121): .shot-panel is a `1.4fr 1fr` grid and the bridge is a
+// THIRD child, so without `grid-column: 1 / -1` auto-placement puts it in
+// column 1 — squeezing the chart into the narrow column and dropping the zones
+// to row 2. The page-level scrollWidth assert CANNOT see this at any width (the
+// panel re-flows, it never overflows), so the desktop layout gets a scoped
+// geometry assert: the bridge spans the panel, and chart + zones share a row.
+// Verified by deliberate break — deleting the grid-column rule fails this.
+async function assertShotPanelLayout(page, label, width) {
+  // .shot-panel collapses to a single column at the card breakpoint, where the
+  // zones legitimately sit below the chart — this invariant is desktop-only.
+  if (width <= CARD_BREAKPOINT) return;
+  const m = await page.evaluate(() => {
+    const box = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return {
+        top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width,
+      };
+    };
+    return {
+      panel: box('.shot-panel'),
+      bridge: box('.shot-panel .bridge'),
+      chart: box('.shot-panel .chart-wrap'),
+      zones: box('.shot-panel .shot-zones'),
+    };
+  });
+  for (const [name, b] of Object.entries(m)) {
+    assert.ok(b, `${label}: .shot-panel ${name} missing — panel did not render`);
+  }
+  // Grid gap + padding mean the bridge is a few px under the panel's own box.
+  assert.ok(
+    m.bridge.width >= m.panel.width - 40,
+    `${label}: bridge spans ${m.bridge.width}px of a ${m.panel.width}px panel `
+    + '(expected full width — is `.shot-panel .bridge { grid-column: 1 / -1 }` gone?)',
+  );
+  // Column placement, not just vertical overlap: zones must start to the RIGHT
+  // of where the chart ends. Vertical overlap alone would also be satisfied by
+  // zones overlapping or clipping the chart inside a single column.
+  assert.ok(
+    m.zones.left >= m.chart.right,
+    `${label}: zones (left ${m.zones.left}) do not sit in a column right of the `
+    + `chart (right ${m.chart.right}) — panel is not laid out side by side`,
+  );
+  assert.ok(
+    m.zones.top < m.chart.bottom,
+    `${label}: zones (top ${m.zones.top}) dropped below the chart `
+    + `(bottom ${m.chart.bottom}) instead of sharing its row`,
+  );
+}
+
+// The .games-table-scroll wrapper CONTAINS table overflow, which means the
+// page-level assert can never fail on the games tables — a regression in the
+// `@media (max-width: 960px)` column rule would silently side-scroll the table
+// while the walk stayed green. Assert the wrapper isn't actually scrolling, so
+// the column rule is measured rather than merely symptom-hidden. Desktop only:
+// the phone layout renders cards, and no .games-table-scroll is reached.
+async function assertGamesTablesFit(page, label, width) {
+  if (width <= CARD_BREAKPOINT) return;
+  const wraps = await page.evaluate(
+    () => [...document.querySelectorAll('.games-table-scroll')]
+      .map((d) => ({ client: d.clientWidth, scroll: d.scrollWidth })),
+  );
+  assert.ok(wraps.length > 0, `${label}: no .games-table-scroll rendered`);
+  wraps.forEach((w, i) => {
+    assert.ok(
+      w.scroll <= w.client,
+      `${label}: games table ${i} scrolls inside its wrapper (${w.scroll} > `
+      + `${w.client}) — has the hide-mobile breakpoint moved below the width `
+      + 'where the full table fits?',
+    );
+  });
+}
+
 // Homepage states. Each apply() ASSERTS the toggle took effect (waits on the
 // resulting DOM state) so a renamed id/class fails loudly instead of letting
 // the walk pass vacuously against an untoggled page.
 const HOMEPAGE_STATES = [
-  { name: 'default' },
+  { name: 'default', extraAssert: assertGamesTablesFit },
   {
     name: 'filter-panel-open',
+    // Phone-only state: .mobile-filter-bar is display:none at base and only
+    // shows inside @media (max-width: 768px), so there is no toggle to click
+    // at a desktop width (the full controls are already visible there).
+    widths: PHONE_WIDTHS,
     apply: async (page) => {
       await page.click('#mobile-filter-toggle');
       await page.waitForFunction(
@@ -228,6 +340,9 @@ const HOMEPAGE_STATES = [
         () => document.querySelectorAll('#completed-games-container tr').length > 0,
       );
     },
+    // The completed table is the wider of the two (extra score columns), so it
+    // is the one that constrains the 960px breakpoint.
+    extraAssert: assertGamesTablesFit,
   },
 ];
 
@@ -242,7 +357,7 @@ test('inner pages: no horizontal overflow, no inline-script syntax errors', asyn
 
 test('homepage states: no horizontal overflow, no inline-script syntax errors', async (t) => {
   for (const state of HOMEPAGE_STATES) {
-    for (const width of WIDTHS) {
+    for (const width of state.widths || HOMEPAGE_WIDTHS) {
       const label = `/ [${state.name}] @ ${width}px`;
       await t.test(label, () => checkPage(label, width, {
         path: '/',
