@@ -148,22 +148,34 @@ def _league(n=60):
     return shots
 
 
-def test_chart_dots_skip_null_coords_and_clamp_negative_y():
+def test_chart_dots_skip_null_coords_and_keep_shots_taken_behind_the_rim():
+    # ESPN's coord_y origin is the RIM, not the baseline, so a small negative y
+    # is a real position between the rim and the baseline (a reverse layup) —
+    # 15 of 995 attempts across a 7-game sample. Clamping those to 0 stacked
+    # them on the hoop. Only absurd values are floored.
     baseline = build_baseline(_league())
     player = [
         _shot_chart(made=True, x=25, y=4),
         _shot_chart(
             made=False, x=None, y=None
         ),  # null coords -> no dot, still in zones
-        _shot_chart(
-            made=True, x=3, y=-2, pv=3, dist=23.0, stype="Jump Shot"
-        ),  # y clamped to 0
+        _shot_chart(made=True, x=3, y=-2, pv=3, dist=23.0, stype="Jump Shot"),
     ]
     out = compute_player_shot_chart(player, baseline)
     assert len(out["shots"]) == 2  # null-coord dot dropped
     assert out["fga"] == 3  # zones/fga count all 3
     ys = sorted(s["y"] for s in out["shots"])
-    assert ys[0] == 0  # -2 clamped to 0
+    assert ys[0] == -2  # behind the rim, preserved rather than folded onto it
+
+
+def test_chart_dot_y_is_floored_at_the_baseline():
+    # A shot can't be taken from out of bounds, so anything past the baseline is
+    # bad data (ESPN uses a large negative sentinel elsewhere in the feed).
+    baseline = build_baseline(_league())
+    out = compute_player_shot_chart(
+        [_shot_chart(made=False, x=25, y=-214748365)], baseline
+    )
+    assert out["shots"][0]["y"] == -5
 
 
 def test_chart_zone_added_sums_to_leaderboard_points_added():
