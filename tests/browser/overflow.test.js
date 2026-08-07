@@ -89,10 +89,13 @@ const PAGES = [
       await page.waitForFunction(
         () => !!document.querySelector('.shot-panel .shot-chart-svg'),
       );
-      // The empty court renders one <circle> (the hoop); >1 proves a real shot
-      // dot painted, so the walk covers a populated chart, not just the court.
+      // Only shot marks carry a <title>; the court chrome (free-throw ring,
+      // hoop, arc paths) carries none. Counting titles proves a real shot
+      // painted AND counts off-scale chevrons, which are <path> not <circle>.
+      // Don't revert to counting circles: the empty court already renders TWO
+      // (ring + hoop), so a `circle.length > 1` gate passes on a blank chart.
       await page.waitForFunction(
-        () => document.querySelectorAll('.shot-panel .shot-chart-svg circle').length > 1,
+        () => document.querySelectorAll('.shot-panel .shot-chart-svg title').length > 0,
       );
     },
     extraAssert: assertShotPanelLayout,

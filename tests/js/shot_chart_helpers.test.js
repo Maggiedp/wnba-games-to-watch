@@ -56,6 +56,20 @@ test('an in-range shot stays a plain dot and is never marked off-scale', () => {
   assert.doesNotMatch(svg, /beyond the chart/);
 });
 
+// Sideline marks are centered on the true x and allowed to clip at the edge,
+// for both mark types. Shifting them inward would move the shot — the same
+// class of lie as clamping a heave onto the top edge as a dot. A circle at
+// x=0 has always half-clipped this way; the chevron matches it.
+test('a sideline shot is centered on its true x, not nudged inside the edge', () => {
+  const at = (shots) => H.buildShotChartSvg(shots);
+  const dot = at([{ x: 0, y: 10, made: true, pv: 2, added: 1 }]);
+  assert.match(dot, /<circle cx="0" /, 'in-range sideline dot was shifted');
+  const left = at([{ x: 0, y: 40, made: false, pv: 3, added: -1 }]);
+  assert.match(left, /<path d="M-5,[-\d.]+ L0,/, 'off-scale sideline mark was shifted');
+  const right = at([{ x: 50, y: 40, made: false, pv: 3, added: -1 }]);
+  assert.match(right, /<path d="M495,[-\d.]+ L500,/, 'off-scale sideline mark was shifted');
+});
+
 test('every shot stays inside the viewBox', () => {
   const svg = H.buildShotChartSvg([
     { x: 25, y: 40, made: false, pv: 3, added: -1 },
