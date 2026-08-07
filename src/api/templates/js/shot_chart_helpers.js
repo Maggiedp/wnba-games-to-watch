@@ -1,13 +1,24 @@
 // Pure helpers for the /shot-making per-player shot chart. Shipped
 // byte-identical into the page (no module syntax); node-tested via node:vm.
 // Coordinate frame: ESPN offense-normalized half-court, x in [0,50] (hoop at
-// x=25), y = feet from baseline. SVG viewBox 0 0 500 340, hoop at the bottom.
+// x=25), y = feet from THE BASKET (not the baseline — verified against ESPN's
+// own play-text distances: hypot(x-25, y) matches them to 0.32 ft median).
+// SVG viewBox is 500 wide with the hoop near the bottom (see SHOT_CHART_TOP).
+
+// The drawn hoop's cy. The three-point path below is centered on it, so the
+// dot transform must anchor here too or threes land inside the arc.
+const SHOT_HOOP_Y = 272.5;
+// Top of the viewBox. Negative so the court coords below stay as drawn while
+// the chart gains headroom: ~2% of league shots are beyond 26 ft, and anchoring
+// dots to the hoop moved them 4.75 ft up. This keeps 32 ft of range visible.
+const SHOT_CHART_TOP = -50;
 
 function shotChartX(cx) { return cx * 10; }
-function shotChartY(cy) { return 320 - cy * 10; }
+function shotChartY(cy) { return SHOT_HOOP_Y - cy * 10; }
 
 function shotChartCourt() {
-  return '<rect x="0" y="0" width="500" height="340" fill="var(--surface,#fbfaf8)"/>'
+  return '<rect x="0" y="' + SHOT_CHART_TOP + '" width="500" height="' + (320 - SHOT_CHART_TOP)
+    + '" fill="var(--surface,#fbfaf8)"/>'
     + '<g fill="none" stroke="var(--line,#c9c3ba)" stroke-width="2">'
     + '<line x1="0" y1="320" x2="500" y2="320"/>'
     + '<line x1="0" y1="0" x2="0" y2="320"/><line x1="500" y1="0" x2="500" y2="320"/>'
@@ -28,11 +39,14 @@ function shotDotFill(added) {
 }
 
 function buildShotChartSvg(shots) {
-  let s = '<svg viewBox="0 0 500 340" class="shot-chart-svg" role="img" aria-label="Shot chart">';
+  let s = '<svg viewBox="0 ' + SHOT_CHART_TOP + ' 500 ' + (320 - SHOT_CHART_TOP)
+    + '" class="shot-chart-svg" role="img" aria-label="Shot chart">';
   s += shotChartCourt();
   for (const sh of (shots || [])) {
-    const px = shotChartX(sh.x), py = shotChartY(sh.y);
-    const dist = Math.round(Math.hypot(sh.x - 25, sh.y - 4.75));
+    const px = shotChartX(sh.x);
+    // Clamp a deep heave to the top edge rather than plotting it off-chart.
+    const py = Math.max(SHOT_CHART_TOP + 6, shotChartY(sh.y));
+    const dist = Math.round(Math.hypot(sh.x - 25, sh.y));
     const kind = sh.pv === 3 ? 'three' : (dist <= 4 ? 'rim' : 'jumper');
     const sign = sh.added >= 0 ? '+' : '−';
     const label = dist + ' ft ' + kind + ' · ' + (sh.made ? 'made' : 'missed')
