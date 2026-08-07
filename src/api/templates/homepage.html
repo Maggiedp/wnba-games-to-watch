@@ -368,6 +368,25 @@
             }
 
             /* ---------- Games table ---------- */
+            /* Measured min-content is 798px for the upcoming table and 889px for
+               the completed one (extra score columns), both driven by nowrap
+               cells, against a usable width of viewport - 47 (32px padding +
+               scrollbar). The card layout only takes over at <=768px, so the
+               full table used to push the whole PAGE into horizontal scroll
+               between 769px and ~936px (iPad portrait is 820). Two layers,
+               both wanted: contain any residual overflow to the table
+               (mirroring .shots-table-scroll on /shot-making), and drop the
+               secondary columns until the full table genuinely fits. */
+            .games-table-scroll { overflow-x: auto; }
+            /* Quality and Importance are secondary reads — Overall already
+               summarises both. 960 rather than the measured ~936 leaves margin
+               for font-metric variance across platforms: the fallback face when
+               Google Fonts is unreachable is wider than Fraunces. This rule
+               subsumes the old copy inside the <=768px block, where
+               .games-table is display:none and it could never apply. */
+            @media (max-width: 960px) {
+                .hide-mobile { display: none; }
+            }
             .games-table {
                 width: 100%;
                 border-collapse: collapse;
@@ -889,7 +908,6 @@
                 .games-table th, .games-table td { padding: 11px 10px; }
                 .games-table { font-size: 0.86rem; }
                 .score-num { font-size: 1.25rem; }
-                .hide-mobile { display: none; }
                 .modal { padding: 28px 22px; }
                 .modal h2 { font-size: 1.45rem; }
                 .sort-wrap { margin-left: 0; }
@@ -1617,6 +1635,7 @@
                 const container = document.getElementById(containerId || 'games-container');
                 if (games.length === 0) { container.innerHTML = ''; return; }
                 container.innerHTML = `
+                    <div class="games-table-scroll">
                     <table class="games-table">
                         <thead>
                             <tr>
@@ -1631,6 +1650,7 @@
                         </thead>
                         <tbody>${games.map(g => renderGameRow(g, g === featured, scoreHeader)).join('')}</tbody>
                     </table>
+                    </div>
                     <div class="games-cards">${games.map(g => renderGameCard(g, g === featured, scoreHeader)).join('')}</div>
                 `;
             }
