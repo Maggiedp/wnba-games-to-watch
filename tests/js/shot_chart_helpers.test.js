@@ -40,11 +40,39 @@ test('dot tooltip distance matches ESPN play-text distance', () => {
   assert.match(svg, /<title>24 ft three/);
 });
 
-test('a deep heave is clamped into the viewBox instead of plotting off the top', () => {
+// A heave past the chart's range must not be drawn as a dot at the top edge:
+// that reads as a real ~31-footer, and a 33- and a 57-footer would be
+// indistinguishable from each other and from an in-range shot.
+test('a shot beyond the chart range is marked off-scale, not clamped to a dot', () => {
   const svg = H.buildShotChartSvg([{ x: 25, y: 40, made: false, pv: 3, added: -1 }]);
+  assert.strictEqual((svg.match(/r="5"/g) || []).length, 0, 'drew a lying dot');
+  assert.match(svg, /<path d="M245,[-\d.]+ L250,/, 'no off-scale marker');
+  assert.match(svg, /<title>40 ft three · missed · −1.0 pts · beyond the chart<\/title>/);
+});
+
+test('an in-range shot stays a plain dot and is never marked off-scale', () => {
+  const svg = H.buildShotChartSvg([{ x: 25, y: 24, made: true, pv: 3, added: 1 }]);
+  assert.strictEqual((svg.match(/r="5"/g) || []).length, 1);
+  assert.doesNotMatch(svg, /beyond the chart/);
+});
+
+test('every shot stays inside the viewBox', () => {
+  const svg = H.buildShotChartSvg([
+    { x: 25, y: 40, made: false, pv: 3, added: -1 },
+    { x: 2, y: 66, made: false, pv: 3, added: -1 },
+    { x: 25, y: 0, made: true, pv: 2, added: 1 },
+  ]);
   const top = Number(svg.match(/viewBox="0 ([-\d.]+)/)[1]);
-  const cy = Number(svg.match(/<circle cx="250" cy="([-\d.]+)" r="5"/)[1]);
-  assert.ok(cy >= top, `heave plotted off-chart at cy=${cy}, viewBox top ${top}`);
+  // Only shot marks carry a <title>; this skips the court's own paths.
+  const marks = [...svg.matchAll(/<(circle|path)\b([^>]*)><title>/g)];
+  assert.strictEqual(marks.length, 3, 'expected one mark per shot');
+  const ys = [];
+  for (const [, tag, attrs] of marks) {
+    if (tag === 'circle') ys.push(Number(attrs.match(/cy="([-\d.]+)"/)[1]));
+    else for (const m of attrs.matchAll(/[ML][-\d.]+,([-\d.]+)/g)) ys.push(Number(m[1]));
+  }
+  assert.ok(ys.length >= 3);
+  for (const y of ys) assert.ok(y >= top, `geometry at y=${y} escapes viewBox top ${top}`);
 });
 
 // Anchoring dots to the hoop moved them 4.75 ft up, so the chart needs range

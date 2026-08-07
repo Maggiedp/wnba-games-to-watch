@@ -42,17 +42,31 @@ function buildShotChartSvg(shots) {
   let s = '<svg viewBox="0 ' + SHOT_CHART_TOP + ' 500 ' + (320 - SHOT_CHART_TOP)
     + '" class="shot-chart-svg" role="img" aria-label="Shot chart">';
   s += shotChartCourt();
+  const edge = SHOT_CHART_TOP + 6;
   for (const sh of (shots || [])) {
-    const px = shotChartX(sh.x);
-    // Clamp a deep heave to the top edge rather than plotting it off-chart.
-    const py = Math.max(SHOT_CHART_TOP + 6, shotChartY(sh.y));
+    const px = shotChartX(sh.x), py = shotChartY(sh.y);
     const dist = Math.round(Math.hypot(sh.x - 25, sh.y));
     const kind = sh.pv === 3 ? 'three' : (dist <= 4 ? 'rim' : 'jumper');
     const sign = sh.added >= 0 ? '+' : '−';
+    const offScale = py < edge;
     const label = dist + ' ft ' + kind + ' · ' + (sh.made ? 'made' : 'missed')
-      + ' · ' + sign + Math.abs(sh.added).toFixed(1) + ' pts';
-    s += '<circle cx="' + px + '" cy="' + py + '" r="5" ' + shotDotFill(sh.added)
-      + '><title>' + label + '</title></circle>';
+      + ' · ' + sign + Math.abs(sh.added).toFixed(1) + ' pts'
+      + (offScale ? ' · beyond the chart' : '');
+    if (offScale) {
+      // A heave past the chart's range (~0.4% of shots). Drawn as a chevron
+      // pinned to the top edge, NOT a clamped dot: a dot there would read as a
+      // real 31-footer, and two heaves of different length would be
+      // indistinguishable from each other AND from an in-range shot. The
+      // chevron declares "off-scale, see the tooltip for the true distance".
+      // Not sized per-player from the longest shot on purpose — the court is a
+      // fixed frame so charts stay comparable across players.
+      s += '<path d="M' + (px - 5) + ',' + (edge + 4) + ' L' + px + ',' + (edge - 4)
+        + ' L' + (px + 5) + ',' + (edge + 4) + ' Z" ' + shotDotFill(sh.added)
+        + '><title>' + label + '</title></path>';
+    } else {
+      s += '<circle cx="' + px + '" cy="' + py + '" r="5" ' + shotDotFill(sh.added)
+        + '><title>' + label + '</title></circle>';
+    }
   }
   s += '</svg>';
   return s;
