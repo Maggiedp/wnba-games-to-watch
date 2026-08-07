@@ -166,7 +166,8 @@ def compute_player_shot_chart(player_shots: list[dict], baseline: dict) -> dict:
     """One player's shot chart + zone summary against a league `baseline`
     (build_baseline output). Per-shot `added = points - expected_pps(shot)`, so
     the zone `added` totals sum to this player's leaderboard `points_added`.
-    Dots require non-null coords (y clamped at 0); zones aggregate every shot."""
+    Dots require non-null coords (y floored at the baseline, -5, since ESPN's y
+    origin is the rim); zones aggregate every shot."""
     dots = []
     zones: dict = {}
     total_added = 0.0
@@ -185,7 +186,10 @@ def compute_player_shot_chart(player_shots: list[dict], baseline: dict) -> dict:
         dots.append(
             {
                 "x": int(cx),
-                "y": max(0, int(cy)),
+                # ESPN's y origin is the RIM, so a small negative is a real spot
+                # between the rim and the baseline (reverse layup). Floor at the
+                # baseline: past it is out of bounds, i.e. bad data.
+                "y": max(-5, int(cy)),
                 "made": bool(s.get("made")),
                 "pv": pv,
                 "added": round(added, 2),
