@@ -246,15 +246,21 @@ def seed(session) -> None:
     for i, t in enumerate(teams):
         fga = 300 + 8 * i
         made = int(fga * (0.42 + 0.004 * i))
-        # xPPS multiplier varies by player (rather than a flat 1.05) so the
-        # "shot diet" bridge segment for shooter 0 — the rank-1 player, and the
-        # only one the browser walk actually renders (top leaderboard row's
-        # expand panel + /player/smoke-shooter-0) — is a sizeable LEFT-extending
-        # gap vs the seeded avg_xpps=1.027 anchor, not a uniform small
-        # right-extending one. points_added still spans positive/negative below.
-        xpps_mult = 0.90 + 0.01 * i
+        # The spread here decides the vs-league chart's geometry in the walk,
+        # because bridge_scale() is max(max|selection|, max|total|) over the
+        # board and every mark position is a fraction of that.
+        #
+        # Totals must span WIDER than selections, as they do in production
+        # (measured 2026-08-07 on live data: max|selection| 0.150 vs max|total|
+        # 0.375) — total = selection + making and making has by far the wider
+        # spread. That makes a TOTAL set the scale, which puts shooter 0's PPS
+        # mark near 100% of track: the single most demanding label geometry
+        # there is, and the one the earlier seed never produced. Shooter 0 is
+        # the rank-1 row, so it is what both walked surfaces render (the top
+        # leaderboard row's expand panel + /player/smoke-shooter-0).
+        xpps_mult = 0.96 + 0.006 * i
         expected = fga * xpps_mult
-        actual = expected + (7.0 - i) * 3.0  # spans positive and negative
+        actual = expected + (7.0 - i) * 10.0  # spans positive and negative
         upsert_shot_making(
             session,
             season,

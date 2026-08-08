@@ -117,15 +117,25 @@ test('vsLeagueBridge bounds every label box inside the track', () => {
 
   // interior marks (33.33% / 68.77%)
   const mid = boxes(vsLeagueBridge(ROW, ANCHORS, 0.285, null));
-  assert.deepEqual(mid[0], { side: 'is-left', style: 'left:0;right:66.67%' });
-  assert.deepEqual(mid[1], { side: 'is-right', style: 'left:68.77%;right:0' });
+  assert.deepEqual(mid[0], {
+    side: 'is-left', style: 'left:0;right:min(66.67%,100% - var(--lab-min))',
+  });
+  assert.deepEqual(mid[1], {
+    side: 'is-right', style: 'left:min(68.77%,100% - var(--lab-min));right:0',
+  });
 
-  // the scale-setter sits hard against an end: the box degenerates to zero
-  // width rather than hanging the text off the track (min-width saves it)
+  // The scale-setter sits hard against an end, leaving its box zero available
+  // width. The anchor must be CLAMPED there, not left to a bare min-width: a
+  // min-width over-constrains the box and CSS drops `right` in LTR, which
+  // rendered an is-right label 100.8px past the end of the track.
   const high = boxes(vsLeagueBridge({ expected_pps: 1.037, actual_pps: 1.322 }, ANCHORS, 0.285, null));
-  assert.deepEqual(high[1], { side: 'is-right', style: 'left:100.00%;right:0' });
+  assert.deepEqual(high[1], {
+    side: 'is-right', style: 'left:min(100.00%,100% - var(--lab-min));right:0',
+  });
   const low = boxes(vsLeagueBridge({ expected_pps: 0.742, actual_pps: 1.037 }, ANCHORS, 0.285, null));
-  assert.deepEqual(low[0], { side: 'is-left', style: 'left:0;right:100.00%' });
+  assert.deepEqual(low[0], {
+    side: 'is-left', style: 'left:0;right:min(100.00%,100% - var(--lab-min))',
+  });
 
   // two marks crammed at the same end — the case that used to overlap
   const crammed = boxes(vsLeagueBridge({ expected_pps: 0.774, actual_pps: 0.849 }, ANCHORS, 0.285, null));

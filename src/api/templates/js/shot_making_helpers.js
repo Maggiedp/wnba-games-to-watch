@@ -51,10 +51,15 @@ function xppsMarker(xpps, leagueAvg) {
 
 const BRIDGE_NEAR = 0.03;
 
-// Below this separation (in % of track width) the two marks coincide. The
-// arrow between them would be shorter than its own 12px head, so it is
-// omitted entirely and the ring nests around the filled dot instead — which
-// is the true picture of "she scored exactly what was expected".
+// Below this separation (in % of track width) the arrow is not drawn.
+//
+// This is a RENDERING threshold, not a claim that making is zero: the footer
+// still prints the exact gap, and the sentence still reads "converts about as
+// expected" via BRIDGE_NEAR. It is safe to omit the arrow here only because
+// nothing is being hidden — the ring is 17px and the dot 11px, so the two
+// marks already overlap at any separation under ~14px, and at 1.2% of a
+// typical track (~10px) an arrow drawn between them would be entirely
+// underneath them. Measured at making=+0.005: mark centres 8.5px apart.
 const BRIDGE_COINCIDENT_PCT = 1.2;
 
 // Signed 3-decimal gap, Unicode minus to match the rest of the site's numbers.
@@ -105,13 +110,22 @@ function bridgeMark(cls, pct) {
 // (or the mirror when making is negative), which are disjoint for ANY mark
 // positions. Hanging the text off the mark instead needed an edge-clamp to
 // stop it leaving the track, and that clamp could put both labels on the same
-// side, where they overlapped illegibly (measured: 29px at 320px). When a box
-// gets narrow the text wraps inside it; min-width in the CSS keeps a mark at
-// 0%/100% from collapsing its box to nothing.
+// side, where they overlapped illegibly (measured: 29px at 320px).
+//
+// The anchor is clamped by `min(..., 100% - var(--lab-min))` rather than by a
+// bare CSS `min-width`. The row that sets bridge_scale() puts one mark at
+// exactly 0% or 100%, which leaves its box zero available width; a min-width
+// then OVER-CONSTRAINS the box, and CSS resolves that by dropping `right` in
+// LTR — so an is-right label at 100% rendered a full min-width past the end of
+// the track (measured: 100.8px, and 19.4px at 90%). Clamping the anchor keeps
+// the box inside the track by construction at every position instead. Live
+// data has a mark at exactly 100% every season, so this is not hypothetical.
+// When a box gets narrow the text wraps inside it, which is why the label must
+// not be `white-space: nowrap`.
 function bridgeLabel(pct, side, kicker, value, gloss) {
   const box = side === 'is-left'
-    ? `left:0;right:${(100 - pct).toFixed(2)}%`
-    : `left:${pct.toFixed(2)}%;right:0`;
+    ? `left:0;right:min(${(100 - pct).toFixed(2)}%,100% - var(--lab-min))`
+    : `left:min(${pct.toFixed(2)}%,100% - var(--lab-min));right:0`;
   return `<span class="bridge-lab ${side}" style="${box}">` +
     `${kicker}<strong>${value}</strong>` +
     `<span class="bridge-gloss">${gloss}</span></span>`;

@@ -270,11 +270,20 @@
             .bridge-mark.is-actual { width: 11px; height: 11px; background: var(--navy); }
             /* A label is a BOX BOUNDED BY THE TRACK (see bridgeLabel in
                shot_making_helpers.js), so it can never leave the track and the
-               two boxes are disjoint for any mark positions. min-width keeps a
-               mark sitting at 0%/100% from collapsing its box to nothing; the
-               text wraps inside the box when the box gets narrow, which is why
-               this must NOT be white-space: nowrap. */
-            .bridge-lab { position: absolute; top: 26px; min-width: 9em;
+               two boxes are disjoint for any mark positions. The text wraps
+               inside the box when the box gets narrow, which is why this must
+               NOT be white-space: nowrap.
+
+               --lab-min is the minimum box width, consumed by the INLINE min()
+               clamp the renderers emit — deliberately NOT a min-width here. At
+               the 0%/100% extremes (the bridge_scale-setting row, which exists
+               every season) the box has zero available width, and a min-width
+               over-constrains it; CSS resolves that by dropping `right` in LTR,
+               which rendered an is-right label a full min-width past the end of
+               the track. Clamping the anchor bounds the box by construction.
+               Overriding this variable is how the phone breakpoint narrows the
+               labels. */
+            .bridge-lab { position: absolute; top: 26px; --lab-min: 9em;
                           font-size: 0.7rem; color: var(--text-muted); }
             .bridge-lab.is-left { text-align: right; }
             .bridge-lab.is-right { text-align: left; }
@@ -296,7 +305,7 @@
                  "xPPS" and a 5-character value — and it MUST shrink, or a wide
                  min-width would run the two boxes into each other on a narrow
                  track. */
-              .bridge-lab { font-size: 0.66rem; min-width: 4.2em; }
+              .bridge-lab { font-size: 0.66rem; --lab-min: 4.2em; }
               .bridge-lab strong { font-size: 0.8rem; }
               /* Below 560px the two marks can sit ~60px apart, which is not
                  enough for two glossed labels: they either overlap or the gloss

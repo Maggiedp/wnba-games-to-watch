@@ -1359,12 +1359,18 @@ def _bridge_label(pct: float, side: str, kicker: str, value: str, gloss: str) ->
     spans [pct, 100] and left-aligns. Two invariants become structural rather
     than heuristic — a label can never leave the track, and with the
     away-from-arrow sides the boxes are [0, xEnd] and [aEnd, 100] (or the
-    mirror), disjoint for ANY mark positions. See the JS twin for why the
-    earlier hang-off-the-mark + edge-clamp approach was replaced."""
+    mirror), disjoint for ANY mark positions.
+
+    The anchor is clamped by min(..., 100% - var(--lab-min)), NOT by a bare CSS
+    min-width: the bridge_scale-setting row puts one mark at exactly 0%/100%,
+    where a min-width over-constrains the box and CSS drops `right` in LTR,
+    rendering the label a full min-width past the end of the track. See the JS
+    twin for the measurements and for why the earlier hang-off-the-mark +
+    edge-clamp approach was replaced."""
     box = (
-        f"left:0;right:{_js_to_fixed(100 - pct, 2)}%"
+        f"left:0;right:min({_js_to_fixed(100 - pct, 2)}%,100% - var(--lab-min))"
         if side == "is-left"
-        else f"left:{_js_to_fixed(pct, 2)}%;right:0"
+        else f"left:min({_js_to_fixed(pct, 2)}%,100% - var(--lab-min));right:0"
     )
     return (
         f'<span class="bridge-lab {side}" style="{box}">'
