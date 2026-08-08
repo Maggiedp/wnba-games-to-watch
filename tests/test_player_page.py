@@ -217,7 +217,8 @@ def test_player_page_renders_the_bridge_when_anchors_exist(client, env):
 
     html = client.get("/player/p-qual").text
     assert "How she scores" in html
-    assert "bridge-seg is-diet" in html
+    assert "bridge-mark is-expected" in html
+    assert "bridge-mark is-actual" in html
     assert "in points per shot" in html
 
 

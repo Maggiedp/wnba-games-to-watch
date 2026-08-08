@@ -84,7 +84,7 @@ const PAGES = [
     apply: async (page) => {
       await page.waitForSelector('#shots-tbody tr.player-row');
       await page.click('#shots-tbody tr.player-row');
-      await page.waitForSelector('.shot-panel .bridge-seg.is-total');
+      await page.waitForSelector('.shot-panel .bridge-mark.is-actual');
       await page.waitForSelector('.shot-panel .shot-chart-svg, .shot-panel .status');
       await page.waitForFunction(
         () => !!document.querySelector('.shot-panel .shot-chart-svg'),
@@ -104,7 +104,7 @@ const PAGES = [
     path: '/player/smoke-shooter-0',
     readySelector: '#shot-chart svg',
     apply: async (page) => {
-      await page.waitForSelector('.bridge-seg.is-total');
+      await page.waitForSelector('.bridge-mark.is-actual');
     },
   },
   { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
