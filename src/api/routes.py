@@ -1334,25 +1334,6 @@ def _bridge_descriptor(axis: str, gap: float) -> str:
     return "converts above expectation" if gap > 0 else "converts below expectation"
 
 
-def _bridge_label_pct(x: float) -> float:
-    """Mirrors bridgeLabelPct(). A label sits outside its mark and would clip at
-    the track edges; both ends genuinely reach 0%/100% of scale in live data,
-    since bridge_scale is set by whichever board row is most extreme."""
-    return min(96, max(4, x))
-
-
-def _bridge_label_side(pct: float, away: str) -> str:
-    """Mirrors bridgeLabelSide(). Labels sit BELOW the axis, so they never
-    collide with the arrow — only with each other, which pointing each away from
-    the arrow prevents. Near a track edge that rule would hang the label off the
-    end, so position wins there and the label turns inward instead."""
-    if pct > 80:
-        return "is-left"
-    if pct < 20:
-        return "is-right"
-    return away
-
-
 def _bridge_arrow(from_pct: float, to_pct: float) -> str:
     """Mirrors bridgeArrow(). Direction and sign are the same fact — the arrow
     points right exactly when making is positive — so one class carries both."""
@@ -1371,10 +1352,22 @@ def _bridge_mark(cls: str, pct: float) -> str:
 
 def _bridge_label(pct: float, side: str, kicker: str, value: str, gloss: str) -> str:
     """Mirrors bridgeLabel(). The gloss is what makes the abbreviation legible
-    without a caption, so it rides on the mark rather than under the chart."""
+    without a caption, so it rides on the mark rather than under the chart.
+
+    Each label is a BOX BOUNDED BY THE TRACK, not a run of text hung off its
+    mark: is-left spans [0, pct] and right-aligns against the mark, is-right
+    spans [pct, 100] and left-aligns. Two invariants become structural rather
+    than heuristic — a label can never leave the track, and with the
+    away-from-arrow sides the boxes are [0, xEnd] and [aEnd, 100] (or the
+    mirror), disjoint for ANY mark positions. See the JS twin for why the
+    earlier hang-off-the-mark + edge-clamp approach was replaced."""
+    box = (
+        f"left:0;right:{_js_to_fixed(100 - pct, 2)}%"
+        if side == "is-left"
+        else f"left:{_js_to_fixed(pct, 2)}%;right:0"
+    )
     return (
-        f'<span class="bridge-lab {side}" '
-        f'style="left:{_js_to_fixed(_bridge_label_pct(pct), 2)}%">'
+        f'<span class="bridge-lab {side}" style="{box}">'
         f"{kicker}<strong>{value}</strong>"
         f'<span class="bridge-gloss">{gloss}</span></span>'
     )
@@ -1425,14 +1418,14 @@ def _vs_league_bridge_html(
         + _bridge_mark("is-actual", a_end)
         + _bridge_label(
             x_end,
-            _bridge_label_side(x_end, "is-left" if up else "is-right"),
+            "is-left" if up else "is-right",
             "xPPS",
             _js_to_fixed(expected_pps, 3),
             "league average,<br>from her spots",
         )
         + _bridge_label(
             a_end,
-            _bridge_label_side(a_end, "is-right" if up else "is-left"),
+            "is-right" if up else "is-left",
             "PPS",
             _js_to_fixed(actual_pps, 3),
             "what she<br>actually scored",

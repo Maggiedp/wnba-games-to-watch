@@ -81,24 +81,6 @@ function bridgePct(v, scale) {
   return 50 + (v / scale) * 50;
 }
 
-// A label sits outside its mark and would clip at the track edges. Both ends
-// genuinely reach 0%/100% of scale in live data — bridge_scale is set by the
-// largest |selection| OR |total| on the board, so whoever sets it lands on an
-// edge — so clamp before positioning.
-function bridgeLabelPct(x) {
-  return Math.min(96, Math.max(4, x));
-}
-
-// Labels sit BELOW the axis, so they never collide with the arrow — only with
-// each other. Pointing each away from the arrow is what keeps them apart. Near
-// a track edge that rule would hang the label off the end, so position wins
-// there and the label turns inward instead.
-function bridgeLabelSide(pct, away) {
-  if (pct > 80) return 'is-left';
-  if (pct < 20) return 'is-right';
-  return away;
-}
-
 // Direction and sign are the same fact: the arrow points right exactly when
 // making is positive, so one class carries both the geometry and the colour.
 function bridgeArrow(fromPct, toPct) {
@@ -114,8 +96,23 @@ function bridgeMark(cls, pct) {
 
 // The gloss is what makes the abbreviation legible without a caption, so it
 // lives on the mark rather than under the chart.
+//
+// Each label is a BOX BOUNDED BY THE TRACK, not a run of text hung off its
+// mark: is-left spans [0, pct] and right-aligns its text against the mark,
+// is-right spans [pct, 100] and left-aligns. That makes two invariants
+// structural rather than heuristic — a label can never leave the track, and
+// with the away-from-arrow sides the two boxes are [0, xEnd] and [aEnd, 100]
+// (or the mirror when making is negative), which are disjoint for ANY mark
+// positions. Hanging the text off the mark instead needed an edge-clamp to
+// stop it leaving the track, and that clamp could put both labels on the same
+// side, where they overlapped illegibly (measured: 29px at 320px). When a box
+// gets narrow the text wraps inside it; min-width in the CSS keeps a mark at
+// 0%/100% from collapsing its box to nothing.
 function bridgeLabel(pct, side, kicker, value, gloss) {
-  return `<span class="bridge-lab ${side}" style="left:${bridgeLabelPct(pct).toFixed(2)}%">` +
+  const box = side === 'is-left'
+    ? `left:0;right:${(100 - pct).toFixed(2)}%`
+    : `left:${pct.toFixed(2)}%;right:0`;
+  return `<span class="bridge-lab ${side}" style="${box}">` +
     `${kicker}<strong>${value}</strong>` +
     `<span class="bridge-gloss">${gloss}</span></span>`;
 }
@@ -147,9 +144,9 @@ function vsLeagueBridge(row, anchors, scale, rankLabel) {
       (coincident ? '' : bridgeArrow(xEnd, aEnd)) +
       bridgeMark('is-expected', xEnd) +
       bridgeMark('is-actual', aEnd) +
-      bridgeLabel(xEnd, bridgeLabelSide(xEnd, up ? 'is-left' : 'is-right'), 'xPPS',
+      bridgeLabel(xEnd, up ? 'is-left' : 'is-right', 'xPPS',
         row.expected_pps.toFixed(3), 'league average,<br>from her spots') +
-      bridgeLabel(aEnd, bridgeLabelSide(aEnd, up ? 'is-right' : 'is-left'), 'PPS',
+      bridgeLabel(aEnd, up ? 'is-right' : 'is-left', 'PPS',
         row.actual_pps.toFixed(3), 'what she<br>actually scored') +
     `</div>` +
     `<p class="bridge-said">She ${bridgeDescriptor('diet', selection)}, ` +

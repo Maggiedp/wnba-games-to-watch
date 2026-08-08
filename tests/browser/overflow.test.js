@@ -106,6 +106,10 @@ const PAGES = [
     apply: async (page) => {
       await page.waitForSelector('.bridge-mark.is-actual');
     },
+    // The seed puts a mark at ~1% of track, so this page renders the vs-league
+    // chart's tightest label geometry at every walked width — the case that
+    // overlapped at 320px.
+    extraAssert: assertBridgeLabels,
   },
   { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
   { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: 'main' },
@@ -245,7 +249,58 @@ async function assertDateInputsFit(page, label) {
 // panel re-flows, it never overflows), so the desktop layout gets a scoped
 // geometry assert: the bridge spans the panel, and chart + zones share a row.
 // Verified by deliberate break — deleting the grid-column rule fails this.
+// The vs-league chart positions its two value labels absolutely, so nothing
+// about them shows up in `scrollWidth <= innerWidth` — they can print on top of
+// each other, or on top of the sentence below, while the page assertion stays
+// green. That is exactly what happened: an edge-clamp meant to stop a label
+// leaving the track could put both labels on the same side, and at 320px the
+// two glosses overlapped by 29px. Measure the rendered rects instead.
+async function assertBridgeLabels(page, label) {
+  const m = await page.evaluate(() => {
+    const root = document.querySelector('.bridge');
+    if (!root) return null;
+    const rect = (el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+    };
+    const labs = [...root.querySelectorAll('.bridge-lab')].map(rect);
+    const said = root.querySelector('.bridge-said');
+    return { labs, axis: rect(root.querySelector('.bridge-axis')), said: said && rect(said) };
+  });
+  if (!m) return;   // the chart degrades to nothing without league anchors
+  assert.strictEqual(m.labs.length, 2, `${label}: expected exactly 2 bridge labels`);
+  const [a, b] = m.labs;
+  const overlaps = (p, q) => !(p.right <= q.left || q.right <= p.left)
+    && !(p.bottom <= q.top || q.bottom <= p.top);
+  assert.ok(
+    !overlaps(a, b),
+    `${label}: the xPPS and PPS labels overlap by `
+    + `${(Math.min(a.right, b.right) - Math.max(a.left, b.left)).toFixed(1)}px `
+    + '— they must occupy disjoint boxes bounded by the track',
+  );
+  // A wrapped label must not run into the sentence under the chart, which
+  // clears the labels by a hand-set margin rather than by layout.
+  if (m.said) {
+    for (const [i, l] of m.labs.entries()) {
+      assert.ok(
+        !overlaps(l, m.said),
+        `${label}: bridge label ${i} collides with the sentence below it `
+        + '(a narrow box wrapped the gloss past the .bridge-said clearance)',
+      );
+    }
+  }
+  // Neither box may escape the track it is measured against.
+  for (const [i, l] of m.labs.entries()) {
+    assert.ok(
+      l.left >= m.axis.left - 1 && l.right <= m.axis.right + 1,
+      `${label}: bridge label ${i} (${l.left.toFixed(0)}–${l.right.toFixed(0)}) `
+      + `escapes the track (${m.axis.left.toFixed(0)}–${m.axis.right.toFixed(0)})`,
+    );
+  }
+}
+
 async function assertShotPanelLayout(page, label, width) {
+  await assertBridgeLabels(page, label);
   // .shot-panel collapses to a single column at the card breakpoint, where the
   // zones legitimately sit below the chart — this invariant is desktop-only.
   if (width <= CARD_BREAKPOINT) return;

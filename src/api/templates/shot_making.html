@@ -232,17 +232,28 @@
             /* An arrow has a from and a to, so it cannot be read as an interval
                the way the old bars could. #5b6472 is the shot chart's own
                "worse than average" pole — keep the two surfaces on one ramp. */
-            .bridge-arrow { position: absolute; top: 14px; height: 0; }
+            /* The head is a fixed 12px triangle pinned to the pointing end, but the
+               arrow's WIDTH is a percentage of the track, so a small gap on a
+               narrow track yields an arrow shorter than its own head — the head
+               then overhangs backwards past the tail and smears across both
+               marks. Measured: 6 of 118 live players hit that band at 320px.
+               A percentage threshold cannot fix this (the renderers emit % and
+               cannot know px), so the box clips instead: a real height plus
+               overflow:hidden means a too-short arrow degrades to a clean wedge
+               at the head end rather than overhanging. Keep the height —
+               overflow:hidden on a zero-height box would clip the arrow away
+               vertically too. */
+            .bridge-arrow { position: absolute; top: 6.5px; height: 15px; overflow: hidden; }
             .bridge-arrow::before, .bridge-arrow::after { content: ''; position: absolute; }
-            .bridge-arrow.is-up::before { top: -4px; height: 8px; left: 0; right: 11px;
+            .bridge-arrow.is-up::before { top: 4px; height: 7px; left: 0; right: 11px;
                                           background: var(--orange-deep); border-radius: 1px; }
-            .bridge-arrow.is-up::after { right: 0; top: -7.5px;
+            .bridge-arrow.is-up::after { right: 0; top: 0;
                                          border-left: 12px solid var(--orange-deep);
                                          border-top: 7.5px solid transparent;
                                          border-bottom: 7.5px solid transparent; }
-            .bridge-arrow.is-down::before { top: -4px; height: 8px; left: 11px; right: 0;
+            .bridge-arrow.is-down::before { top: 4px; height: 7px; left: 11px; right: 0;
                                             background: #5b6472; border-radius: 1px; }
-            .bridge-arrow.is-down::after { left: 0; top: -7.5px;
+            .bridge-arrow.is-down::after { left: 0; top: 0;
                                            border-right: 12px solid #5b6472;
                                            border-top: 7.5px solid transparent;
                                            border-bottom: 7.5px solid transparent; }
@@ -257,9 +268,16 @@
                                        background: var(--bridge-ground);
                                        border: 1.75px solid var(--text-subtle); }
             .bridge-mark.is-actual { width: 11px; height: 11px; background: var(--navy); }
-            .bridge-lab { position: absolute; top: 26px; white-space: nowrap;
+            /* A label is a BOX BOUNDED BY THE TRACK (see bridgeLabel in
+               shot_making_helpers.js), so it can never leave the track and the
+               two boxes are disjoint for any mark positions. min-width keeps a
+               mark sitting at 0%/100% from collapsing its box to nothing; the
+               text wraps inside the box when the box gets narrow, which is why
+               this must NOT be white-space: nowrap. */
+            .bridge-lab { position: absolute; top: 26px; min-width: 9em;
                           font-size: 0.7rem; color: var(--text-muted); }
-            .bridge-lab.is-left { transform: translateX(-100%); text-align: right; }
+            .bridge-lab.is-left { text-align: right; }
+            .bridge-lab.is-right { text-align: left; }
             .bridge-lab strong { display: block; font-family: var(--display);
                                  font-size: 0.88rem; font-weight: 600; color: var(--navy);
                                  line-height: 1.25; font-feature-settings: 'tnum' on; }
@@ -274,8 +292,24 @@
             .bridge-foot b { font-family: var(--display); font-size: 0.95rem;
                              font-feature-settings: 'tnum' on; color: var(--navy); }
             @media (max-width: 560px) {
-              .bridge-lab { font-size: 0.66rem; }
+              /* No gloss below 560px (see below), so the box only has to hold
+                 "xPPS" and a 5-character value — and it MUST shrink, or a wide
+                 min-width would run the two boxes into each other on a narrow
+                 track. */
+              .bridge-lab { font-size: 0.66rem; min-width: 4.2em; }
               .bridge-lab strong { font-size: 0.8rem; }
+              /* Below 560px the two marks can sit ~60px apart, which is not
+                 enough for two glossed labels: they either overlap or the gloss
+                 wraps into the sentence below. The gloss is what this treatment
+                 is built on, so it is dropped only here, where there is provably
+                 no room — the abbreviations stay defined by the reading key
+                 under the leaderboard and by /player's stat tile. Guarded by
+                 assertBridgeLabels in tests/browser/overflow.test.js, which
+                 measures the rendered rects at every walked width. */
+              .bridge-gloss { display: none; }
+              /* .bridge-said clears a two-line gloss; without one it only has
+                 to clear the kicker + value. */
+              .bridge-said { margin-top: 46px; }
             }
         </style>
 </head>

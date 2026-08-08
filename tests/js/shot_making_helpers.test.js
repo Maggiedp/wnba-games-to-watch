@@ -95,18 +95,42 @@ test('vsLeagueBridge points the arrow by the sign of making', () => {
   assert.doesNotMatch(bad, /bridge-arrow is-up/);
 });
 
-test('vsLeagueBridge points each label away from the arrow so the two never collide', () => {
-  // Both marks interior (33% / 69%), so the away-from-arrow rule governs and
-  // the edge override stays out of it: making positive -> ring's label left,
-  // dot's label right, i.e. each hangs on its outer side.
+test('vsLeagueBridge points each label away from the arrow', () => {
+  // making positive -> the ring's label takes the left box, the dot's the right
   const up = vsLeagueBridge(ROW, ANCHORS, 0.285, null);
   assert.match(up, /class="bridge-lab is-left"[^>]*>xPPS/);
   assert.match(up, /class="bridge-lab is-right"[^>]*>PPS/);
-  // making negative with both marks still interior (70% / 35%): sides swap,
-  // and each again points outward from the arrow that runs between them.
+  // making negative -> both sides swap
   const down = vsLeagueBridge({ expected_pps: 1.141, actual_pps: 0.9515 }, ANCHORS, 0.285, null);
   assert.match(down, /class="bridge-lab is-right"[^>]*>xPPS/);
   assert.match(down, /class="bridge-lab is-left"[^>]*>PPS/);
+});
+
+test('vsLeagueBridge bounds every label box inside the track', () => {
+  // Each label is a box, not text hung off its mark: is-left spans [0, pct] and
+  // is-right spans [pct, 100]. Two things follow for ANY mark positions — no
+  // label can leave the track, and the two boxes are disjoint, so they cannot
+  // overlap. Both were previously heuristic (an edge clamp that could put both
+  // labels on the same side, where they overlapped illegibly).
+  const boxes = (html) => [...html.matchAll(/class="bridge-lab (is-\w+)" style="([^"]+)"/g)]
+    .map((m) => ({ side: m[1], style: m[2] }));
+
+  // interior marks (33.33% / 68.77%)
+  const mid = boxes(vsLeagueBridge(ROW, ANCHORS, 0.285, null));
+  assert.deepEqual(mid[0], { side: 'is-left', style: 'left:0;right:66.67%' });
+  assert.deepEqual(mid[1], { side: 'is-right', style: 'left:68.77%;right:0' });
+
+  // the scale-setter sits hard against an end: the box degenerates to zero
+  // width rather than hanging the text off the track (min-width saves it)
+  const high = boxes(vsLeagueBridge({ expected_pps: 1.037, actual_pps: 1.322 }, ANCHORS, 0.285, null));
+  assert.deepEqual(high[1], { side: 'is-right', style: 'left:100.00%;right:0' });
+  const low = boxes(vsLeagueBridge({ expected_pps: 0.742, actual_pps: 1.037 }, ANCHORS, 0.285, null));
+  assert.deepEqual(low[0], { side: 'is-left', style: 'left:0;right:100.00%' });
+
+  // two marks crammed at the same end — the case that used to overlap
+  const crammed = boxes(vsLeagueBridge({ expected_pps: 0.774, actual_pps: 0.849 }, ANCHORS, 0.285, null));
+  assert.strictEqual(crammed[0].side, 'is-left');
+  assert.strictEqual(crammed[1].side, 'is-right');
 });
 
 test('vsLeagueBridge omits the arrow when the two marks coincide', () => {
@@ -120,18 +144,14 @@ test('vsLeagueBridge omits the arrow when the two marks coincide', () => {
   assert.match(html, /class="bridge-mark is-actual"[^>]*left:50\.00%/);
 });
 
-test('vsLeagueBridge turns an edge label inward instead of hanging it off the track', () => {
+test('vsLeagueBridge puts the marks themselves at the true extremes', () => {
   // bridge_scale is set by whichever board row is most extreme, so that row
-  // genuinely lands at 100% of scale. The mark stays there; the label clamps to
-  // 96% AND flips to is-left, or it would extend past the end of the track.
-  const html = vsLeagueBridge({ expected_pps: 1.037, actual_pps: 1.322 }, ANCHORS, 0.285, null);
-  assert.match(html, /class="bridge-mark is-actual"[^>]*left:100\.00%/);
-  assert.match(html, /class="bridge-lab is-left"[^>]*left:96\.00%[^>]*>PPS/);
-  // ...and the same at the low end, where the away-from-arrow rule would
-  // otherwise point the label left off a mark sitting at 0%.
+  // genuinely lands at 0%/100%. The MARK is never clamped — only its label box
+  // is bounded — because moving the mark would misstate the value.
+  const high = vsLeagueBridge({ expected_pps: 1.037, actual_pps: 1.322 }, ANCHORS, 0.285, null);
+  assert.match(high, /class="bridge-mark is-actual"[^>]*left:100\.00%/);
   const low = vsLeagueBridge({ expected_pps: 0.742, actual_pps: 1.037 }, ANCHORS, 0.285, null);
   assert.match(low, /class="bridge-mark is-expected"[^>]*left:0\.00%/);
-  assert.match(low, /class="bridge-lab is-right"[^>]*left:4\.00%[^>]*>xPPS/);
 });
 
 test('vsLeagueBridge states both descriptors as one sentence', () => {
