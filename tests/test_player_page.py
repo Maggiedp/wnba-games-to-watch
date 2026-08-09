@@ -217,7 +217,8 @@ def test_player_page_renders_the_bridge_when_anchors_exist(client, env):
 
     html = client.get("/player/p-qual").text
     assert "How she scores" in html
-    assert "bridge-seg is-diet" in html
+    assert "bridge-mark is-expected" in html
+    assert "bridge-mark is-actual" in html
     assert "in points per shot" in html
 
 
@@ -231,3 +232,23 @@ def test_player_page_omits_the_bridge_before_the_first_daily_run(client, env):
     assert "How she scores" not in html
     # the rest of the page is unaffected
     assert "shot-chart" in html
+
+
+def test_player_page_defines_the_bridge_label_minimum(client, env):
+    """`--lab-min` is consumed by an inline `min(pct%, 100% - var(--lab-min))`
+    clamp that BOTH renderers emit. If the declaration is ever dropped from this
+    template the clamp becomes invalid at computed-value time, `left`/`right`
+    fall back to `auto`, and the labels lose their track bounds — a browser-only
+    failure. `/shot-making` has string-asserts over its own CSS; this page had
+    none, so the coupling was unenforced on one of the two surfaces."""
+    from src.api import app as app_module
+
+    app_module._shot_baseline_cache = None
+    _seed_qualified(env)
+    session = get_session()
+    q.upsert_shot_league_avg(session, 2026, avg_xpps=1.027, avg_pps=1.037, fga=25790)
+    session.close()
+
+    html = client.get("/player/p-qual").text
+    assert "--lab-min: 9em" in html
+    assert "100% - var(--lab-min)" in html  # the clamp actually reached the page

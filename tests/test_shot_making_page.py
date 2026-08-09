@@ -83,12 +83,23 @@ def test_shot_making_page_ships_the_bridge_css_and_helper(client):
     # the helper must be injected, not just referenced (already true via
     # %%SHOT_MAKING_JS%% before this task; kept as an injection guard)
     assert "function vsLeagueBridge(" in html
-    # the CSS rules below are new in this task — the JS emits class="bridge-track"
-    # / class="bridge-seg is-diet" (no leading dots), so these dotted selectors
-    # only exist once the page's own <style> block carries them
-    assert ".bridge-track" in html
-    assert ".bridge-seg.is-diet" in html
+    # the JS emits class="bridge-axis" / class="bridge-mark is-expected" (no
+    # leading dots), so these dotted selectors only exist once the page's own
+    # <style> block carries them
+    assert ".bridge-axis" in html
+    assert ".bridge-mark.is-expected" in html
+    assert ".bridge-mark.is-actual" in html
     assert ".bridge-head" in html
+
+
+def test_shot_making_page_grounds_the_ring_against_the_panel(client):
+    """The expected-value ring is an opaque disc that knocks the arrow tail out
+    of its interior, so its fill must match whatever it sits on. The expand
+    panel is --surface (white) while the shared rule defaults to the page's
+    --bg (cream); without the override the ring renders as a visible cream
+    disc on white. Browser-only symptom — no parse or layout error."""
+    html = client.get("/shot-making").text
+    assert "--bridge-ground: var(--surface)" in html
 
 
 def test_shot_making_page_explains_the_league_anchor_honestly(client):
@@ -98,8 +109,11 @@ def test_shot_making_page_explains_the_league_anchor_honestly(client):
     assert "League average this season:" in html
     assert "League-average xPPS this season" not in html
     # F2: the ▲/▽ marker column is the most likely place to misread "▲ = good",
-    # so the note itself must carry the honesty caveat, not just .bridge-key
-    # (which a reader only sees after expanding a row).
+    # so the note itself must carry the honesty caveat. It is now the ONLY
+    # place that does: the expand panel's own caveat line (.bridge-key, "shot
+    # diet ... isn't graded") went away with the waterfall, because the chart
+    # that replaced it never grades a diet axis — the ring is labelled "league
+    # average, from her spots", which is descriptive by construction.
     assert "that's her shot diet, not shot quality." in html
 
 
@@ -117,4 +131,35 @@ def test_bridge_spans_the_full_expand_panel_width(client):
     stray-`<style>` bug in PR #120), and a benign reformat fails it. If the two
     ever disagree, believe the browser."""
     html = client.get("/shot-making").text
-    assert ".shot-panel .bridge { grid-column: 1 / -1; }" in html
+    assert ".shot-panel .bridge { grid-column: 1 / -1;" in html
+
+
+def _bridge_css_block(template_name: str) -> str:
+    """The vs-league chart's CSS between its BRIDGE-CSS sentinels."""
+    from src.api.routes import _load_template
+
+    src = _load_template(template_name)
+    start = src.index("/* BRIDGE-CSS-START")
+    return src[start : src.index("/* BRIDGE-CSS-END */", start)]
+
+
+def test_bridge_css_is_identical_in_both_templates():
+    """The block is duplicated in shot_making.html and player.html (a 2-caller
+    dupe under the repo's extract-on-the-3rd-caller rule), but it is not
+    decorative: it carries `--lab-min`, which an inline min() clamp emitted by
+    BOTH renderers depends on, and `--bridge-ground`, which the ring's opaque
+    fill depends on. A drift between the copies is a browser-only bug on one
+    surface with nothing else to catch it — and this block was rewritten three
+    times in three review rounds, which is exactly when copies drift.
+
+    The sentinel opens BELOW the header comment, which names the other template
+    and is the one line that legitimately differs; everything inside must match
+    byte for byte."""
+    a = _bridge_css_block("shot_making.html")
+    b = _bridge_css_block("player.html")
+    assert a == b, "the vs-league CSS blocks have drifted between the two templates"
+    # Guard the sentinels themselves against a well-meaning cleanup, and pin the
+    # two cross-language contracts the block owns.
+    assert "--lab-min: 9em" in a
+    assert "--lab-min: 4.2em" in a  # the <=560px override
+    assert "var(--bridge-ground, var(--bg))" in a

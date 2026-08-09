@@ -168,7 +168,9 @@
                only visible above the 768px collapse, so the phone-width browser
                walk can't catch it. Span the full width and the original
                chart | zones row is preserved beneath it. */
-            .shot-panel .bridge { grid-column: 1 / -1; }
+            /* The panel sits on --surface, not the page's --bg, so the ring's
+               opaque fill has to match THIS ground or it shows as a disc. */
+            .shot-panel .bridge { grid-column: 1 / -1; --bridge-ground: var(--surface); }
             .shot-panel .chart-wrap { max-width: 420px; }
             .shot-chart-svg { width: 100%; height: auto; display: block; }
             .shot-legend {
@@ -204,51 +206,123 @@
                 .shot-panel .chart-wrap { max-width: 100%; }
             }
 
-            /* ---------- Vs-league bridge (waterfall) ---------- */
+            /* ---------- Vs-league chart: one axis, two marks ----------
+               Duplicated verbatim in player.html (2-caller dupe; lift to
+               _SHARED_HEAD on a 3rd). Only `--bridge-ground` differs — see the
+               .shot-panel .bridge rule above. */
+            /* BRIDGE-CSS-START (kept identical to the twin template) */
             .bridge { margin: 0 0 18px; position: relative; }
             .bridge-head { font-family: var(--display); font-size: 1rem; font-weight: 700;
-                           margin: 0 0 10px; }
-            .bridge-row { display: grid; grid-template-columns: 104px 52px 1fr 62px;
-                          align-items: center; gap: 8px; margin: 0 0 4px; }
-            .bridge-label { font-size: 0.78rem; text-transform: uppercase;
-                            letter-spacing: 0.08em; color: var(--text-subtle); }
-            .bridge-abs, .bridge-gap { font-family: var(--display); font-size: 0.9rem;
-                                       font-feature-settings: 'tnum' on; text-align: right; }
-            .bridge-track { position: relative; height: 14px; }
-            /* The league-average rule the whole bridge is measured from — ONE
-               continuous line on the .bridge container (not a per-row ::before
-               on each .bridge-track), so it reads as a single hairline across
-               all three rows instead of three disconnected ticks (F7 fix: the
-               old per-row ::before only extended 3px above/below each 14px
-               track, with row margins + .bridge-note lines between them, so it
-               rendered as 3 separate segments). The left offset is a calc()
-               mirror of .bridge-row's own grid-template-columns (the label +
-               abs columns, then half of the 1fr track column) — .bridge has no
-               padding, so 100% here equals .bridge-row's own width, and every
-               row shares the same column template, so this stays aligned with
-               all three tracks. Keep this calc in sync with grid-template-columns
-               (base + the 560px override below) if either ever changes. */
-            .bridge::before { content: ''; position: absolute;
-                              left: calc(172px + (100% - 242px) / 2); top: 0; bottom: 0;
-                              width: 1px; background: var(--text-subtle); opacity: 0.45; }
-            .bridge-seg { position: absolute; top: 3px; height: 8px; border-radius: 2px; }
-            /* hollow = described, filled = judged. The diet axis tracks role more than
-               judgment, so it is outlined and never colored by sign. */
-            .bridge-seg.is-diet { border: 1px solid var(--text-subtle); background: transparent; }
-            .bridge-seg.is-positive { background: var(--orange-deep); }
-            .bridge-seg.is-negative { background: #7a7f88; }
-            .bridge-seg.is-total { height: 10px; top: 2px; }
-            .bridge-drop { position: absolute; top: -8px; height: 11px; width: 1px;
-                           background: var(--text-subtle); opacity: 0.55; }
-            .bridge-note { grid-column: 3 / 5; font-size: 0.75rem; color: var(--text-muted);
-                           margin: -2px 0 4px; }
-            .bridge-key { font-size: 0.75rem; color: var(--text-subtle); line-height: 1.5;
-                          margin: 8px 0 0; }
+                           margin: 0 0 4px; }
+            .bridge-axis { position: relative; height: 30px; margin: 30px 8px 0; }
+            .bridge-base { position: absolute; left: 0; right: 0; top: 14px; height: 1px;
+                           background: var(--navy); opacity: 0.10; }
+            .bridge-tick { position: absolute; top: -2px; height: 34px; width: 1px; opacity: 0.75;
+                           background: repeating-linear-gradient(to bottom,
+                             var(--text-subtle) 0 2px, transparent 2px 5px); }
+            /* "The average WNBA shot", NOT "league average" — the ring below is
+               also a league average (an average SHOOTER, on her shots), and two
+               marks sharing that phrase is worse than leaving one unlabelled. */
+            .bridge-ticklab { position: absolute; top: -24px; transform: translateX(-50%);
+                              white-space: nowrap; font-size: 0.6rem; font-weight: 600;
+                              text-transform: uppercase; letter-spacing: 0.11em;
+                              color: var(--text-subtle); }
+            .bridge-ticklab em { font-style: normal; font-family: var(--display);
+                                 font-size: 0.78rem; color: var(--navy); letter-spacing: 0;
+                                 margin-left: 5px; font-feature-settings: 'tnum' on; }
+            /* An arrow has a from and a to, so it cannot be read as an interval
+               the way the old bars could. #5b6472 is the shot chart's own
+               "worse than average" pole — keep the two surfaces on one ramp. */
+            /* The head is a fixed 12px triangle pinned to the pointing end, but the
+               arrow's WIDTH is a percentage of the track, so a small gap on a
+               narrow track yields an arrow shorter than its own head — the head
+               then overhangs backwards past the tail and smears across both
+               marks. Measured: 6 of 118 live players hit that band at 320px.
+               A percentage threshold cannot fix this (the renderers emit % and
+               cannot know px), so the box clips instead: a real height plus
+               overflow:hidden means a too-short arrow degrades to a clean wedge
+               at the head end rather than overhanging. Keep the height —
+               overflow:hidden on a zero-height box would clip the arrow away
+               vertically too. */
+            .bridge-arrow { position: absolute; top: 6.5px; height: 15px; overflow: hidden; }
+            .bridge-arrow::before, .bridge-arrow::after { content: ''; position: absolute; }
+            .bridge-arrow.is-up::before { top: 4px; height: 7px; left: 0; right: 11px;
+                                          background: var(--orange-deep); border-radius: 1px; }
+            .bridge-arrow.is-up::after { right: 0; top: 0;
+                                         border-left: 12px solid var(--orange-deep);
+                                         border-top: 7.5px solid transparent;
+                                         border-bottom: 7.5px solid transparent; }
+            .bridge-arrow.is-down::before { top: 4px; height: 7px; left: 11px; right: 0;
+                                            background: var(--shot-cold); border-radius: 1px; }
+            .bridge-arrow.is-down::after { left: 0; top: 0;
+                                           border-right: 12px solid var(--shot-cold);
+                                           border-top: 7.5px solid transparent;
+                                           border-bottom: 7.5px solid transparent; }
+            /* The ring is deliberately WIDER than the filled dot. When actual
+               equals expected the two land on the same x, and at equal sizes the
+               fill occludes the ring completely — the chart then reads as though
+               the counterfactual were missing. At 17px vs 11px they nest. The
+               opaque fill knocks the arrow tail out of the ring's interior. */
+            .bridge-mark { position: absolute; top: 14px; transform: translate(-50%, -50%);
+                           border-radius: 50%; }
+            .bridge-mark.is-expected { width: 17px; height: 17px;
+                                       background: var(--bridge-ground, var(--bg));
+                                       border: 1.75px solid var(--text-subtle); }
+            .bridge-mark.is-actual { width: 11px; height: 11px; background: var(--navy); }
+            /* A label is a BOX BOUNDED BY THE TRACK (see bridgeLabel in
+               shot_making_helpers.js), so it can never leave the track and the
+               two boxes are disjoint for any mark positions. The text wraps
+               inside the box when the box gets narrow, which is why this must
+               NOT be white-space: nowrap.
+
+               --lab-min is the minimum box width, consumed by the INLINE min()
+               clamp the renderers emit — deliberately NOT a min-width here. At
+               the 0%/100% extremes (the bridge_scale-setting row, which exists
+               every season) the box has zero available width, and a min-width
+               over-constrains it; CSS resolves that by dropping `right` in LTR,
+               which rendered an is-right label a full min-width past the end of
+               the track. Clamping the anchor bounds the box by construction.
+               Overriding this variable is how the phone breakpoint narrows the
+               labels. */
+            .bridge-lab { position: absolute; top: 26px; --lab-min: 9em;
+                          font-size: 0.7rem; color: var(--text-muted); }
+            .bridge-lab.is-left { text-align: right; }
+            .bridge-lab.is-right { text-align: left; }
+            .bridge-lab strong { display: block; font-family: var(--display);
+                                 font-size: 0.88rem; font-weight: 600; color: var(--navy);
+                                 line-height: 1.25; font-feature-settings: 'tnum' on; }
+            .bridge-gloss { display: block; font-size: 0.66rem; line-height: 1.35;
+                            color: var(--text-subtle); margin-top: 2px; }
+            /* The labels are absolutely positioned and contribute no height, so
+               the sentence below has to clear the two-line gloss by hand. */
+            .bridge-said { margin: 80px 0 0; font-size: 0.84rem; color: var(--navy); }
+            .bridge-foot { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 0;
+                           font-size: 0.78rem; color: var(--text-muted); }
+            .bridge-foot span { display: inline-flex; align-items: baseline; gap: 6px; }
+            .bridge-foot b { font-family: var(--display); font-size: 0.95rem;
+                             font-feature-settings: 'tnum' on; color: var(--navy); }
             @media (max-width: 560px) {
-              .bridge-row { grid-template-columns: 84px 46px 1fr 56px; gap: 6px; }
-              .bridge-label { font-size: 0.7rem; }
-              .bridge::before { left: calc(142px + (100% - 204px) / 2); }
+              /* No gloss below 560px (see below), so the box only has to hold
+                 "xPPS" and a 5-character value — and it MUST shrink, or a wide
+                 min-width would run the two boxes into each other on a narrow
+                 track. */
+              .bridge-lab { font-size: 0.66rem; --lab-min: 4.2em; }
+              .bridge-lab strong { font-size: 0.8rem; }
+              /* Below 560px the two marks can sit ~60px apart, which is not
+                 enough for two glossed labels: they either overlap or the gloss
+                 wraps into the sentence below. The gloss is what this treatment
+                 is built on, so it is dropped only here, where there is provably
+                 no room — the abbreviations stay defined by the reading key
+                 under the leaderboard and by /player's stat tile. Guarded by
+                 assertBridgeLabels in tests/browser/overflow.test.js, which
+                 measures the rendered rects at every walked width. */
+              .bridge-gloss { display: none; }
+              /* .bridge-said clears a two-line gloss; without one it only has
+                 to clear the kicker + value. */
+              .bridge-said { margin-top: 46px; }
             }
+            /* BRIDGE-CSS-END */
+
         </style>
 </head>
 <body>

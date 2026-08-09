@@ -64,29 +64,119 @@ test('bridgeDescriptor gates on the 0.03 near-zero band', () => {
   assert.strictEqual(bridgeDescriptor('making', -0.02), 'converts about as expected');
 });
 
-test('vsLeagueBridge chains the diet segment into the making segment', () => {
+test('vsLeagueBridge places both marks and spans the arrow between them', () => {
   const html = vsLeagueBridge(ROW, ANCHORS, 0.285, null);
-  // selection -0.095 -> ends at 50 - (0.095/0.285)*50 = 33.33%
-  // Anchor to the diet segment's class to verify it has the correct position
-  assert.match(html, /class="bridge-seg is-diet"[^>]*left:33\.33%/);
-  // making runs from 33.33% to the total position 50 + (0.107/0.285)*50 = 68.77%
-  assert.match(html, /width:35\.44%/);
-  assert.match(html, /−0\.095/);
-  assert.match(html, /\+0\.107/);
+  // selection -0.095 -> the expected ring sits at 50 - (0.095/0.285)*50 = 33.33%
+  assert.match(html, /class="bridge-mark is-expected"[^>]*left:33\.33%/);
+  // total +0.107 -> the actual dot sits at 50 + (0.107/0.285)*50 = 68.77%
+  assert.match(html, /class="bridge-mark is-actual"[^>]*left:68\.77%/);
+  // the arrow must run mark to mark, so its span is exactly the difference
+  assert.match(html, /class="bridge-arrow is-up"[^>]*left:33\.33%;width:35\.44%/);
+  // making +0.202 and total +0.107 are both stated in the footer
+  assert.match(html, /Shot-making <b>\+0\.202<\/b>/);
+  assert.match(html, /Vs league <b>\+0\.107<\/b>/);
 });
 
-test('vsLeagueBridge draws the diet segment hollow and never signs its color', () => {
+test('vsLeagueBridge names both marks and glosses them on the mark itself', () => {
   const html = vsLeagueBridge(ROW, ANCHORS, 0.285, null);
-  assert.match(html, /class="bridge-seg is-diet"/);
-  assert.doesNotMatch(html, /is-diet is-(positive|negative)/);
+  assert.match(html, /xPPS<strong>0\.932<\/strong>/);
+  assert.match(html, /PPS<strong>1\.144<\/strong>/);
+  assert.match(html, /league average,<br>from her spots/);
+  assert.match(html, /what she<br>actually scored/);
+  // the tick is the average WNBA SHOT — it must not also claim the phrase
+  // "league average", which belongs to the ring (an average SHOOTER)
+  assert.match(html, /The average WNBA shot<em>1\.037<\/em>/);
 });
 
-test('vsLeagueBridge colors making and total by sign', () => {
-  const good = vsLeagueBridge(ROW, ANCHORS, 0.285, null);
-  assert.match(good, /bridge-seg is-making is-positive/);
+test('vsLeagueBridge points the arrow by the sign of making', () => {
+  assert.match(vsLeagueBridge(ROW, ANCHORS, 0.285, null), /bridge-arrow is-up/);
   const bad = vsLeagueBridge({ expected_pps: 1.111, actual_pps: 0.762 }, ANCHORS, 0.285, null);
-  assert.match(bad, /bridge-seg is-making is-negative/);
-  assert.match(bad, /bridge-seg is-total is-negative/);
+  assert.match(bad, /bridge-arrow is-down/);
+  assert.doesNotMatch(bad, /bridge-arrow is-up/);
+});
+
+test('vsLeagueBridge points each label away from the arrow', () => {
+  // making positive -> the ring's label takes the left box, the dot's the right
+  const up = vsLeagueBridge(ROW, ANCHORS, 0.285, null);
+  assert.match(up, /class="bridge-lab is-left"[^>]*>xPPS/);
+  assert.match(up, /class="bridge-lab is-right"[^>]*>PPS/);
+  // making negative -> both sides swap
+  const down = vsLeagueBridge({ expected_pps: 1.141, actual_pps: 0.9515 }, ANCHORS, 0.285, null);
+  assert.match(down, /class="bridge-lab is-right"[^>]*>xPPS/);
+  assert.match(down, /class="bridge-lab is-left"[^>]*>PPS/);
+});
+
+test('vsLeagueBridge bounds every label box inside the track', () => {
+  // Each label is a box, not text hung off its mark: is-left spans [0, pct] and
+  // is-right spans [pct, 100]. Two things follow for ANY mark positions — no
+  // label can leave the track, and the two boxes are disjoint, so they cannot
+  // overlap. Both were previously heuristic (an edge clamp that could put both
+  // labels on the same side, where they overlapped illegibly).
+  const boxes = (html) => [...html.matchAll(/class="bridge-lab (is-\w+)" style="([^"]+)"/g)]
+    .map((m) => ({ side: m[1], style: m[2] }));
+
+  // interior marks (33.33% / 68.77%)
+  const mid = boxes(vsLeagueBridge(ROW, ANCHORS, 0.285, null));
+  assert.deepEqual(mid[0], {
+    side: 'is-left', style: 'left:0;right:min(66.67%,100% - var(--lab-min))',
+  });
+  assert.deepEqual(mid[1], {
+    side: 'is-right', style: 'left:min(68.77%,100% - var(--lab-min));right:0',
+  });
+
+  // The scale-setter sits hard against an end, leaving its box zero available
+  // width. The anchor must be CLAMPED there, not left to a bare min-width: a
+  // min-width over-constrains the box and CSS drops `right` in LTR, which
+  // rendered an is-right label 100.8px past the end of the track.
+  const high = boxes(vsLeagueBridge({ expected_pps: 1.037, actual_pps: 1.322 }, ANCHORS, 0.285, null));
+  assert.deepEqual(high[1], {
+    side: 'is-right', style: 'left:min(100.00%,100% - var(--lab-min));right:0',
+  });
+  const low = boxes(vsLeagueBridge({ expected_pps: 0.742, actual_pps: 1.037 }, ANCHORS, 0.285, null));
+  assert.deepEqual(low[0], {
+    side: 'is-left', style: 'left:0;right:min(100.00%,100% - var(--lab-min))',
+  });
+
+  // Two marks crammed at the same end (5.61% / 17.02%) — the case that used to
+  // overlap. Assert the BOXES, not just the sides: the sides here are the same
+  // assignment the interior case above already pins, so a side-only check would
+  // survive a regression in the box formula, which is the whole point of this
+  // test. The two spans are disjoint by construction: [0, 5.61] and [17.02, 100].
+  const crammed = boxes(vsLeagueBridge({ expected_pps: 0.774, actual_pps: 0.849 }, ANCHORS, 0.285, null));
+  assert.deepEqual(crammed[0], {
+    side: 'is-left', style: 'left:0;right:min(94.39%,100% - var(--lab-min))',
+  });
+  assert.deepEqual(crammed[1], {
+    side: 'is-right', style: 'left:min(17.02%,100% - var(--lab-min));right:0',
+  });
+});
+
+test('vsLeagueBridge omits the arrow when the two marks coincide', () => {
+  // actual == expected + the league making residual -> the marks land together
+  // and an arrow would be shorter than its own head. The ring nests around the
+  // filled dot instead, which is the true picture of "scored what was expected".
+  const html = vsLeagueBridge({ expected_pps: 1.027, actual_pps: 1.037 }, ANCHORS, 0.285, null);
+  assert.doesNotMatch(html, /bridge-arrow/);
+  // both marks still render, at the same position
+  assert.match(html, /class="bridge-mark is-expected"[^>]*left:50\.00%/);
+  assert.match(html, /class="bridge-mark is-actual"[^>]*left:50\.00%/);
+});
+
+test('vsLeagueBridge puts the marks themselves at the true extremes', () => {
+  // bridge_scale is set by whichever board row is most extreme, so that row
+  // genuinely lands at 0%/100%. The MARK is never clamped — only its label box
+  // is bounded — because moving the mark would misstate the value.
+  const high = vsLeagueBridge({ expected_pps: 1.037, actual_pps: 1.322 }, ANCHORS, 0.285, null);
+  assert.match(high, /class="bridge-mark is-actual"[^>]*left:100\.00%/);
+  const low = vsLeagueBridge({ expected_pps: 0.742, actual_pps: 1.037 }, ANCHORS, 0.285, null);
+  assert.match(low, /class="bridge-mark is-expected"[^>]*left:0\.00%/);
+});
+
+test('vsLeagueBridge states both descriptors as one sentence', () => {
+  assert.match(
+    vsLeagueBridge(ROW, ANCHORS, 0.285, null),
+    /She takes harder shots than average, and converts above expectation\./,
+  );
 });
 
 test('vsLeagueBridge appends the rank label only when given one', () => {

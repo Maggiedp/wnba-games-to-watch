@@ -306,6 +306,10 @@ _SHARED_HEAD = """\
                 --navy-3: #2b3a52;
                 --orange: #ff6b00;
                 --orange-deep: #a03c00;
+                /* The "worse than average" pole of the shot chart's gradient.
+                   The vs-league arrow shares it so the two charts on a player's
+                   page read on one ramp; keep them in sync. */
+                --shot-cold: #5b6472;
                 --live: #d6442e;
                 --bg: #f7f5f0;
                 --surface: #ffffff;
@@ -1291,6 +1295,12 @@ def _diet_bar_html(diet: dict) -> str:
 
 _BRIDGE_NEAR = 0.03
 
+# Mirrors BRIDGE_COINCIDENT_PCT in shot_making_helpers.js. Below this separation
+# (in % of track width) the two marks land on the same spot: the arrow would be
+# shorter than its own head, so it is omitted and the ring nests around the
+# filled dot — the true picture of "she scored exactly what was expected".
+_BRIDGE_COINCIDENT_PCT = 1.2
+
 
 def _js_to_fixed(x: float, digits: int) -> str:
     """Mirrors JavaScript's Number.prototype.toFixed. JS resolves an exact
@@ -1328,24 +1338,44 @@ def _bridge_descriptor(axis: str, gap: float) -> str:
     return "converts above expectation" if gap > 0 else "converts below expectation"
 
 
-def _bridge_seg(from_pct: float, to_pct: float, cls: str) -> str:
+def _bridge_arrow(from_pct: float, to_pct: float) -> str:
+    """Mirrors bridgeArrow(). Direction and sign are the same fact — the arrow
+    points right exactly when making is positive — so one class carries both."""
     left = min(from_pct, to_pct)
     width = abs(to_pct - from_pct)
+    direction = "is-up" if to_pct >= from_pct else "is-down"
     return (
-        f'<i class="bridge-seg {cls}" style="left:{_js_to_fixed(left, 2)}%;'
+        f'<i class="bridge-arrow {direction}" style="left:{_js_to_fixed(left, 2)}%;'
         f'width:{_js_to_fixed(width, 2)}%"></i>'
     )
 
 
-def _bridge_row(label: str, abs_text: str, seg: str, gap: float, note: str) -> str:
+def _bridge_mark(cls: str, pct: float) -> str:
+    return f'<i class="bridge-mark {cls}" style="left:{_js_to_fixed(pct, 2)}%"></i>'
+
+
+def _bridge_label(pct: float, side: str, kicker: str, value: str, gloss: str) -> str:
+    """Mirrors bridgeLabel(). The gloss is what makes the abbreviation legible
+    without a caption, so it rides on the mark rather than under the chart.
+
+    Each label is a BOX BOUNDED BY THE TRACK, not a run of text hung off its
+    mark: is-left spans [0, pct] and right-aligns against the mark, is-right
+    spans [pct, 100] and left-aligns, and the anchor is clamped by
+    min(..., 100% - var(--lab-min)) rather than by a CSS min-width.
+
+    bridgeLabel() in shot_making_helpers.js carries the rationale for both
+    choices and the measurements behind them — don't restate it here, it would
+    be a fourth copy (two renderers, two template CSS blocks) with no test
+    holding them together."""
+    box = (
+        f"left:0;right:min({_js_to_fixed(100 - pct, 2)}%,100% - var(--lab-min))"
+        if side == "is-left"
+        else f"left:min({_js_to_fixed(pct, 2)}%,100% - var(--lab-min));right:0"
+    )
     return (
-        '<div class="bridge-row">'
-        f'<span class="bridge-label">{label}</span>'
-        f'<span class="bridge-abs">{abs_text}</span>'
-        f'<span class="bridge-track">{seg}</span>'
-        f'<span class="bridge-gap">{_bridge_gap_text(gap)}</span>'
-        + (f'<span class="bridge-note">{note}</span>' if note else "")
-        + "</div>"
+        f'<span class="bridge-lab {side}" style="{box}">'
+        f"{kicker}<strong>{value}</strong>"
+        f'<span class="bridge-gloss">{gloss}</span></span>'
     )
 
 
@@ -1356,9 +1386,13 @@ def _vs_league_bridge_html(
     scale,
     rank_label: str | None,
 ) -> str:
-    """Server-rendered bridge for /player. Byte-identical to vsLeagueBridge() in
-    shot_making_helpers.js — tests/test_bridge_parity.py asserts it. Change both
-    together."""
+    """Server-rendered vs-league chart for /player. Byte-identical to
+    vsLeagueBridge() in shot_making_helpers.js — tests/test_bridge_parity.py
+    asserts it. Change both together.
+
+    One axis, two marks: the ring is what a league-average WNBA player would
+    score from her spots and shot types (xPPS), the filled dot is what she
+    actually scored (PPS), and the arrow between them is her shot-making."""
     ax = anchors.get("avg_xpps") if anchors else None
     ap = anchors.get("avg_pps") if anchors else None
     if not isinstance(ax, (int, float)) or not isinstance(ap, (int, float)):
@@ -1372,38 +1406,44 @@ def _vs_league_bridge_html(
     def pct(v):
         return 50 + (v / scale) * 50
 
-    mid, sel_end, tot_end = pct(0), pct(selection), pct(total)
-
-    def sign(v):
-        return "is-positive" if v >= 0 else "is-negative"
+    mid, x_end, a_end = pct(0), pct(selection), pct(total)
+    # Each label points away from the arrow, so the two can never collide.
+    up = a_end >= x_end
+    coincident = abs(a_end - x_end) < _BRIDGE_COINCIDENT_PCT
 
     return (
         '<div class="bridge">'
         '<h3 class="bridge-head">How she scores</h3>'
-        + _bridge_row(
-            "Shot diet",
+        '<div class="bridge-axis">'
+        '<i class="bridge-base"></i>'
+        f'<i class="bridge-tick" style="left:{_js_to_fixed(mid, 2)}%"></i>'
+        f'<span class="bridge-ticklab" style="left:{_js_to_fixed(mid, 2)}%">'
+        f"The average WNBA shot<em>{_js_to_fixed(ap, 3)}</em></span>"
+        + ("" if coincident else _bridge_arrow(x_end, a_end))
+        + _bridge_mark("is-expected", x_end)
+        + _bridge_mark("is-actual", a_end)
+        + _bridge_label(
+            x_end,
+            "is-left" if up else "is-right",
+            "xPPS",
             _js_to_fixed(expected_pps, 3),
-            _bridge_seg(mid, sel_end, "is-diet"),
-            selection,
-            _bridge_descriptor("diet", selection),
+            "league average,<br>from her spots",
         )
-        + _bridge_row(
-            "Shot-making",
-            "",
-            f'<i class="bridge-drop" style="left:{_js_to_fixed(sel_end, 2)}%"></i>'
-            + _bridge_seg(sel_end, tot_end, "is-making " + sign(making)),
-            making,
-            _bridge_descriptor("making", making),
-        )
-        + _bridge_row(
-            "Points per shot",
+        + _bridge_label(
+            a_end,
+            "is-right" if up else "is-left",
+            "PPS",
             _js_to_fixed(actual_pps, 3),
-            _bridge_seg(mid, tot_end, "is-total " + sign(total)),
-            total,
-            rank_label or "",
+            "what she<br>actually scored",
         )
-        + '<p class="bridge-key">Shot diet describes what she shoots. It tracks '
-        "role — mostly rim rate — more than judgment, so it isn't graded.</p>"
+        + "</div>"
+        + f'<p class="bridge-said">She {_bridge_descriptor("diet", selection)}, '
+        + f"and {_bridge_descriptor('making', making)}.</p>"
+        + '<p class="bridge-foot">'
+        + f"<span>Shot-making <b>{_bridge_gap_text(making)}</b></span>"
+        + f"<span>Vs league <b>{_bridge_gap_text(total)}</b></span>"
+        + (f"<span>{rank_label}</span>" if rank_label else "")
+        + "</p>"
         "</div>"
     )
 

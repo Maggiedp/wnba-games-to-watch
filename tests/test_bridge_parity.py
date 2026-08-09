@@ -22,6 +22,11 @@ CASES = [
     (1.037, 1.047, 1.027, 1.037, 0.285, None),  # inside the 0.03 near band
     (1.0625, 1.0, 1.0, 1.0, 0.5, None),  # gap == 0.0625, exact .toFixed(3) tie
     (1.0005, 1.0, 1.0, 1.0, 0.25, None),  # gap == 0.0005, exact .toFixed(3) tie
+    # Label-side edge overrides, which position rather than arrow direction
+    # decides — both renderers must agree on WHICH side flips. The row that
+    # sets bridge_scale lands on an edge, so these are live cases, not synthetic:
+    (1.037, 1.322, 1.027, 1.037, 0.285, None),  # actual at 100% -> PPS flips left
+    (0.742, 1.037, 1.027, 1.037, 0.285, None),  # expected at 0% -> xPPS flips right
 ]
 
 
