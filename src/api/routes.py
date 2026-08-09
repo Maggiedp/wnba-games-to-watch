@@ -306,6 +306,10 @@ _SHARED_HEAD = """\
                 --navy-3: #2b3a52;
                 --orange: #ff6b00;
                 --orange-deep: #a03c00;
+                /* The "worse than average" pole of the shot chart's gradient.
+                   The vs-league arrow shares it so the two charts on a player's
+                   page read on one ramp; keep them in sync. */
+                --shot-cold: #5b6472;
                 --live: #d6442e;
                 --bg: #f7f5f0;
                 --surface: #ffffff;
@@ -1356,17 +1360,13 @@ def _bridge_label(pct: float, side: str, kicker: str, value: str, gloss: str) ->
 
     Each label is a BOX BOUNDED BY THE TRACK, not a run of text hung off its
     mark: is-left spans [0, pct] and right-aligns against the mark, is-right
-    spans [pct, 100] and left-aligns. Two invariants become structural rather
-    than heuristic — a label can never leave the track, and with the
-    away-from-arrow sides the boxes are [0, xEnd] and [aEnd, 100] (or the
-    mirror), disjoint for ANY mark positions.
+    spans [pct, 100] and left-aligns, and the anchor is clamped by
+    min(..., 100% - var(--lab-min)) rather than by a CSS min-width.
 
-    The anchor is clamped by min(..., 100% - var(--lab-min)), NOT by a bare CSS
-    min-width: the bridge_scale-setting row puts one mark at exactly 0%/100%,
-    where a min-width over-constrains the box and CSS drops `right` in LTR,
-    rendering the label a full min-width past the end of the track. See the JS
-    twin for the measurements and for why the earlier hang-off-the-mark +
-    edge-clamp approach was replaced."""
+    bridgeLabel() in shot_making_helpers.js carries the rationale for both
+    choices and the measurements behind them — don't restate it here, it would
+    be a fourth copy (two renderers, two template CSS blocks) with no test
+    holding them together."""
     box = (
         f"left:0;right:min({_js_to_fixed(100 - pct, 2)}%,100% - var(--lab-min))"
         if side == "is-left"

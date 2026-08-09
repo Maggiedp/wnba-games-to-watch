@@ -132,3 +132,34 @@ def test_bridge_spans_the_full_expand_panel_width(client):
     ever disagree, believe the browser."""
     html = client.get("/shot-making").text
     assert ".shot-panel .bridge { grid-column: 1 / -1;" in html
+
+
+def _bridge_css_block(template_name: str) -> str:
+    """The vs-league chart's CSS between its BRIDGE-CSS sentinels."""
+    from src.api.routes import _load_template
+
+    src = _load_template(template_name)
+    start = src.index("/* BRIDGE-CSS-START")
+    return src[start : src.index("/* BRIDGE-CSS-END */", start)]
+
+
+def test_bridge_css_is_identical_in_both_templates():
+    """The block is duplicated in shot_making.html and player.html (a 2-caller
+    dupe under the repo's extract-on-the-3rd-caller rule), but it is not
+    decorative: it carries `--lab-min`, which an inline min() clamp emitted by
+    BOTH renderers depends on, and `--bridge-ground`, which the ring's opaque
+    fill depends on. A drift between the copies is a browser-only bug on one
+    surface with nothing else to catch it — and this block was rewritten three
+    times in three review rounds, which is exactly when copies drift.
+
+    The sentinel opens BELOW the header comment, which names the other template
+    and is the one line that legitimately differs; everything inside must match
+    byte for byte."""
+    a = _bridge_css_block("shot_making.html")
+    b = _bridge_css_block("player.html")
+    assert a == b, "the vs-league CSS blocks have drifted between the two templates"
+    # Guard the sentinels themselves against a well-meaning cleanup, and pin the
+    # two cross-language contracts the block owns.
+    assert "--lab-min: 9em" in a
+    assert "--lab-min: 4.2em" in a  # the <=560px override
+    assert "var(--bridge-ground, var(--bg))" in a

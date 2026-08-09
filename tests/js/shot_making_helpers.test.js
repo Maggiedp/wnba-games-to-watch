@@ -137,10 +137,18 @@ test('vsLeagueBridge bounds every label box inside the track', () => {
     side: 'is-left', style: 'left:0;right:min(100.00%,100% - var(--lab-min))',
   });
 
-  // two marks crammed at the same end — the case that used to overlap
+  // Two marks crammed at the same end (5.61% / 17.02%) — the case that used to
+  // overlap. Assert the BOXES, not just the sides: the sides here are the same
+  // assignment the interior case above already pins, so a side-only check would
+  // survive a regression in the box formula, which is the whole point of this
+  // test. The two spans are disjoint by construction: [0, 5.61] and [17.02, 100].
   const crammed = boxes(vsLeagueBridge({ expected_pps: 0.774, actual_pps: 0.849 }, ANCHORS, 0.285, null));
-  assert.strictEqual(crammed[0].side, 'is-left');
-  assert.strictEqual(crammed[1].side, 'is-right');
+  assert.deepEqual(crammed[0], {
+    side: 'is-left', style: 'left:0;right:min(94.39%,100% - var(--lab-min))',
+  });
+  assert.deepEqual(crammed[1], {
+    side: 'is-right', style: 'left:min(17.02%,100% - var(--lab-min));right:0',
+  });
 });
 
 test('vsLeagueBridge omits the arrow when the two marks coincide', () => {

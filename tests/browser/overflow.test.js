@@ -106,9 +106,9 @@ const PAGES = [
     apply: async (page) => {
       await page.waitForSelector('.bridge-mark.is-actual');
     },
-    // The seed puts a mark at ~1% of track, so this page renders the vs-league
-    // chart's tightest label geometry at every walked width — the case that
-    // overlapped at 320px.
+    // The seed puts this row's PPS mark at ~98% of track (see smoke_server.py),
+    // so this page renders the vs-league chart's tightest label geometry at
+    // every walked width — the case whose label escaped the track by 100.8px.
     extraAssert: assertBridgeLabels,
   },
   { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
@@ -242,13 +242,6 @@ async function assertDateInputsFit(page, label) {
   }
 }
 
-// Regression (PR #121): .shot-panel is a `1.4fr 1fr` grid and the bridge is a
-// THIRD child, so without `grid-column: 1 / -1` auto-placement puts it in
-// column 1 — squeezing the chart into the narrow column and dropping the zones
-// to row 2. The page-level scrollWidth assert CANNOT see this at any width (the
-// panel re-flows, it never overflows), so the desktop layout gets a scoped
-// geometry assert: the bridge spans the panel, and chart + zones share a row.
-// Verified by deliberate break — deleting the grid-column rule fails this.
 // The vs-league chart positions its two value labels absolutely, so nothing
 // about them shows up in `scrollWidth <= innerWidth` — they can print on top of
 // each other, or on top of the sentence below, while the page assertion stays
@@ -299,6 +292,13 @@ async function assertBridgeLabels(page, label) {
   }
 }
 
+// Regression (PR #121): .shot-panel is a `1.4fr 1fr` grid and the bridge is a
+// THIRD child, so without `grid-column: 1 / -1` auto-placement puts it in
+// column 1 — squeezing the chart into the narrow column and dropping the zones
+// to row 2. The page-level scrollWidth assert CANNOT see this at any width (the
+// panel re-flows, it never overflows), so the desktop layout gets a scoped
+// geometry assert: the bridge spans the panel, and chart + zones share a row.
+// Verified by deliberate break — deleting the grid-column rule fails this.
 async function assertShotPanelLayout(page, label, width) {
   await assertBridgeLabels(page, label);
   // .shot-panel collapses to a single column at the card breakpoint, where the

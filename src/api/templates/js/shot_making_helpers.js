@@ -56,10 +56,19 @@ const BRIDGE_NEAR = 0.03;
 // This is a RENDERING threshold, not a claim that making is zero: the footer
 // still prints the exact gap, and the sentence still reads "converts about as
 // expected" via BRIDGE_NEAR. It is safe to omit the arrow here only because
-// nothing is being hidden — the ring is 17px and the dot 11px, so the two
-// marks already overlap at any separation under ~14px, and at 1.2% of a
-// typical track (~10px) an arrow drawn between them would be entirely
-// underneath them. Measured at making=+0.005: mark centres 8.5px apart.
+// nothing is hidden by doing so — the ring is 17px and the dot 11px, so the
+// two marks paint over each other (and over any arrow between them) out to
+// roughly 14px of centre separation. Measured at making=+0.005: 8.5px apart.
+//
+// Being a PERCENTAGE, its pixel meaning varies by surface: ~3px on a 320px
+// phone, ~8px on /player's desktop track, ~10px in the wider expand panel. All
+// of those sit under the ~14px the marks cover, which is why one constant works
+// everywhere — but note it is the `overflow: hidden` clip on .bridge-arrow, not
+// this threshold, that actually bounds a too-short arrow. This only skips
+// drawing one that would be invisible anyway. Deleting it would very likely
+// change no pixel; left in place because it also documents the degenerate case,
+// and because verifying "no pixel" across four surface/width combinations costs
+// more than the constant does.
 const BRIDGE_COINCIDENT_PCT = 1.2;
 
 // Signed 3-decimal gap, Unicode minus to match the rest of the site's numbers.

@@ -210,7 +210,8 @@
                Duplicated verbatim in player.html (2-caller dupe; lift to
                _SHARED_HEAD on a 3rd). Only `--bridge-ground` differs — see the
                .shot-panel .bridge rule above. */
-            .bridge { margin: 0 0 18px; position: relative; --bridge-ground: var(--bg); }
+            /* BRIDGE-CSS-START (kept identical to the twin template) */
+            .bridge { margin: 0 0 18px; position: relative; }
             .bridge-head { font-family: var(--display); font-size: 1rem; font-weight: 700;
                            margin: 0 0 4px; }
             .bridge-axis { position: relative; height: 30px; margin: 30px 8px 0; }
@@ -252,9 +253,9 @@
                                          border-top: 7.5px solid transparent;
                                          border-bottom: 7.5px solid transparent; }
             .bridge-arrow.is-down::before { top: 4px; height: 7px; left: 11px; right: 0;
-                                            background: #5b6472; border-radius: 1px; }
+                                            background: var(--shot-cold); border-radius: 1px; }
             .bridge-arrow.is-down::after { left: 0; top: 0;
-                                           border-right: 12px solid #5b6472;
+                                           border-right: 12px solid var(--shot-cold);
                                            border-top: 7.5px solid transparent;
                                            border-bottom: 7.5px solid transparent; }
             /* The ring is deliberately WIDER than the filled dot. When actual
@@ -265,7 +266,7 @@
             .bridge-mark { position: absolute; top: 14px; transform: translate(-50%, -50%);
                            border-radius: 50%; }
             .bridge-mark.is-expected { width: 17px; height: 17px;
-                                       background: var(--bridge-ground);
+                                       background: var(--bridge-ground, var(--bg));
                                        border: 1.75px solid var(--text-subtle); }
             .bridge-mark.is-actual { width: 11px; height: 11px; background: var(--navy); }
             /* A label is a BOX BOUNDED BY THE TRACK (see bridgeLabel in
@@ -320,6 +321,8 @@
                  to clear the kicker + value. */
               .bridge-said { margin-top: 46px; }
             }
+            /* BRIDGE-CSS-END */
+
         </style>
 </head>
 <body>
