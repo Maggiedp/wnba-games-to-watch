@@ -301,25 +301,44 @@
             .bridge-foot span { display: inline-flex; align-items: baseline; gap: 6px; }
             .bridge-foot b { font-family: var(--display); font-size: 0.95rem;
                              font-feature-settings: 'tnum' on; color: var(--navy); }
+            /* Below 560px the two marks can sit ~60px apart — not enough room for
+               two labels side by side, which is why an earlier revision hid the
+               gloss here. Instead the labels STACK into two rows under the axis,
+               so the gloss (the whole point of this treatment) survives at every
+               width. `position: static` is doing the work: the inline
+               left/right clamps stop applying, so the two can neither collide
+               nor leave the track, and — because they now contribute flow
+               height instead of being absolutely positioned — `.bridge-said`
+               needs no hand-tuned clearance in this mode and `--lab-min` has
+               nothing to clamp. The row spacing goes on `.bridge-lab` with the
+               sibling combinator overriding it for the second, which avoids
+               giving the renderers an identity class purely for CSS's benefit.
+               Guarded by assertBridgeLabels (tests/browser/overflow.test.js),
+               which measures the rendered rects at every walked width. */
             @media (max-width: 560px) {
-              /* No gloss below 560px (see below), so the box only has to hold
-                 "xPPS" and a 5-character value — and it MUST shrink, or a wide
-                 min-width would run the two boxes into each other on a narrow
-                 track. */
-              .bridge-lab { font-size: 0.66rem; --lab-min: 4.2em; }
-              .bridge-lab strong { font-size: 0.8rem; }
-              /* Below 560px the two marks can sit ~60px apart, which is not
-                 enough for two glossed labels: they either overlap or the gloss
-                 wraps into the sentence below. The gloss is what this treatment
-                 is built on, so it is dropped only here, where there is provably
-                 no room — the abbreviations stay defined by the reading key
-                 under the leaderboard and by /player's stat tile. Guarded by
-                 assertBridgeLabels in tests/browser/overflow.test.js, which
-                 measures the rendered rects at every walked width. */
-              .bridge-gloss { display: none; }
-              /* .bridge-said clears a two-line gloss; without one it only has
-                 to clear the kicker + value. */
-              .bridge-said { margin-top: 46px; }
+              /* flow-root, not just height:auto — without a BFC the first
+                 label's margin-top COLLAPSES out through the container (which
+                 has no padding or border) and the label lands on top of the
+                 axis line and marks. */
+              .bridge-axis { height: auto; min-height: 30px; display: flow-root; }
+              /* `display: block` is equally load-bearing: .bridge-lab is a
+                 <span>, so static positioning alone leaves it INLINE and the two
+                 labels flow onto one line (margin-top silently doing nothing). */
+              .bridge-lab { position: static; display: block;
+                            min-width: 0; margin-top: 30px; font-size: 0.68rem; }
+              /* Both rows read left-to-right as a legend. Needs the same
+                 specificity as `.bridge-lab.is-left { text-align: right }`
+                 above (and to come after it) or that rule keeps right-aligning
+                 the first row while the second stays left. */
+              .bridge-lab.is-left, .bridge-lab.is-right { text-align: left; }
+              .bridge-lab + .bridge-lab { margin-top: 9px; }
+              .bridge-lab strong { display: inline; font-size: 0.82rem; margin-left: 5px; }
+              /* The gloss keeps its own <br>. Hiding the break instead welds the
+                 words either side of it together ("what sheactually scored"),
+                 and CSS cannot put the space back. On a phone the vertical room
+                 is the cheap axis anyway. */
+              .bridge-gloss { display: block; margin-top: 1px; }
+              .bridge-said { margin-top: 16px; }
             }
             /* BRIDGE-CSS-END */
 
