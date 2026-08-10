@@ -1,5 +1,6 @@
 // Real-browser smoke walk: page-level horizontal overflow + inline-script
-// syntax errors, across every user-facing page at phone and desktop widths.
+// syntax errors, across every user-facing page at each width where the layout
+// changes configuration (see WIDTHS).
 //
 // CI: launches the runner's preinstalled Chrome (--headless --no-sandbox).
 // Local (macOS): puppeteer.launch HANGS under the sandbox — never launch here.
@@ -36,6 +37,15 @@ const CARD_BREAKPOINT = 768;
 
 // Widths are the NARROWEST width of each layout configuration — the point where
 // that configuration is tightest and fails first — not evenly spaced samples:
+//   561  first width past the 560px breakpoint shared by player.html,
+//        shot_making.html and style.html (below it the vs-league chart stacks
+//        its labels into two rows and the .style-grid drops to one column) —
+//        and past /playoff-odds' 480px query. It sits UNDER CARD_BREAKPOINT, so
+//        it pairs the mobile card layout with the desktop label geometry: the
+//        narrowest track the unstacked vs-league labels ever render on. Proven
+//        to earn its subtests by deliberate break — there is a band of
+//        --lab-min values (~21-31em) that collides the two labels at 561 and
+//        at no other walked width.
 //   769  first width past the card breakpoint: tables render at their
 //        narrowest, .style-grid is 2-col and .shot-panel already 2-col.
 //   961  first width past `@media (max-width: 960px)`, so all 7 homepage table
@@ -44,11 +54,14 @@ const CARD_BREAKPOINT = 768;
 //        .style-grid is at its narrowest 3-col.
 // Mid-band widths (800, 820, 960) are deliberately omitted: each renders the
 // same configuration as one of the above with strictly more room, so they cost
-// ~13 subtests each and can only fail if the tighter width already has.
-// (The 431-768 tablet bands stay uncovered — see the root CLAUDE.md note.)
+// ~13 subtests each and can only fail if the tighter width already has. That
+// rule is what admits 561 below and excludes, say, 600: 561 turns two media
+// queries off, 600 renders 561's configuration with more room.
+// (431-560 and 641-768 stay uncovered — the latter is where transparency.html
+// and replay.html leave their 640px query. See the root CLAUDE.md note.)
 const PHONE_WIDTHS = [320, 360, 390, 430];
 const DESKTOP_WIDTHS = [769, 961];
-const WIDTHS = [...PHONE_WIDTHS, ...DESKTOP_WIDTHS];
+const WIDTHS = [...PHONE_WIDTHS, 561, ...DESKTOP_WIDTHS];
 
 // The homepage is the ONLY page with a container wider than `.wrap`'s 920px cap
 // (its .content is 1100px; the detail and player pages cap at 760px), so 1200 is
@@ -111,8 +124,16 @@ const PAGES = [
     // every walked width — the case whose label escaped the track by 100.8px.
     extraAssert: assertBridgeLabels,
   },
-  { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
-  { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: 'main' },
+  // NOT 'main' (server-rendered, resolves instantly): under `load` that would
+  // measure the page before the WP chart hydrates. The chart is painted from
+  // /api/live-wp, which smoke_server.py stubs to raise ESPNNotFoundError -> 404,
+  // so the client's terminal path writes its "Chart unavailable." message INTO
+  // #wp-chart. The server-rendered placeholder is a SIBLING of #wp-chart, so
+  // this selector matches only the client-written one. If the stub ever starts
+  // returning plays, the chart renders an <svg> instead and this times out —
+  // loudly wrong, not silently early.
+  { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: '#wp-chart .chart-placeholder' },
+  { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: '#wp-chart .chart-placeholder' },
   { path: '/playoff-odds', readySelector: '#playoff-tbody tr' },
   { path: '/playoff-odds', readySelector: '#playoff-tbody tr', apply: openPlayoffSeedsView },
 ];
@@ -186,7 +207,22 @@ async function loadAt(page, urlPath, width, readySelector) {
   await page.setViewport({
     width, height: 800, deviceScaleFactor: 1, isMobile: width <= CARD_BREAKPOINT,
   });
-  await page.goto(`${BASE}${urlPath}`, { waitUntil: 'networkidle0', timeout: 20_000 });
+  // 'load', not 'networkidle0': measured on /replay, every request finished at
+  // 67ms but networkidle0's idle window held `goto` open until 1043ms — ~975ms
+  // of pure timer per subtest, and the walk is ~90% of CI wall clock. Dropping
+  // it took the local walk 117s -> 67s with no assertion weakened.
+  //
+  // The two gates below are the actual correctness guarantees (7-45ms), and
+  // that is not incidental: `load` does NOT imply fonts are ready. Measured,
+  // document.fonts.status is still 'loading' at this line on 3-4 of the 10
+  // walked pages (which ones varies run to run) — so the fonts.ready await is
+  // what closes the font-load race behind the phantom featured-card sighting,
+  // and it is verified to leave all 10 pages 'loaded' before anything is
+  // measured. Order matters: readySelector first, so client-rendered content
+  // has requested its faces before we await. Don't drop either gate, and don't
+  // weaken this to 'domcontentloaded' on the theory that fonts.ready covers
+  // everything — subresource layout shifts have no such gate.
+  await page.goto(`${BASE}${urlPath}`, { waitUntil: 'load', timeout: 20_000 });
   if (readySelector) await page.waitForSelector(readySelector, { timeout: 10_000 });
   await page.evaluate(() => document.fonts.ready);
 }
