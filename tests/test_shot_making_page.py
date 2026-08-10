@@ -161,5 +161,5 @@ def test_bridge_css_is_identical_in_both_templates():
     # Guard the sentinels themselves against a well-meaning cleanup, and pin the
     # two cross-language contracts the block owns.
     assert "--lab-min: 9em" in a
-    assert "--lab-min: 4.2em" in a  # the <=560px override
+    assert "position: static" in a  # the <=560px stacked-label mode
     assert "var(--bridge-ground, var(--bg))" in a
