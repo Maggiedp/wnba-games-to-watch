@@ -160,12 +160,22 @@
                878px line and gave the whole leaderboard horizontal scroll
                (at 390px the table went 548 -> 894, most of the chart
                off-screen), and `text-align: right` pushed the bridge sentence
-               flush right. Guarded by assertPanelDoesNotWidenTheTable. */
+               flush right. Guarded by assertPanelDoesNotWidenTheTable.
+
+               tabular-nums is reset for the same reason, not because the panel
+               wants proportional figures: /player renders this identical panel
+               with no table ancestor and therefore no tabular-nums, so leaving
+               it inherited here would make the same component render two ways
+               off an accident of where it sits. Whether the zone table SHOULD
+               have tabular figures is a real typography question — it just has
+               to be answered on `.shot-zones` in both templates, not by what
+               a leaderboard column rule happens to leak. */
             .shot-panel-row > td {
                 padding: 0;
                 background: var(--surface);
                 white-space: normal;
                 text-align: left;
+                font-variant-numeric: normal;
             }
             .shot-panel {
                 display: grid;

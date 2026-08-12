@@ -386,9 +386,13 @@ async function assertPanelDoesNotWidenTheTable(page, label) {
   });
   const open = await measure();
   assert.ok(open, `${label}: no .shots-table-scroll rendered`);
-  // Accordion: clicking the open row's own header closes it.
+  // Accordion: clicking the open row's own header closes it. Bounded well
+  // under the 30s default: if the toggle ever stops closing, the default would
+  // stall this CI-blocking walk for 30s x 7 widths — 3x the whole walk's budget.
   await page.click('#shots-tbody tr.player-row');
-  await page.waitForFunction(() => !document.querySelector('.shot-panel'));
+  await page.waitForFunction(
+    () => !document.querySelector('.shot-panel'), { timeout: 5_000 },
+  );
   const closed = await measure();
   assert.ok(
     open.scroll <= closed.scroll,
