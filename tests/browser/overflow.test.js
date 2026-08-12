@@ -366,6 +366,38 @@ async function assertBridgeLabels(page, label) {
   }
 }
 
+// Regression (2026-08-11): `.shots-table td { white-space: nowrap }` inherits
+// into the expand panel — `.shot-panel-row > td` resets only padding and
+// background — so the chart caption rendered as one 878px line and opening a
+// panel gave the whole leaderboard horizontal scroll: 40px at desktop, and at
+// 390px the table ballooned 548 -> 894, leaving most of the chart off-screen.
+// The page-level assert cannot see it (`.shots-table-scroll { overflow-x: auto }`
+// contains it) and neither can the geometry asserts above and below, which are
+// measured relative to the panel and stay true while it is oversized.
+//
+// Relative (open vs closed), not `scroll <= client`: the COLLAPSED leaderboard
+// already overflows its wrapper by ~30px at 769px, which is a separate
+// pre-existing issue — this asserts only that expanding a panel doesn't make
+// the table wider than the leaderboard alone needs.
+async function assertPanelDoesNotWidenTheTable(page, label) {
+  const measure = () => page.evaluate(() => {
+    const d = document.querySelector('.shots-table-scroll');
+    return d && { client: d.clientWidth, scroll: d.scrollWidth };
+  });
+  const open = await measure();
+  assert.ok(open, `${label}: no .shots-table-scroll rendered`);
+  // Accordion: clicking the open row's own header closes it.
+  await page.click('#shots-tbody tr.player-row');
+  await page.waitForFunction(() => !document.querySelector('.shot-panel'));
+  const closed = await measure();
+  assert.ok(
+    open.scroll <= closed.scroll,
+    `${label}: opening a shot panel widened the leaderboard from `
+    + `${closed.scroll}px to ${open.scroll}px (visible ${open.client}px) — is the `
+    + 'panel inheriting `white-space: nowrap` from .shots-table td?',
+  );
+}
+
 // Regression (PR #121): .shot-panel is a `1.4fr 1fr` grid and the bridge is a
 // THIRD child, so without `grid-column: 1 / -1` auto-placement puts it in
 // column 1 — squeezing the chart into the narrow column and dropping the zones
@@ -377,7 +409,13 @@ async function assertShotPanelLayout(page, label, width) {
   await assertBridgeLabels(page, label);
   // .shot-panel collapses to a single column at the card breakpoint, where the
   // zones legitimately sit below the chart — this invariant is desktop-only.
-  if (width <= CARD_BREAKPOINT) return;
+  if (width > CARD_BREAKPOINT) await assertPanelColumns(page, label);
+  // LAST: this one collapses the panel to take its comparison measurement, so
+  // nothing needing the panel open may run after it.
+  await assertPanelDoesNotWidenTheTable(page, label);
+}
+
+async function assertPanelColumns(page, label) {
   const m = await page.evaluate(() => {
     const box = (sel) => {
       const el = document.querySelector(sel);
