@@ -154,7 +154,29 @@
             .shots-table tr.player-row:hover td { background: rgba(232,100,30,0.05); }
             .shots-table tr.player-row:focus-visible { outline: 2px solid var(--navy); outline-offset: -2px; }
             .shots-table tr.player-row .chev { color: var(--text-subtle); font-size: 11px; margin-left: 6px; }
-            .shot-panel-row > td { padding: 0; background: var(--surface); }
+            /* The panel is prose + a chart living inside a table cell, so it
+               inherits `.shots-table td`'s numeric-column styling. Left
+               un-reset, `white-space: nowrap` held the chart caption on one
+               878px line and gave the whole leaderboard horizontal scroll
+               (at 390px the table went 548 -> 894, most of the chart
+               off-screen), and `text-align: right` pushed the bridge sentence
+               flush right. Guarded by assertPanelDoesNotWidenTheTable.
+
+               tabular-nums is reset for the same reason, not because the panel
+               wants proportional figures: /player renders this identical panel
+               with no table ancestor and therefore no tabular-nums, so leaving
+               it inherited here would make the same component render two ways
+               off an accident of where it sits. Whether the zone table SHOULD
+               have tabular figures is a real typography question — it just has
+               to be answered on `.shot-zones` in both templates, not by what
+               a leaderboard column rule happens to leak. */
+            .shot-panel-row > td {
+                padding: 0;
+                background: var(--surface);
+                white-space: normal;
+                text-align: left;
+                font-variant-numeric: normal;
+            }
             .shot-panel {
                 display: grid;
                 grid-template-columns: 1.4fr 1fr;
@@ -474,7 +496,7 @@
       <div class="chart-wrap">
         <a class="full-page-link" href="/player/${encodeURIComponent(data.athlete_id)}">Full page ↗</a>
         ${buildShotChartSvg(data.shots)}
-        <div class="shot-legend"><span>Gave value back</span><span class="grad"></span><span>Added value</span></div>
+        <div class="shot-legend"><span>Worse than average</span><span class="grad"></span><span>Better than average</span></div>
         <p class="cap">Each dot is one shot, colored by points added vs. a league-average shooter from that spot &amp; type. A heave from beyond the chart sits along the top edge as a triangle.</p>
       </div>
       ${zonesHtml(data.zones)}
