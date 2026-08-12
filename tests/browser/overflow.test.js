@@ -1,5 +1,6 @@
 // Real-browser smoke walk: page-level horizontal overflow + inline-script
-// syntax errors, across every user-facing page at phone and desktop widths.
+// syntax errors, across every user-facing page at each width where the layout
+// changes configuration (see WIDTHS).
 //
 // CI: launches the runner's preinstalled Chrome (--headless --no-sandbox).
 // Local (macOS): puppeteer.launch HANGS under the sandbox — never launch here.
@@ -37,18 +38,41 @@ const CARD_BREAKPOINT = 768;
 // Widths are the NARROWEST width of each layout configuration — the point where
 // that configuration is tightest and fails first — not evenly spaced samples:
 //   769  first width past the card breakpoint: tables render at their
-//        narrowest, .style-grid is 2-col and .shot-panel already 2-col.
+//        narrowest and .shot-panel is already 2-col.
 //   961  first width past `@media (max-width: 960px)`, so all 7 homepage table
 //        columns return: 914px available against the completed table's 889px
-//        min-content is the tightest margin anywhere in the layout, and
-//        .style-grid is at its narrowest 3-col.
+//        min-content is the tightest margin anywhere in the layout.
 // Mid-band widths (800, 820, 960) are deliberately omitted: each renders the
 // same configuration as one of the above with strictly more room, so they cost
-// ~13 subtests each and can only fail if the tighter width already has.
-// (The 431-768 tablet bands stay uncovered — see the root CLAUDE.md note.)
+// a subtest per page and can only fail if the tighter width already has.
 const PHONE_WIDTHS = [320, 360, 390, 430];
 const DESKTOP_WIDTHS = [769, 961];
 const WIDTHS = [...PHONE_WIDTHS, ...DESKTOP_WIDTHS];
+
+// Sub-768 breakpoints are page-specific, so the pages that have one opt in
+// rather than every page paying for it (same `widths` override HOMEPAGE_STATES
+// already uses). 561 is the first width past the 560px query in player.html,
+// shot_making.html and style.html, and past playoff_odds.html's 480px one:
+// below it the vs-league chart stacks its labels into two rows, shot_making
+// hides two table columns, .style-grid drops to one column and the playoff
+// table condenses to team abbreviations. It sits UNDER CARD_BREAKPOINT, so it
+// pairs the mobile card layout with the desktop label geometry — the narrowest
+// track the unstacked vs-league labels ever render on, and the narrowest
+// .style-grid 2-col. Walking it on the other six page-defs would break the
+// mid-band rule above: none of them has a query between 430 and 769, so 561
+// would render 430's configuration with more room.
+const WIDTHS_WITH_561 = [...PHONE_WIDTHS, 561, ...DESKTOP_WIDTHS];
+
+// Every `@media (max-width: N)` in the templates should have N+1 walked
+// somewhere, or be listed here with the reason it isn't. Prose can't be checked
+// against a template edit — assertBreakpointsAreWalkedOrWaived can, so a new
+// breakpoint fails CI instead of silently becoming an unwalked band. Keyed by
+// the walkable width (N+1), same shape as the nav-coverage test below.
+const UNWALKED_BREAKPOINTS = new Map([
+  [481, '/playoff-odds full team names return; same config as 561, 80px tighter'],
+  [641, '/replay .shape-grid + /transparency .cal-layout 1col->2col; 769 is 2col'],
+  [901, '.style-grid narrowest 3-col; 561 walks its narrowest 2-col, 961 a 3-col'],
+]);
 
 // The homepage is the ONLY page with a container wider than `.wrap`'s 920px cap
 // (its .content is 1100px; the detail and player pages cap at 760px), so 1200 is
@@ -71,16 +95,18 @@ async function openPlayoffSeedsView(page) {
 }
 
 // readySelector = client-rendered content that must exist before measuring
-// (networkidle alone can race the post-fetch render).
+// (`load` fires long before a post-fetch render; see loadAt).
+// widths = optional per-page override, defaulting to WIDTHS.
 const PAGES = [
   { path: '/replay', readySelector: '#replay-grid .shape-card' },
   { path: '/rankings', readySelector: '#elo-chart svg' },
   { path: '/transparency', readySelector: '#calibration-chart svg' },
-  { path: '/style', readySelector: '#style-grid svg' },
-  { path: '/shot-making', readySelector: '#shots-tbody tr' },
+  { path: '/style', readySelector: '#style-grid svg', widths: WIDTHS_WITH_561 },
+  { path: '/shot-making', readySelector: '#shots-tbody tr', widths: WIDTHS_WITH_561 },
   {
     path: '/shot-making',
     readySelector: '#shots-tbody tr',
+    widths: WIDTHS_WITH_561,
     apply: async (page) => {
       await page.waitForSelector('#shots-tbody tr.player-row');
       await page.click('#shots-tbody tr.player-row');
@@ -103,6 +129,7 @@ const PAGES = [
   {
     path: '/player/smoke-shooter-0',
     readySelector: '#shot-chart svg',
+    widths: WIDTHS_WITH_561,
     apply: async (page) => {
       await page.waitForSelector('.bridge-mark.is-actual');
     },
@@ -111,10 +138,23 @@ const PAGES = [
     // every walked width — the case whose label escaped the track by 100.8px.
     extraAssert: assertBridgeLabels,
   },
-  { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: 'main' },
-  { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: 'main' },
-  { path: '/playoff-odds', readySelector: '#playoff-tbody tr' },
-  { path: '/playoff-odds', readySelector: '#playoff-tbody tr', apply: openPlayoffSeedsView },
+  // NOT 'main' (server-rendered, resolves instantly): under `load` that would
+  // measure the page before the WP chart hydrates. The chart is painted from
+  // /api/live-wp, which smoke_server.py stubs to raise ESPNNotFoundError -> 404,
+  // so the client's terminal path writes its "Chart unavailable." message INTO
+  // #wp-chart. The server-rendered placeholder is a SIBLING of #wp-chart, so
+  // this selector matches only the client-written one. If the stub ever starts
+  // returning plays, the chart renders an <svg> instead and this times out —
+  // loudly wrong, not silently early.
+  { path: `/game/${UPCOMING_DETAIL_ID}`, readySelector: '#wp-chart .chart-placeholder' },
+  { path: `/game/${COMPLETED_DETAIL_ID}`, readySelector: '#wp-chart .chart-placeholder' },
+  { path: '/playoff-odds', readySelector: '#playoff-tbody tr', widths: WIDTHS_WITH_561 },
+  {
+    path: '/playoff-odds',
+    readySelector: '#playoff-tbody tr',
+    widths: WIDTHS_WITH_561,
+    apply: openPlayoffSeedsView,
+  },
 ];
 
 let server;
@@ -135,6 +175,25 @@ async function waitForServer(url, timeoutMs) {
 }
 
 before(async () => {
+  // Fail fast on a server already holding the port. `waitForServer` polls until
+  // SOMETHING answers, so a leaked server from an earlier run gets silently
+  // adopted — and templates are frozen at ITS import, so the whole walk then
+  // measures stale HTML/CSS and passes. That is a false green, not a flake: it
+  // hid a deliberate CSS break during this file's own verification.
+  let stale;
+  try {
+    stale = await fetch(`${BASE}/api/games/upcoming`);
+  } catch {
+    stale = null;  // nothing listening — the good case
+  }
+  if (stale) {
+    throw new Error(
+      `port ${PORT} is already serving; a previous smoke server leaked. `
+      + 'It would be adopted and the walk would measure ITS templates, not '
+      + `yours. Kill it first: pkill -f "tests.browser.smoke_server"`,
+    );
+  }
+
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wnba-smoke-'));
   const python = process.env.SMOKE_PYTHON
     || (fs.existsSync('venv/bin/python') ? 'venv/bin/python' : 'python');
@@ -186,7 +245,22 @@ async function loadAt(page, urlPath, width, readySelector) {
   await page.setViewport({
     width, height: 800, deviceScaleFactor: 1, isMobile: width <= CARD_BREAKPOINT,
   });
-  await page.goto(`${BASE}${urlPath}`, { waitUntil: 'networkidle0', timeout: 20_000 });
+  // 'load', not 'networkidle0': measured on /replay, every request finished at
+  // 67ms but networkidle0's idle window held `goto` open until 1043ms — ~975ms
+  // of pure timer per subtest, and the walk is ~90% of CI wall clock. Dropping
+  // it took the local walk 117s -> 67s with no assertion weakened.
+  //
+  // The two gates below are the actual correctness guarantees (7-45ms), and
+  // that is not incidental: `load` does NOT imply fonts are ready. Measured,
+  // document.fonts.status is still 'loading' at this line on 3-4 of the 10
+  // walked pages (which ones varies run to run) — so the fonts.ready await is
+  // what closes the font-load race behind the phantom featured-card sighting,
+  // and it is verified to leave all 10 pages 'loaded' before anything is
+  // measured. Order matters: readySelector first, so client-rendered content
+  // has requested its faces before we await. Don't weaken this to
+  // 'domcontentloaded' on the theory that fonts.ready covers everything —
+  // unsized subresources shift layout and have no such gate.
+  await page.goto(`${BASE}${urlPath}`, { waitUntil: 'load', timeout: 20_000 });
   if (readySelector) await page.waitForSelector(readySelector, { timeout: 10_000 });
   await page.evaluate(() => document.fonts.ready);
 }
@@ -406,7 +480,7 @@ const HOMEPAGE_STATES = [
 
 test('inner pages: no horizontal overflow, no inline-script syntax errors', async (t) => {
   for (const pageDef of PAGES) {
-    for (const width of WIDTHS) {
+    for (const width of pageDef.widths || WIDTHS) {
       const label = `${pageDef.path} @ ${width}px`;
       await t.test(label, () => checkPage(label, width, pageDef));
     }
@@ -425,6 +499,41 @@ test('homepage states: no horizontal overflow, no inline-script syntax errors', 
       }));
     }
   }
+});
+
+// The width lists above are hand-synced to the templates' media queries, and a
+// prose comment can't notice a template gaining one. This reads the queries back
+// out and requires each to be walked or explicitly waived, so a new breakpoint
+// fails here instead of quietly becoming an unwalked band. No browser needed.
+test('every template breakpoint is walked or waived', () => {
+  const dir = path.join(__dirname, '..', '..', 'src', 'api', 'templates');
+  const sources = fs.readdirSync(dir)
+    .filter((f) => f.endsWith('.html'))
+    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8'))
+    .concat(fs.readFileSync(
+      path.join(__dirname, '..', '..', 'src', 'api', 'routes.py'), 'utf8'));
+
+  const walked = new Set([
+    ...WIDTHS, ...WIDTHS_WITH_561, ...HOMEPAGE_WIDTHS,
+    ...HOMEPAGE_STATES.flatMap((s) => s.widths || []),
+  ]);
+  const found = new Set();
+  for (const src of sources) {
+    for (const m of src.matchAll(/@media\s*\(max-width:\s*(\d+)px\)/g)) {
+      found.add(Number(m[1]) + 1);
+    }
+  }
+  assert.ok(found.size >= 5, `expected to find media queries, got [${[...found]}]`);
+
+  const gaps = [...found].filter((w) => !walked.has(w) && !UNWALKED_BREAKPOINTS.has(w));
+  assert.deepStrictEqual(gaps, [],
+    `template breakpoint(s) neither walked nor waived: ${gaps.join(', ')}. `
+    + 'Add the width to a walk list, or to UNWALKED_BREAKPOINTS with a reason.');
+
+  // A waiver for a width that IS walked is stale bookkeeping — drop it.
+  const stale = [...UNWALKED_BREAKPOINTS.keys()].filter((w) => walked.has(w));
+  assert.deepStrictEqual(stale, [],
+    `UNWALKED_BREAKPOINTS lists width(s) the walk already covers: ${stale.join(', ')}`);
 });
 
 // The site nav is the page inventory (_SITE_NAV_ITEMS in src/api/routes.py),
