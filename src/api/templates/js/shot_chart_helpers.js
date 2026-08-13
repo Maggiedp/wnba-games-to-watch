@@ -45,19 +45,71 @@ function shotDotFill(added) {
   return 'fill="#5b6472" fill-opacity="' + (0.18 + 0.5 * Math.abs(t)).toFixed(2) + '"';
 }
 
+// Shots are aggregated into 3 ft cells rather than drawn one dot per shot.
+// Measured live 2026-08-12: one r=5 dot on a 10px-per-foot scale covers exactly
+// one square foot, and ESPN quantizes coords to whole feet, so dots stacked
+// perfectly — 26–75% of a player's attempts rendered underneath another dot
+// (Reese: 397 shots at 101 distinct coordinates, densest cell 32 deep). What
+// survived was an alpha composite of whatever painted last, so the colour
+// depended on DB row order (reversing it flipped one of her cells from grey to
+// orange) and its saturation confounded volume with magnitude — a cell whose
+// mean was +0.003 rendered as saturated mud. Colour now means one defined
+// thing, the cell's mean points added; volume is carried by radius.
+const SHOT_CELL_FT = 3;
+// Marks sit at centroids, not cell centres, so the cell pitch does NOT bound
+// how close two marks get: measured over 21 players' 1,528 cells, the median
+// nearest same-pv centroid gap is 23.5px and 75% of pairs are under 30px. Some
+// overlap is therefore inherent (as in any volume-scaled scatter) and is
+// handled by drawing busiest-first so small marks stay on top. The cap is set
+// at 12 from that median — the point where a typical neighbouring pair stays
+// countable in the paint without flattening the volume signal. Absolute, NOT
+// normalized per player: scaling to a player's own busiest cell would break
+// cross-player comparability, the same objection that ruled out a per-player
+// viewBox in PR #124.
+const SHOT_R_MIN = 3, SHOT_R_K = 1.6, SHOT_R_MAX = 12;
+
+function shotRound(v) { return Math.round(v * 10) / 10; }
+
+function shotCells(shots) {
+  const cells = new Map();
+  for (const sh of (shots || [])) {
+    // Split by point value as well as position: a cell straddling the arc
+    // holds shots graded against two different baselines, and averaging them
+    // would paint one blended colour over both.
+    const key = sh.pv + ':' + Math.floor(sh.x / SHOT_CELL_FT)
+      + ':' + Math.floor(sh.y / SHOT_CELL_FT);
+    let c = cells.get(key);
+    if (!c) { c = { key: key, n: 0, made: 0, sx: 0, sy: 0, added: 0 }; cells.set(key, c); }
+    c.n += 1;
+    if (sh.made) c.made += 1;
+    c.sx += sh.x; c.sy += sh.y;
+    c.added += Number(sh.added) || 0;
+  }
+  // Deterministic emit order so the chart cannot depend on row order: busiest
+  // first, so a small mark paints on top and stays visible; key breaks ties.
+  return [...cells.values()].sort(function (a, b) {
+    return b.n - a.n || (a.key < b.key ? -1 : 1);
+  });
+}
+
 function buildShotChartSvg(shots) {
   let s = '<svg viewBox="0 ' + SHOT_CHART_TOP + ' 500 ' + SHOT_CHART_H
     + '" class="shot-chart-svg" role="img" aria-label="Shot chart">';
   s += shotChartCourt();
-  for (const sh of (shots || [])) {
-    const px = shotChartX(sh.x), py = shotChartY(sh.y);
-    const dist = Math.round(Math.hypot(sh.x - 25, sh.y));
-    const kind = sh.pv === 3 ? 'three' : (dist <= 4 ? 'rim' : 'jumper');
-    const sign = sh.added >= 0 ? '+' : '−';
+  for (const c of shotCells(shots)) {
+    // The centroid of the cell's shots, not the cell's corner: positions stay
+    // real, and the marks don't snap onto a visible lattice.
+    const fx = c.sx / c.n, fy = c.sy / c.n;
+    const px = shotRound(shotChartX(fx)), py = shotRound(shotChartY(fy));
+    const dist = Math.round(Math.hypot(fx - 25, fy));
+    const sign = c.added >= 0 ? '+' : '−';
     const offScale = py < SHOT_CHART_EDGE;
-    const label = dist + ' ft ' + kind + ' · ' + (sh.made ? 'made' : 'missed')
-      + ' · ' + sign + Math.abs(sh.added).toFixed(1) + ' pts'
+    // Total points ties to the zone table's +pts column; the colour below is
+    // the per-attempt rate.
+    const label = dist + ' ft · ' + c.n + (c.n === 1 ? ' attempt' : ' attempts')
+      + ' · ' + c.made + ' made · ' + sign + Math.abs(c.added).toFixed(1) + ' pts'
       + (offScale ? ' · beyond the chart' : '');
+    const fill = shotDotFill(c.added / c.n);
     if (offScale) {
       // A heave past the chart's range (~0.4% of shots). Drawn as a chevron
       // pinned to the top edge, NOT a clamped dot: a dot there would read as a
@@ -65,13 +117,19 @@ function buildShotChartSvg(shots) {
       // indistinguishable from each other AND from an in-range shot. The
       // chevron declares "off-scale, see the tooltip for the true distance".
       // Not sized per-player from the longest shot on purpose — the court is a
-      // fixed frame so charts stay comparable across players.
+      // fixed frame so charts stay comparable across players. Fixed size (not
+      // scaled by n) because these cells are ~always a single desperation
+      // heave; the tooltip carries the count if they are not.
       s += '<path d="M' + (px - 5) + ',' + (SHOT_CHART_EDGE + 4)
         + ' L' + px + ',' + (SHOT_CHART_EDGE - 4)
-        + ' L' + (px + 5) + ',' + (SHOT_CHART_EDGE + 4) + ' Z" ' + shotDotFill(sh.added)
+        + ' L' + (px + 5) + ',' + (SHOT_CHART_EDGE + 4) + ' Z" ' + fill
         + '><title>' + label + '</title></path>';
     } else {
-      s += '<circle cx="' + px + '" cy="' + py + '" r="5" ' + shotDotFill(sh.added)
+      // A mark may clip at the frame's edge rather than being nudged inward —
+      // moving it would displace the shots, the same class of lie as clamping
+      // a heave onto the top edge as a dot.
+      const r = shotRound(Math.min(SHOT_R_MAX, SHOT_R_MIN + SHOT_R_K * Math.sqrt(c.n)));
+      s += '<circle cx="' + px + '" cy="' + py + '" r="' + r + '" ' + fill
         + '><title>' + label + '</title></circle>';
     }
   }
