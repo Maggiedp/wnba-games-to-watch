@@ -73,13 +73,25 @@ function shotRound(v) { return Math.round(v * 10) / 10; }
 function shotCells(shots) {
   const cells = new Map();
   for (const sh of (shots || [])) {
+    // Off-scale status is decided PER SHOT and partitions the cell, because a
+    // 3 ft cell spans the range cutoff (y > 31.65 ft). Deriving it from the
+    // merged centroid instead let a heave average into an in-range circle —
+    // reproducing the exact lie the chevron exists to prevent, that an
+    // off-scale shot reads as a real 31-footer — and let heaves drag an
+    // in-range shot out of the court. Partitioning also makes the centroid
+    // agree with the flag for free: a mean of values all past the cutoff is
+    // itself past it.
+    const offScale = shotRound(shotChartY(sh.y)) < SHOT_CHART_EDGE;
     // Split by point value as well as position: a cell straddling the arc
     // holds shots graded against two different baselines, and averaging them
     // would paint one blended colour over both.
     const key = sh.pv + ':' + Math.floor(sh.x / SHOT_CELL_FT)
-      + ':' + Math.floor(sh.y / SHOT_CELL_FT);
+      + ':' + Math.floor(sh.y / SHOT_CELL_FT) + ':' + (offScale ? 'o' : 'i');
     let c = cells.get(key);
-    if (!c) { c = { key: key, n: 0, made: 0, sx: 0, sy: 0, added: 0 }; cells.set(key, c); }
+    if (!c) {
+      c = { key: key, offScale: offScale, n: 0, made: 0, sx: 0, sy: 0, added: 0 };
+      cells.set(key, c);
+    }
     c.n += 1;
     if (sh.made) c.made += 1;
     c.sx += sh.x; c.sy += sh.y;
@@ -103,7 +115,7 @@ function buildShotChartSvg(shots) {
     const px = shotRound(shotChartX(fx)), py = shotRound(shotChartY(fy));
     const dist = Math.round(Math.hypot(fx - 25, fy));
     const sign = c.added >= 0 ? '+' : '−';
-    const offScale = py < SHOT_CHART_EDGE;
+    const offScale = c.offScale;
     // Total points ties to the zone table's +pts column; the colour below is
     // the per-attempt rate.
     const label = dist + ' ft · ' + c.n + (c.n === 1 ? ' attempt' : ' attempts')

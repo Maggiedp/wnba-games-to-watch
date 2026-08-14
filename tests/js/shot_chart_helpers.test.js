@@ -177,6 +177,38 @@ test('tooltip distance matches ESPN play-text distance', () => {
 // Off-scale marks. Rationale for the chevron lives in the helper.
 // ---------------------------------------------------------------------------
 
+// A 3 ft cell spans the chart's range cutoff (y > 31.65 ft), so binning on
+// position alone merged a heave into an in-range circle and averaged the
+// distance -- reproducing exactly the lie the chevron exists to prevent, that
+// an off-scale shot "would read as a real 31-footer". Live on 2 of 121 players
+// when this was caught (Caitlin Clark: one cell holding y=31 and y=32).
+test('a cell straddling the range cutoff does not merge off-scale with in-range', () => {
+  const svg = H.buildShotChartSvg([
+    { x: 25, y: 30, made: false, pv: 3, added: -1 },
+    { x: 25, y: 32, made: false, pv: 3, added: -1 },
+  ]);
+  const marks = marksOf(svg);
+  assert.strictEqual(marks.length, 2, 'the heave was absorbed into the in-range mark');
+  assert.deepStrictEqual(marks.map((m) => m.tag).sort(), ['circle', 'path']);
+  assert.ok(marks.some((m) => m.title === '30 ft · 1 attempt · 0 made · −1.0 pts'));
+  assert.ok(marks.some((m) => m.title.includes('32 ft') && m.title.includes('beyond the chart')));
+});
+
+// The mirror of the above: an in-range shot must not be dragged off-scale by
+// heaves it shares a cell with.
+test('heaves do not drag an in-range shot into the off-scale marker', () => {
+  const svg = H.buildShotChartSvg([
+    { x: 25, y: 31, made: false, pv: 3, added: -1 },
+    { x: 25, y: 32, made: false, pv: 3, added: -1 },
+    { x: 25, y: 32, made: false, pv: 3, added: -1 },
+    { x: 25, y: 32, made: false, pv: 3, added: -1 },
+  ]);
+  const marks = marksOf(svg);
+  assert.strictEqual(marks.length, 2);
+  assert.ok(marks.some((m) => m.tag === 'circle' && m.title.startsWith('31 ft · 1 attempt')));
+  assert.ok(marks.some((m) => m.tag === 'path' && m.title.startsWith('32 ft · 3 attempts')));
+});
+
 test('a shot beyond the chart range is marked off-scale, not clamped to a dot', () => {
   const svg = H.buildShotChartSvg([{ x: 25, y: 40, made: false, pv: 3, added: -1 }]);
   const marks = marksOf(svg);
