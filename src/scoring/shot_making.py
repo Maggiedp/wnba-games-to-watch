@@ -192,7 +192,15 @@ def compute_player_shot_chart(player_shots: list[dict], baseline: dict) -> dict:
                 "y": max(-5, int(cy)),
                 "made": bool(s.get("made")),
                 "pv": pv,
-                "added": round(added, 2),
+                # 4 decimals, NOT cents: the chart aggregates these into cells
+                # and shows a cell total, so they are summed downstream. Shots
+                # in one cell share a distance band and family, hence the same
+                # expected value and the same rounding direction, so cent
+                # rounding accumulates LINEARLY with cell size -- measured live
+                # at up to 0.84 pts per player and +40.5 shown where the truth
+                # was +40.1 on one 81-shot cell. Zones and the total below
+                # accumulate unrounded and round once, so they are unaffected.
+                "added": round(added, 4),
             }
         )
     zone_rows = [
