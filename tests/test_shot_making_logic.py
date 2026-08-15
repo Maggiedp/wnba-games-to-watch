@@ -323,3 +323,43 @@ def test_bridge_scale_bounds_selection_and_total():
 def test_bridge_scale_is_none_when_board_is_empty_or_anchorless():
     assert bridge_scale([], 1.027, 1.037) is None
     assert bridge_scale([_Row(1.0, 1.0)], None, 1.037) is None
+
+
+def test_chart_dot_added_carries_enough_precision_to_be_summed():
+    """The chart aggregates shots into cells and shows a cell total, so per-shot
+    `added` is summed downstream — it is no longer a display-only value.
+
+    Rounding it to cents made those sums drift badly, and NOT as independent
+    rounding would predict: `added` is `points - expected_pps(shot)`, and shots
+    in one cell share a distance band and family, so they share an expected
+    value and round in the SAME direction. The error therefore grows linearly
+    with cell size rather than as its square root. Measured live before the
+    fix: summing a player's shots missed the zone totals by up to 0.84 pts, and
+    a single 81-shot cell showed +40.5 where the truth was +40.1.
+
+    Guard the invariant rather than the digit count: the shot values must
+    reproduce the zone totals, which accumulate unrounded server-side."""
+    # A league whose rim bucket hits 27/64 -> xPPS exactly 0.84375, so a made 2
+    # is added=1.15625 and a miss is added=-0.84375. Both carry the SAME-signed
+    # rounding bias at every precision, which is the correlated case. Over the
+    # 80 player shots below that bias totals +0.30 at 2 decimals and -0.02 at 3
+    # -- both outside the tolerance -- and -0.004 at 4. So this discriminates
+    # the fix rather than passing trivially. (The repo's usual _league() fixture
+    # yields a clean xPPS of 1.0 and cannot show the problem at all.)
+    league = [
+        _shot_chart(aid=f"g{i}", made=(i < 27), pv=2, dist=3.0, stype="Layup Shot")
+        for i in range(64)
+    ]
+    baseline = build_baseline(league)
+    assert expected_pps(league[0], baseline) == 0.84375, "fixture no longer biases"
+    player = [_shot_chart(made=(i % 2 == 0), x=25, y=1) for i in range(80)]
+    out = compute_player_shot_chart(player, baseline)
+
+    summed = sum(s["added"] for s in out["shots"])
+    zoned = sum(z["added"] for z in out["zones"])
+    # Both are shown to one decimal, so they must agree far inside that.
+    assert abs(summed - zoned) < 0.01, (
+        f"per-shot added sums to {summed} but zones total {zoned}; "
+        "precision is too low to aggregate"
+    )
+    assert abs(summed - out["points_added"]) < 0.01

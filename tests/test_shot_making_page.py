@@ -163,3 +163,34 @@ def test_bridge_css_is_identical_in_both_templates():
     assert "--lab-min: 9em" in a
     assert "position: static" in a  # the <=560px stacked-label mode
     assert "var(--bridge-ground, var(--bg))" in a
+
+
+def _shot_chart_caption(template_name: str) -> str:
+    """The caption under the shot chart, with wrapping whitespace collapsed.
+
+    The two templates use different class names (`cap` vs `shot-cap`) and wrap
+    the text differently, so compare the words, not the bytes."""
+    import re
+
+    from src.api.routes import _load_template
+
+    src = _load_template(template_name)
+    m = re.search(r'<p class="(?:shot-)?cap">(.*?)</p>', src, re.S)
+    assert m, f"no shot-chart caption found in {template_name}"
+    return " ".join(m.group(1).split())
+
+
+def test_shot_chart_caption_is_identical_in_both_templates():
+    """The same chart renders on /shot-making's expand panel and /player/{id},
+    so one caption describes both. PR #128 already found these two surfaces
+    drifted once (the legend wording), and this caption states the chart's
+    read: it must not say "each dot is one shot", which stopped being true when
+    marks became per-cell aggregates."""
+    a = _shot_chart_caption("shot_making.html")
+    b = _shot_chart_caption("player.html")
+    assert a == b, "the shot-chart captions have drifted between the two templates"
+    # The claim the aggregation rewrite invalidated.
+    assert "one shot" not in a
+    # The two things a reader needs to decode a mark.
+    assert "more attempts" in a
+    assert "points added" in a
