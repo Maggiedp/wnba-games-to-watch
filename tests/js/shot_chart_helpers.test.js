@@ -100,14 +100,38 @@ test('shots within a cell merge; shots further apart stay separate', () => {
   assert.strictEqual(marksOf(H.buildShotChartSvg(apart)).length, 2);
 });
 
-// A cell straddling the arc holds shots graded against two different
-// baselines; averaging them would put a blended colour on both.
-test('a two and a three from the same spot stay separate marks', () => {
+// A long two and a corner three can share a quantized coordinate, and the
+// chart has no visual channel that tells them apart -- both are a circle
+// coloured by `added`. Splitting them therefore could not communicate
+// anything; it only stacked two marks on one spot, where they alpha-blended
+// into a colour meaning neither and the lower tooltip became unreachable
+// (measured: 19 exact-geometry collisions across 30 of 121 players).
+// Merging is sound because `added` is already baseline-relative -- actual
+// minus expected, point value included -- so the mean is well defined.
+test('a two and a three from the same spot merge into one mark', () => {
   const svg = H.buildShotChartSvg([
     { x: 25, y: 22, made: true, pv: 3, added: 1.0 },
     { x: 25, y: 22, made: false, pv: 2, added: -1.0 },
   ]);
-  assert.strictEqual(marksOf(svg).length, 2);
+  const marks = marksOf(svg);
+  assert.strictEqual(marks.length, 1);
+  assert.strictEqual(marks[0].title, '22 ft · 2 attempts · 1 made · +0.0 pts');
+});
+
+// The general invariant behind the merge above: two marks must never sit at
+// the same place, because stacked marks are unreadable and only the top one
+// is hoverable. Position and off-scale status are the whole key, so this
+// holds by construction -- the test pins it against a future partition being
+// added for a property the mark cannot show.
+test('no two marks share the same rendered geometry', () => {
+  const shots = [];
+  for (const [x, y] of [[25, 22], [1, 2], [47, 1], [25, 4], [26, 2], [30, 20]]) {
+    shots.push({ x: x, y: y, made: true, pv: 3, added: 1.0 });
+    shots.push({ x: x, y: y, made: false, pv: 2, added: -1.0 });
+  }
+  const svg = H.buildShotChartSvg(shots);
+  const geoms = marksOf(svg).map((m) => m.attrs.replace(/ fill[^ ]*="[^"]*"/g, '').trim());
+  assert.strictEqual(new Set(geoms).size, geoms.length, 'two marks render on top of each other');
 });
 
 test('cell colour is the mean of its shots, not any one of them', () => {
@@ -217,6 +241,27 @@ test('a shot beyond the chart range is marked off-scale, not clamped to a dot', 
   assert.match(svg, /<path d="M245,[-\d.]+ L250,/, 'no off-scale marker');
   assert.strictEqual(marks[0].title,
     '40 ft · 1 attempt · 0 made · −1.0 pts · beyond the chart');
+});
+
+// Off-scale marks are pinned to the top edge, so two heaves at the same x drew
+// byte-identical paths and the second tooltip was unreachable (pre-existing:
+// before aggregation every heave drew its own pinned chevron). They merge, and
+// report a range rather than a centroid because the cell is unbounded in y.
+test('heaves at the same x merge into one chevron reporting a distance range', () => {
+  const svg = H.buildShotChartSvg([
+    { x: 25, y: 33, made: true, pv: 3, added: 1.9 },
+    { x: 25, y: 49, made: false, pv: 3, added: -1.1 },
+  ]);
+  const marks = marksOf(svg);
+  assert.strictEqual(marks.length, 1);
+  assert.strictEqual(marks[0].tag, 'path');
+  assert.strictEqual(marks[0].title,
+    '33–49 ft · 2 attempts · 1 made · +0.8 pts · beyond the chart');
+});
+
+test('a lone heave reports a single distance, not a degenerate range', () => {
+  const svg = H.buildShotChartSvg([{ x: 25, y: 40, made: false, pv: 3, added: -1 }]);
+  assert.ok(marksOf(svg)[0].title.startsWith('40 ft · '));
 });
 
 test('an in-range shot stays a plain dot and is never marked off-scale', () => {

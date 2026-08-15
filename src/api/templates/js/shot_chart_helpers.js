@@ -82,20 +82,39 @@ function shotCells(shots) {
     // agree with the flag for free: a mean of values all past the cutoff is
     // itself past it.
     const offScale = shotRound(shotChartY(sh.y)) < SHOT_CHART_EDGE;
-    // Split by point value as well as position: a cell straddling the arc
-    // holds shots graded against two different baselines, and averaging them
-    // would paint one blended colour over both.
-    const key = sh.pv + ':' + Math.floor(sh.x / SHOT_CELL_FT)
-      + ':' + Math.floor(sh.y / SHOT_CELL_FT) + ':' + (offScale ? 'o' : 'i');
+    // Position and off-scale status are the WHOLE key. Do not add a partition
+    // for a property the mark cannot show — an earlier revision also split on
+    // `pv`, which bought nothing (a two and a three render as the same circle,
+    // coloured only by `added`) and cost real correctness: a long two and a
+    // corner three share a quantized coordinate often enough that 30 of 121
+    // players had marks stacked on one spot, alpha-blending into a colour that
+    // meant neither and leaving the lower tooltip unreachable. Merging them is
+    // sound because `added` is already baseline-relative — actual minus
+    // expected, point value included — so the cell mean is well defined across
+    // point values. The rule: partition on what changes the mark's TYPE or
+    // GEOMETRY (off-scale does), never on what only feeds its colour.
+    // Off-scale marks are pinned to the top edge, so their y never reaches the
+    // geometry — binning them by y only manufactures cells that render byte
+    // identically (a 33-footer and a 49-footer at the same x drew the same
+    // path, and the second one's tooltip was unreachable). They bin by x alone
+    // and carry a distance RANGE instead of a centroid, since the cell is
+    // unbounded in y and a mean of 33 and 49 would describe neither shot.
+    const key = offScale
+      ? 'o:' + Math.floor(sh.x / SHOT_CELL_FT)
+      : 'i:' + Math.floor(sh.x / SHOT_CELL_FT) + ':' + Math.floor(sh.y / SHOT_CELL_FT);
+    const dist = Math.round(Math.hypot(sh.x - 25, sh.y));
     let c = cells.get(key);
     if (!c) {
-      c = { key: key, offScale: offScale, n: 0, made: 0, sx: 0, sy: 0, added: 0 };
+      c = { key: key, offScale: offScale, n: 0, made: 0, sx: 0, sy: 0, added: 0,
+            dmin: dist, dmax: dist };
       cells.set(key, c);
     }
     c.n += 1;
     if (sh.made) c.made += 1;
     c.sx += sh.x; c.sy += sh.y;
     c.added += Number(sh.added) || 0;
+    if (dist < c.dmin) c.dmin = dist;
+    if (dist > c.dmax) c.dmax = dist;
   }
   // Deterministic emit order so the chart cannot depend on row order: busiest
   // first, so a small mark paints on top and stays visible; key breaks ties.
@@ -113,9 +132,14 @@ function buildShotChartSvg(shots) {
     // real, and the marks don't snap onto a visible lattice.
     const fx = c.sx / c.n, fy = c.sy / c.n;
     const px = shotRound(shotChartX(fx)), py = shotRound(shotChartY(fy));
-    const dist = Math.round(Math.hypot(fx - 25, fy));
     const sign = c.added >= 0 ? '+' : '−';
     const offScale = c.offScale;
+    // In-range marks sit at a real point inside a 3 ft cell, so the centroid
+    // distance describes them. Off-scale cells are unbounded in y, so they
+    // report the range of what they hold.
+    const dist = offScale
+      ? (c.dmin === c.dmax ? String(c.dmin) : c.dmin + '–' + c.dmax)
+      : String(Math.round(Math.hypot(fx - 25, fy)));
     // Total points ties to the zone table's +pts column; the colour below is
     // the per-attempt rate.
     const label = dist + ' ft · ' + c.n + (c.n === 1 ? ' attempt' : ' attempts')
