@@ -51,11 +51,11 @@ test('the dot transform agrees with the hoop the court actually draws', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cell aggregation. Marks are one-per-(3ft cell x point value), NOT one per
-// shot. Measured live 2026-08-12: drawing a dot per shot hid 26-75% of a
-// player's attempts under other dots (Reese: 397 shots at 101 distinct
-// coordinates, densest cell 32 deep), and the surviving colour was an
-// order-dependent alpha composite of whatever painted last.
+// Cell aggregation. A mark is one per (3 ft cell × off-scale status), NOT one
+// per shot — see shot_chart_helpers.js for why those are the only two things
+// that may partition a bin. Drawing a dot per shot hid 26-75% of a player's
+// attempts under other dots, and the surviving colour was an order-dependent
+// alpha composite of whatever painted last.
 // ---------------------------------------------------------------------------
 
 // THE regression guard for that bug: if colour still depended on paint order,
@@ -240,7 +240,8 @@ test('a shot beyond the chart range is marked off-scale, not clamped to a dot', 
   assert.strictEqual(marks[0].tag, 'path', 'drew a lying dot');
   assert.match(svg, /<path d="M245,[-\d.]+ L250,/, 'no off-scale marker');
   assert.strictEqual(marks[0].title,
-    '40 ft · 1 attempt · 0 made · −1.0 pts · beyond the chart');
+    '40 ft · 1 attempt · 0 made · −1.0 pts · beyond the chart',
+    'a lone heave must read as one distance, not a degenerate range');
 });
 
 // Off-scale marks are pinned to the top edge, so two heaves at the same x drew
@@ -257,11 +258,6 @@ test('heaves at the same x merge into one chevron reporting a distance range', (
   assert.strictEqual(marks[0].tag, 'path');
   assert.strictEqual(marks[0].title,
     '33–49 ft · 2 attempts · 1 made · +0.8 pts · beyond the chart');
-});
-
-test('a lone heave reports a single distance, not a degenerate range', () => {
-  const svg = H.buildShotChartSvg([{ x: 25, y: 40, made: false, pv: 3, added: -1 }]);
-  assert.ok(marksOf(svg)[0].title.startsWith('40 ft · '));
 });
 
 test('an in-range shot stays a plain dot and is never marked off-scale', () => {

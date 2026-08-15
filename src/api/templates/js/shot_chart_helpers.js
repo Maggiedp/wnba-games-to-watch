@@ -99,22 +99,26 @@ function shotCells(shots) {
     // path, and the second one's tooltip was unreachable). They bin by x alone
     // and carry a distance RANGE instead of a centroid, since the cell is
     // unbounded in y and a mean of 33 and 49 would describe neither shot.
-    const key = offScale
-      ? 'o:' + Math.floor(sh.x / SHOT_CELL_FT)
-      : 'i:' + Math.floor(sh.x / SHOT_CELL_FT) + ':' + Math.floor(sh.y / SHOT_CELL_FT);
-    const dist = Math.round(Math.hypot(sh.x - 25, sh.y));
+    const xi = Math.floor(sh.x / SHOT_CELL_FT);
+    const key = offScale ? 'o:' + xi
+      : 'i:' + xi + ':' + Math.floor(sh.y / SHOT_CELL_FT);
     let c = cells.get(key);
     if (!c) {
-      c = { key: key, offScale: offScale, n: 0, made: 0, sx: 0, sy: 0, added: 0,
-            dmin: dist, dmax: dist };
+      c = { key: key, offScale: offScale, n: 0, made: 0, sx: 0, sy: 0, added: 0 };
       cells.set(key, c);
     }
     c.n += 1;
     if (sh.made) c.made += 1;
     c.sx += sh.x; c.sy += sh.y;
     c.added += Number(sh.added) || 0;
-    if (dist < c.dmin) c.dmin = dist;
-    if (dist > c.dmax) c.dmax = dist;
+    // Only off-scale cells report a distance range; in-range marks derive
+    // theirs from the centroid at render. Kept in this branch so the extra
+    // state exists on the ~0.4% of cells that actually use it.
+    if (offScale) {
+      const dist = Math.round(Math.hypot(sh.x - 25, sh.y));
+      if (c.dmin === undefined || dist < c.dmin) c.dmin = dist;
+      if (c.dmax === undefined || dist > c.dmax) c.dmax = dist;
+    }
   }
   // Deterministic emit order so the chart cannot depend on row order: busiest
   // first, so a small mark paints on top and stays visible; key breaks ties.
@@ -133,20 +137,19 @@ function buildShotChartSvg(shots) {
     const fx = c.sx / c.n, fy = c.sy / c.n;
     const px = shotRound(shotChartX(fx)), py = shotRound(shotChartY(fy));
     const sign = c.added >= 0 ? '+' : '−';
-    const offScale = c.offScale;
     // In-range marks sit at a real point inside a 3 ft cell, so the centroid
     // distance describes them. Off-scale cells are unbounded in y, so they
     // report the range of what they hold.
-    const dist = offScale
+    const dist = c.offScale
       ? (c.dmin === c.dmax ? String(c.dmin) : c.dmin + '–' + c.dmax)
       : String(Math.round(Math.hypot(fx - 25, fy)));
     // Total points ties to the zone table's +pts column; the colour below is
     // the per-attempt rate.
     const label = dist + ' ft · ' + c.n + (c.n === 1 ? ' attempt' : ' attempts')
       + ' · ' + c.made + ' made · ' + sign + Math.abs(c.added).toFixed(1) + ' pts'
-      + (offScale ? ' · beyond the chart' : '');
+      + (c.offScale ? ' · beyond the chart' : '');
     const fill = shotDotFill(c.added / c.n);
-    if (offScale) {
+    if (c.offScale) {
       // A heave past the chart's range (~0.4% of shots). Drawn as a chevron
       // pinned to the top edge, NOT a clamped dot: a dot there would read as a
       // real 31-footer, and two heaves of different length would be
