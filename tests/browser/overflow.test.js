@@ -63,6 +63,14 @@ const WIDTHS = [...PHONE_WIDTHS, ...DESKTOP_WIDTHS];
 // would render 430's configuration with more room.
 const WIDTHS_WITH_561 = [...PHONE_WIDTHS, 561, ...DESKTOP_WIDTHS];
 
+// /shot-making condenses its table up to 800px rather than the usual 768 (see
+// the media query in shot_making.html), so 801 is the first width where the
+// full-size desktop table renders — and it is the tightest margin anywhere in
+// that page's layout: the wrapper is 712px against the table's 710px
+// min-content, 2px of room. The narrowest-of-each-configuration rule makes this
+// a walk, not a waiver.
+const SHOT_MAKING_WIDTHS = [...WIDTHS_WITH_561, 801];
+
 // Every `@media (max-width: N)` in the templates should have N+1 walked
 // somewhere, or be listed here with the reason it isn't. Prose can't be checked
 // against a template edit — assertBreakpointsAreWalkedOrWaived can, so a new
@@ -102,11 +110,17 @@ const PAGES = [
   { path: '/rankings', readySelector: '#elo-chart svg' },
   { path: '/transparency', readySelector: '#calibration-chart svg' },
   { path: '/style', readySelector: '#style-grid svg', widths: WIDTHS_WITH_561 },
-  { path: '/shot-making', readySelector: '#shots-tbody tr', widths: WIDTHS_WITH_561 },
   {
     path: '/shot-making',
     readySelector: '#shots-tbody tr',
-    widths: WIDTHS_WITH_561,
+    widths: SHOT_MAKING_WIDTHS,
+    // Guards the band in its measured form: collapsed, no panel open.
+    extraAssert: assertLeaderboardFits,
+  },
+  {
+    path: '/shot-making',
+    readySelector: '#shots-tbody tr',
+    widths: SHOT_MAKING_WIDTHS,
     apply: async (page) => {
       await page.waitForSelector('#shots-tbody tr.player-row');
       await page.click('#shots-tbody tr.player-row');
@@ -375,10 +389,18 @@ async function assertBridgeLabels(page, label) {
 // contains it) and neither can the geometry asserts above and below, which are
 // measured relative to the panel and stay true while it is oversized.
 //
-// Relative (open vs closed), not `scroll <= client`: the COLLAPSED leaderboard
-// already overflows its wrapper by ~30px at 769px, which is a separate
-// pre-existing issue — this asserts only that expanding a panel doesn't make
-// the table wider than the leaderboard alone needs.
+// Relative (open vs closed), not `scroll <= client`, and that split is real
+// rather than an inconsistency: at phone widths this table is SUPPOSED to
+// scroll inside its wrapper (min-content 510px against a 316px viewport at
+// 390px), so an absolute assert would fail on correct layout there. Above the
+// card breakpoint the board is meant to fit, and assertLeaderboardFits says so
+// absolutely. This one holds at every width because it asks a question that is
+// width-independent: did opening a panel make the table wider than the
+// leaderboard alone needs?
+//
+// (The "~30px at 769px is pre-existing" caveat this comment used to carry is
+// gone — that was item (p), fixed alongside this by extending the condensed
+// table styling to 800px.)
 async function assertPanelDoesNotWidenTheTable(page, label) {
   const measure = () => page.evaluate(() => {
     const d = document.querySelector('.shots-table-scroll');
@@ -413,10 +435,108 @@ async function assertShotPanelLayout(page, label, width) {
   await assertBridgeLabels(page, label);
   // .shot-panel collapses to a single column at the card breakpoint, where the
   // zones legitimately sit below the chart — this invariant is desktop-only.
+  // Below it, the panel's job is to fit the screen instead. Kept as an
+  // either/or rather than running both everywhere so each failure message
+  // names the cause that actually applies at that width.
   if (width > CARD_BREAKPOINT) await assertPanelColumns(page, label);
+  else await assertPanelFitsViewport(page, label);
+  // Self-gates to desktop widths; here it also covers the panel-open case.
+  await assertLeaderboardFits(page, label, width);
   // LAST: this one collapses the panel to take its comparison measurement, so
   // nothing needing the panel open may run after it.
   await assertPanelDoesNotWidenTheTable(page, label);
+}
+
+// Regression (item p): above the card breakpoint the leaderboard is meant to
+// FIT its wrapper — `.shots-table-scroll { overflow-x: auto }` is a
+// contained-overflow safety net, not a layout the reader should meet. It was
+// meeting it: the condensed table styling ended at 768px while the full-size
+// table's min-content (710px) stayed wider than the wrapper until 799px, so
+// 769-798px side-scrolled the board by up to 30px.
+//
+// Desktop-only, for the reason given on assertPanelDoesNotWidenTheTable above.
+// Self-gating on width so both call sites can call it unconditionally.
+//
+// ⚠️ This assert is only as strong as the seed's widest Player cell: with the
+// old uniform short names the seeded table's min-content was 680px and this
+// passed at 769px on the very code that overflowed production by 30px. See
+// _LONGEST_NAME in smoke_server.py before trusting a green run here.
+async function assertLeaderboardFits(page, label, width) {
+  if (width <= CARD_BREAKPOINT) return;
+  const m = await page.evaluate(() => {
+    const d = document.querySelector('.shots-table-scroll');
+    return d && { client: d.clientWidth, scroll: d.scrollWidth };
+  });
+  assert.ok(m, `${label}: no .shots-table-scroll rendered`);
+  assert.ok(
+    m.scroll <= m.client,
+    `${label}: the leaderboard overflows its wrapper by ${m.scroll - m.client}px `
+    + `(min-content ${m.scroll}px vs ${m.client}px visible) — does the condensed `
+    + 'table styling stop before the viewport is wide enough for the full-size table?',
+  );
+}
+
+// Regression (item q): the panel renders in a `colspan` cell INSIDE
+// .shots-table-scroll, so its width tracked the TABLE (549px) rather than the
+// screen (316px at a 390px viewport) and the chart sat ~1.7x the visible
+// region, needing a sideways scroll to read on a phone.
+//
+// Nothing already here could see it. The page-level scrollWidth assert can't
+// (the wrapper contains it); assertPanelColumns is desktop-only and measures
+// relative geometry; and assertPanelDoesNotWidenTheTable stays true while the
+// panel is oversized, because a 549px panel inside a 549px table doesn't widen
+// anything — it only ever asked whether the panel made the table WORSE, never
+// whether the panel fits the screen.
+async function assertPanelFitsViewport(page, label) {
+  const m = await page.evaluate(() => {
+    const d = document.querySelector('.shots-table-scroll');
+    const p = document.querySelector('.shot-panel');
+    return d && p && { client: d.clientWidth, panel: p.getBoundingClientRect().width };
+  });
+  assert.ok(m, `${label}: .shot-panel or .shots-table-scroll missing`);
+  assert.ok(
+    // +1 for sub-pixel rounding: cqw resolves against a fractional width.
+    m.panel <= m.client + 1,
+    `${label}: the shot panel is ${Math.round(m.panel)}px inside a ${m.client}px `
+    + 'visible region, so the chart needs a sideways scroll — is `width: 100cqw` '
+    + 'missing from .shot-panel, or did .shots-table-scroll lose '
+    + '`container-type: inline-size`?',
+  );
+
+  // Fitting is only half of it: the panel sits in a cell that is still wider
+  // than the screen, so without `position: sticky` a correctly-sized panel
+  // still slides out of view as soon as the reader scrolls the table's columns.
+  // Scroll to the far edge and require the panel to have followed. Restores
+  // scrollLeft so nothing downstream measures a scrolled table.
+  // Both rects are viewport-relative, so the visible region is the CONTAINER's
+  // rect — not `0..clientWidth`. The scroll container starts at the page's left
+  // padding (x=37 at phone widths), so comparing against 0 fails on correct
+  // layout: a perfectly stuck panel reads 37..283, which is exactly the
+  // container's 246px of visible width.
+  const stuck = await page.evaluate(() => {
+    const d = document.querySelector('.shots-table-scroll');
+    const before = d.scrollLeft;
+    d.scrollLeft = d.scrollWidth;
+    const p = document.querySelector('.shot-panel').getBoundingClientRect();
+    const c = d.getBoundingClientRect();
+    const out = {
+      left: p.left, right: p.right, cLeft: c.left, cRight: c.right, scrolled: d.scrollLeft,
+    };
+    d.scrollLeft = before;
+    return out;
+  });
+  assert.ok(
+    stuck.scrolled > 0,
+    `${label}: the leaderboard did not scroll, so this assert proved nothing `
+    + '— has the seeded table stopped being wider than the viewport?',
+  );
+  assert.ok(
+    stuck.left >= stuck.cLeft - 1 && stuck.right <= stuck.cRight + 1,
+    `${label}: after scrolling the table to its far edge the panel sits at `
+    + `${Math.round(stuck.left)}..${Math.round(stuck.right)}px, outside the `
+    + `${Math.round(stuck.cLeft)}..${Math.round(stuck.cRight)}px visible region `
+    + '— did .shot-panel lose `position: sticky; left: 0`?',
+  );
 }
 
 async function assertPanelColumns(page, label) {
@@ -555,8 +675,14 @@ test('every template breakpoint is walked or waived', () => {
     .concat(fs.readFileSync(
       path.join(__dirname, '..', '..', 'src', 'api', 'routes.py'), 'utf8'));
 
+  // Read the walked widths off the page defs themselves rather than hand-listing
+  // the width constants. The hand-listed version could not see a NEW per-page
+  // list: adding SHOT_MAKING_WIDTHS made this test report 801 as an unwalked
+  // band while the walk was in fact loading it, which is a false failure in the
+  // one test whose whole job is to be trustworthy about coverage.
   const walked = new Set([
-    ...WIDTHS, ...WIDTHS_WITH_561, ...HOMEPAGE_WIDTHS,
+    ...WIDTHS, ...HOMEPAGE_WIDTHS,
+    ...PAGES.flatMap((p) => p.widths || []),
     ...HOMEPAGE_STATES.flatMap((s) => s.widths || []),
   ]);
   const found = new Set();
