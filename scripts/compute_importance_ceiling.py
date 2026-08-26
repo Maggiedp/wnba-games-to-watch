@@ -110,7 +110,7 @@ def main() -> None:
         if not remaining:
             continue
 
-        _, matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
+        _, matrix, playoff_sets, _, _, fate_levels = run_monte_carlo_simulation(
             standings,
             remaining,
             num_simulations=NUM_SIMULATIONS,

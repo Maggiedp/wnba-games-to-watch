@@ -1194,14 +1194,19 @@ def compute_daily_scores(
     logger.info(
         f"Running 10k Monte Carlo over {len(remaining_games)} remaining games..."
     )
-    round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions = (
-        run_monte_carlo_simulation(
-            standings,
-            remaining_games,
-            num_simulations=10000,
-            return_matrix=True,
-            bracket_state=bracket_state,
-        )
+    (
+        round_probs,
+        outcome_matrix,
+        playoff_sets,
+        bracket_outcomes,
+        champions,
+        fate_levels,
+    ) = run_monte_carlo_simulation(
+        standings,
+        remaining_games,
+        num_simulations=10000,
+        return_matrix=True,
+        bracket_state=bracket_state,
     )
 
     if not upcoming_games:

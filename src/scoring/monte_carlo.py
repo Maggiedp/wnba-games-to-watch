@@ -79,6 +79,53 @@ def simulate_game(
     )
 
 
+# How far a team got in one simulation. The importance metric sums
+# |Δ| across teams AND these levels, so a game that only moves seeding
+# (not berths) still registers — see docs "stretch-run importance".
+FATE_MISSED = "missed"
+FATE_LOST_QF = "lost_qf"
+FATE_LOST_SF = "lost_sf"
+FATE_LOST_FINALS = "lost_finals"
+FATE_CHAMPION = "champion"
+
+FATE_LEVELS = (
+    FATE_MISSED,
+    FATE_LOST_QF,
+    FATE_LOST_SF,
+    FATE_LOST_FINALS,
+    FATE_CHAMPION,
+)
+
+
+def _fate_levels_for_sim(
+    playoff_teams: set[str],
+    reached_semis: set[str],
+    reached_finals: set[str],
+    champion: str | None,
+    team_names: list[str],
+) -> dict[str, str]:
+    """Map every team to how far it got in one simulation.
+
+    Checked champion -> finals -> semis -> qf, so it is correct whether
+    simulate_playoffs' sets are cumulative or disjoint. (They are in fact
+    cumulative — see the set-semantics note in run_monte_carlo_simulation's
+    call site below.)
+    """
+    fate: dict[str, str] = {}
+    for name in team_names:
+        if name not in playoff_teams:
+            fate[name] = FATE_MISSED
+        elif name == champion:
+            fate[name] = FATE_CHAMPION
+        elif name in reached_finals:
+            fate[name] = FATE_LOST_FINALS
+        elif name in reached_semis:
+            fate[name] = FATE_LOST_SF
+        else:
+            fate[name] = FATE_LOST_QF
+    return fate
+
+
 def run_monte_carlo_simulation(
     current_standings: dict[str, dict],
     remaining_games: list[tuple[str, str]],
@@ -94,6 +141,7 @@ def run_monte_carlo_simulation(
         list[set[str]],
         list[dict[tuple[str, int], bool]],
         list[str | None],
+        list[dict[str, str]],
     ]
 ):
     """Run Monte Carlo simulations to compute round-by-round playoff probabilities.
@@ -108,12 +156,13 @@ def run_monte_carlo_simulation(
         num_simulations: Number of simulations to run.
         home_advantage: Elo-point bonus for the home team.
         return_matrix: When True, also return the per-sim outcome matrix,
-            playoff sets, bracket outcomes, and champions.
+            playoff sets, bracket outcomes, champions, and fate levels.
 
     Returns:
         If return_matrix=False: RoundProbabilities with per-team probs for each round.
-        If return_matrix=True: 5-tuple
-            (round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions)
+        If return_matrix=True: 6-tuple
+            (round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions,
+             fate_levels)
             outcome_matrix: list[list[bool]] shape (num_sims, num_remaining_games),
                 True = team_a won that game in that sim.
             playoff_sets: list[set[str]] shape (num_sims,),
@@ -123,6 +172,9 @@ def run_monte_carlo_simulation(
                 where fewer than 8 teams seeded (no bracket played).
             champions: list[str | None] shape (num_sims,),
                 champion team name per sim, or None if no bracket was played.
+            fate_levels: list[dict[str, str]] shape (num_sims,),
+                per-sim map of team name -> one of FATE_LEVELS (how far that
+                team got in that sim).
     """
     assert_all_teams_have_conferences(current_standings)
     made_counts: dict[str, int] = defaultdict(int)
@@ -134,6 +186,9 @@ def run_monte_carlo_simulation(
     playoff_sets: list[set[str]] = []
     bracket_outcomes_per_sim: list[dict[tuple[str, int], bool]] = []
     champions_per_sim: list[str | None] = []
+    fate_levels_per_sim: list[dict[str, str]] = []
+
+    all_team_names = list(current_standings.keys())
 
     for _ in range(num_simulations):
         standings = to_team_standings(current_standings)
@@ -168,6 +223,7 @@ def run_monte_carlo_simulation(
 
         sim_bracket_outcomes: dict[tuple[str, int], bool] = {}
         sim_champion: str | None = None
+        sim_fate: dict[str, str] = {}
 
         if len(playoff_team_set) == PLAYOFF_TEAMS:
             # Local import avoids circular dependency (playoffs imports simulate_game).
@@ -186,12 +242,27 @@ def run_monte_carlo_simulation(
                 final_counts[t] += 1
             champ_counts[bracket["won_championship"]] += 1
             sim_champion = bracket["won_championship"]
+            if return_matrix:
+                sim_fate = _fate_levels_for_sim(
+                    playoff_team_set,
+                    set(bracket["reached_semis"]),
+                    set(bracket["reached_finals"]),
+                    sim_champion,
+                    all_team_names,
+                )
+        elif return_matrix:
+            # No bracket played: qualifiers get lost_qf, everyone else missed.
+            sim_fate = {
+                name: (FATE_LOST_QF if name in playoff_team_set else FATE_MISSED)
+                for name in all_team_names
+            }
 
         if return_matrix:
             outcome_matrix.append(game_outcomes)
             playoff_sets.append(playoff_team_set)
             bracket_outcomes_per_sim.append(sim_bracket_outcomes)
             champions_per_sim.append(sim_champion)
+            fate_levels_per_sim.append(sim_fate)
 
     all_teams = list(current_standings.keys())
 
@@ -221,6 +292,7 @@ def run_monte_carlo_simulation(
             playoff_sets,
             bracket_outcomes_per_sim,
             champions_per_sim,
+            fate_levels_per_sim,
         )
     return result
 
