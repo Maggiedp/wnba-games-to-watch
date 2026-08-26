@@ -75,6 +75,41 @@ def test_reports_the_milestone_that_moved_most():
     assert movers[0]["if_b"] == 0.0
 
 
+def test_reports_finals_when_the_finals_odds_are_what_moved():
+    """A semis berth is locked either way, but reaching the finals only
+    happens under team_a -- the panel must say 'finals', not fall back to
+    'semis' or jump to 'championship'. Discriminates the FATE_LOST_FINALS
+    membership in _MILESTONES: if 'finals' omitted FATE_LOST_FINALS the
+    delta would read 0 (no mover reported); if it also swept in
+    FATE_LOST_SF the delta would likewise read 0 (both buckets 1.0)."""
+    outcome_matrix = [[True]] * 100 + [[False]] * 100
+    fate_levels = [{"A": FATE_LOST_FINALS}] * 100 + [{"A": FATE_LOST_SF}] * 100
+    movers = compute_directional_movers_from_matrix(
+        outcome_matrix, fate_levels, 0, ["A"]
+    )
+    assert movers
+    assert movers[0]["level"] == "finals"
+    assert movers[0]["if_a"] == 1.0
+    assert movers[0]["if_b"] == 0.0
+
+
+def test_reports_championship_when_the_title_odds_are_what_moved():
+    """A finals berth is locked either way, but winning the title only
+    happens under team_a -- the panel must say 'championship', not fall
+    back to 'finals'. Discriminates the {FATE_CHAMPION} membership in
+    _MILESTONES: if it also swept in FATE_LOST_FINALS, the delta would
+    read 0 (both buckets 1.0) and no mover would be reported."""
+    outcome_matrix = [[True]] * 100 + [[False]] * 100
+    fate_levels = [{"A": FATE_CHAMPION}] * 100 + [{"A": FATE_LOST_FINALS}] * 100
+    movers = compute_directional_movers_from_matrix(
+        outcome_matrix, fate_levels, 0, ["A"]
+    )
+    assert movers
+    assert movers[0]["level"] == "championship"
+    assert movers[0]["if_a"] == 1.0
+    assert movers[0]["if_b"] == 0.0
+
+
 def test_bubble_game_still_reports_playoffs():
     """May behaviour is unchanged: the biggest mover is the berth."""
     outcome_matrix = [[True]] * 100 + [[False]] * 100

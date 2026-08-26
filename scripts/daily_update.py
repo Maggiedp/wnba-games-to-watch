@@ -1047,7 +1047,7 @@ def _importance_for_game(
 def _importance_detail_for_game(
     game: dict,
     outcome_matrix: list[list[bool | None]],
-    playoff_sets: list[set[str]],
+    fate_levels: list[dict[str, str]],
     remaining_event_index: dict[str, int],
     bracket_state=None,
     bracket_outcomes: list[dict[tuple[str, int], bool]] | None = None,
@@ -1119,7 +1119,7 @@ def _importance_detail_for_game(
         return None
 
     movers = compute_directional_movers_from_matrix(
-        outcome_matrix, playoff_sets, game_index, team_names
+        outcome_matrix, fate_levels, game_index, team_names
     )
     if not movers:
         return None
