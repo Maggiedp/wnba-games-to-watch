@@ -397,10 +397,6 @@ async function assertBridgeLabels(page, label) {
 // absolutely. This one holds at every width because it asks a question that is
 // width-independent: did opening a panel make the table wider than the
 // leaderboard alone needs?
-//
-// (The "~30px at 769px is pre-existing" caveat this comment used to carry is
-// gone — that was item (p), fixed alongside this by extending the condensed
-// table styling to 800px.)
 async function assertPanelDoesNotWidenTheTable(page, label) {
   const measure = () => page.evaluate(() => {
     const d = document.querySelector('.shots-table-scroll');
@@ -438,8 +434,12 @@ async function assertShotPanelLayout(page, label, width) {
   // Below it, the panel's job is to fit the screen instead. Kept as an
   // either/or rather than running both everywhere so each failure message
   // names the cause that actually applies at that width.
-  if (width > CARD_BREAKPOINT) await assertPanelColumns(page, label);
-  else await assertPanelFitsViewport(page, label);
+  if (width > CARD_BREAKPOINT) {
+    await assertPanelColumns(page, label);
+  } else {
+    await assertPanelFitsViewport(page, label);
+    await assertPanelStaysInView(page, label);
+  }
   // Self-gates to desktop widths; here it also covers the panel-open case.
   await assertLeaderboardFits(page, label, width);
   // LAST: this one collapses the panel to take its comparison measurement, so
@@ -447,32 +447,50 @@ async function assertShotPanelLayout(page, label, width) {
   await assertPanelDoesNotWidenTheTable(page, label);
 }
 
-// Regression (item p): above the card breakpoint the leaderboard is meant to
-// FIT its wrapper — `.shots-table-scroll { overflow-x: auto }` is a
-// contained-overflow safety net, not a layout the reader should meet. It was
-// meeting it: the condensed table styling ended at 768px while the full-size
-// table's min-content (710px) stayed wider than the wrapper until 799px, so
-// 769-798px side-scrolled the board by up to 30px.
+// The ABSOLUTE half of the wrapper-scroll family: this wrapper is a
+// contained-overflow safety net, so reaching it at all is the bug.
 //
-// Desktop-only, for the reason given on assertPanelDoesNotWidenTheTable above.
-// Self-gating on width so both call sites can call it unconditionally.
+// Deliberately NOT unified with assertPanelDoesNotWidenTheTable, which is
+// RELATIVE (open vs closed). That split is a real difference, not an
+// implementation inconsistency — a phone-width table is SUPPOSED to scroll —
+// so it stays visible in the names rather than becoming a mode flag.
+async function assertWrapperDoesNotScroll(page, label, selector, hint) {
+  const wraps = await page.evaluate(
+    (sel) => [...document.querySelectorAll(sel)]
+      .map((d) => ({ client: d.clientWidth, scroll: d.scrollWidth })),
+    selector,
+  );
+  assert.ok(wraps.length > 0, `${label}: no ${selector} rendered`);
+  wraps.forEach((w, i) => {
+    const which = wraps.length > 1 ? ` [${i}]` : '';
+    assert.ok(
+      w.scroll <= w.client,
+      `${label}: ${selector}${which} scrolls inside its wrapper by `
+      + `${w.scroll - w.client}px (min-content ${w.scroll}px vs ${w.client}px `
+      + `visible) — ${hint}`,
+    );
+  });
+}
+
+// Regression (item p): the condensed table styling ended at 768px while the
+// full-size table's min-content stayed wider than the wrapper until 799px, so
+// 769-798px side-scrolled the board. Numbers and derivation live on
+// SHOT_MAKING_WIDTHS, which is what walks the tight end of that range.
 //
 // ⚠️ This assert is only as strong as the seed's widest Player cell: with the
 // old uniform short names the seeded table's min-content was 680px and this
 // passed at 769px on the very code that overflowed production by 30px. See
 // _LONGEST_NAME in smoke_server.py before trusting a green run here.
+//
+// Desktop-only because below the breakpoint this table legitimately scrolls
+// (see assertPanelDoesNotWidenTheTable). Self-gating so both call sites — the
+// collapsed page def and assertShotPanelLayout — can call it unconditionally.
 async function assertLeaderboardFits(page, label, width) {
   if (width <= CARD_BREAKPOINT) return;
-  const m = await page.evaluate(() => {
-    const d = document.querySelector('.shots-table-scroll');
-    return d && { client: d.clientWidth, scroll: d.scrollWidth };
-  });
-  assert.ok(m, `${label}: no .shots-table-scroll rendered`);
-  assert.ok(
-    m.scroll <= m.client,
-    `${label}: the leaderboard overflows its wrapper by ${m.scroll - m.client}px `
-    + `(min-content ${m.scroll}px vs ${m.client}px visible) — does the condensed `
-    + 'table styling stop before the viewport is wide enough for the full-size table?',
+  await assertWrapperDoesNotScroll(
+    page, label, '.shots-table-scroll',
+    'does the condensed table styling stop before the viewport is wide enough '
+    + 'for the full-size table?',
   );
 }
 
@@ -502,27 +520,30 @@ async function assertPanelFitsViewport(page, label) {
     + 'missing from .shot-panel, or did .shots-table-scroll lose '
     + '`container-type: inline-size`?',
   );
+}
 
-  // Fitting is only half of it: the panel sits in a cell that is still wider
-  // than the screen, so without `position: sticky` a correctly-sized panel
-  // still slides out of view as soon as the reader scrolls the table's columns.
-  // Scroll to the far edge and require the panel to have followed. Restores
-  // scrollLeft so nothing downstream measures a scrolled table.
-  // Both rects are viewport-relative, so the visible region is the CONTAINER's
-  // rect — not `0..clientWidth`. The scroll container starts at the page's left
-  // padding (x=37 at phone widths), so comparing against 0 fails on correct
-  // layout: a perfectly stuck panel reads 37..283, which is exactly the
-  // container's 246px of visible width.
+// The other half of the (q) fix, and a separate invariant from fitting: the
+// panel sits in a cell still wider than the screen, so without `position:
+// sticky` a correctly-SIZED panel still slides out of view the moment the
+// reader scrolls the table's columns. Scroll to the far edge and require the
+// panel to have followed, then put scrollLeft back so nothing downstream
+// measures a scrolled table.
+//
+// Both rects are viewport-relative, so the visible region is the CONTAINER's
+// rect — not `0..clientWidth`. The scroll container starts at the page's left
+// padding (x=37 at phone widths), so comparing against 0 fails on correct
+// layout: a perfectly stuck panel reads 37..283, which is exactly the
+// container's 246px of visible width.
+async function assertPanelStaysInView(page, label) {
   const stuck = await page.evaluate(() => {
     const d = document.querySelector('.shots-table-scroll');
-    const before = d.scrollLeft;
     d.scrollLeft = d.scrollWidth;
     const p = document.querySelector('.shot-panel').getBoundingClientRect();
     const c = d.getBoundingClientRect();
     const out = {
       left: p.left, right: p.right, cLeft: c.left, cRight: c.right, scrolled: d.scrollLeft,
     };
-    d.scrollLeft = before;
+    d.scrollLeft = 0;  // every subtest gets a fresh page, so 0 is where it was
     return out;
   });
   assert.ok(
@@ -588,19 +609,11 @@ async function assertPanelColumns(page, label) {
 // the phone layout renders cards, and no .games-table-scroll is reached.
 async function assertGamesTablesFit(page, label, width) {
   if (width <= CARD_BREAKPOINT) return;
-  const wraps = await page.evaluate(
-    () => [...document.querySelectorAll('.games-table-scroll')]
-      .map((d) => ({ client: d.clientWidth, scroll: d.scrollWidth })),
+  await assertWrapperDoesNotScroll(
+    page, label, '.games-table-scroll',
+    'has the hide-mobile breakpoint moved below the width where the full '
+    + 'table fits?',
   );
-  assert.ok(wraps.length > 0, `${label}: no .games-table-scroll rendered`);
-  wraps.forEach((w, i) => {
-    assert.ok(
-      w.scroll <= w.client,
-      `${label}: games table ${i} scrolls inside its wrapper (${w.scroll} > `
-      + `${w.client}) — has the hide-mobile breakpoint moved below the width `
-      + 'where the full table fits?',
-    );
-  });
 }
 
 // Homepage states. Each apply() ASSERTS the toggle took effect (waits on the
@@ -675,15 +688,18 @@ test('every template breakpoint is walked or waived', () => {
     .concat(fs.readFileSync(
       path.join(__dirname, '..', '..', 'src', 'api', 'routes.py'), 'utf8'));
 
-  // Read the walked widths off the page defs themselves rather than hand-listing
-  // the width constants. The hand-listed version could not see a NEW per-page
-  // list: adding SHOT_MAKING_WIDTHS made this test report 801 as an unwalked
-  // band while the walk was in fact loading it, which is a false failure in the
-  // one test whose whole job is to be trustworthy about coverage.
+  // Mirrors the two walk loops exactly — same collections, same defaults (see
+  // the `pageDef.widths || WIDTHS` and `state.widths || HOMEPAGE_WIDTHS` in the
+  // walk above) — so the walked set is the walked set by construction, with no
+  // constant hand-listed here. The hand-listed version could not see a NEW
+  // per-page list: adding SHOT_MAKING_WIDTHS made this test report 801 as an
+  // unwalked band while the walk was in fact loading it, a false failure in the
+  // one test whose whole job is to be trustworthy about coverage. Restating the
+  // defaults here rather than reusing them would leave that same failure one
+  // level down, for the next page def that introduces a default.
   const walked = new Set([
-    ...WIDTHS, ...HOMEPAGE_WIDTHS,
-    ...PAGES.flatMap((p) => p.widths || []),
-    ...HOMEPAGE_STATES.flatMap((s) => s.widths || []),
+    ...PAGES.flatMap((p) => p.widths || WIDTHS),
+    ...HOMEPAGE_STATES.flatMap((s) => s.widths || HOMEPAGE_WIDTHS),
   ]);
   const found = new Set();
   for (const src of sources) {
