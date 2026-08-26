@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 from scripts.daily_update import _importance_detail_for_game
+from src.scoring.monte_carlo import FATE_LOST_QF, FATE_MISSED
 
 
 def _post_inputs():
@@ -27,12 +28,18 @@ def _post_inputs():
 
 
 def _reg_inputs():
-    # 1 remaining game (idx 0); Storm vs Sky. Sun is the mover.
+    # 1 remaining game (idx 0); Storm vs Sky. Sun is the mover (makes the
+    # playoffs, losing in the QF, only when team_a/Storm wins).
     outcome_matrix = [[True], [True], [False], [False]]
-    playoff_sets = [{"Sun"}, {"Sun"}, set(), set()]
+    fate_levels = [
+        {"Sun": FATE_LOST_QF},
+        {"Sun": FATE_LOST_QF},
+        {"Sun": FATE_MISSED},
+        {"Sun": FATE_MISSED},
+    ]
     remaining_event_index = {"evt1": 0}
     team_names = ["Sun", "Storm", "Sky"]
-    return outcome_matrix, playoff_sets, remaining_event_index, team_names
+    return outcome_matrix, fate_levels, remaining_event_index, team_names
 
 
 def test_regular_season_payload_shape():
@@ -54,9 +61,11 @@ def test_preseason_returns_none():
 
 def test_regular_season_no_movers_returns_none():
     om = [[True], [False]]
-    ps = [{"Locked"}, {"Locked"}]
+    # "Locked" reaches the same fate (lost_qf) regardless of outcome -> no
+    # milestone moves, so no mover clears the threshold.
+    fl = [{"Locked": FATE_LOST_QF}, {"Locked": FATE_LOST_QF}]
     game = {"event_id": "e", "team_a": "Storm", "team_b": "Sky", "season_type": 2}
-    out = _importance_detail_for_game(game, om, ps, {"e": 0}, team_names=["Locked"])
+    out = _importance_detail_for_game(game, om, fl, {"e": 0}, team_names=["Locked"])
     assert out is None
 
 
@@ -116,8 +125,9 @@ def test_zero_importance_suppresses_movers():
     # Sun's playoff rate: 26/50 if team_a wins vs 24/50 if team_b wins — a 0.04
     # raw delta (>= min_delta 0.03) that is pure finite-sample noise.
     outcome_matrix = [[s < 50] for s in range(100)]
-    playoff_sets = [
-        ({"Sun"} if (s < 26 or 50 <= s < 74) else set()) for s in range(100)
+    fate_levels = [
+        {"Sun": FATE_LOST_QF if (s < 26 or 50 <= s < 74) else FATE_MISSED}
+        for s in range(100)
     ]
     idx = {"evt1": 0}
     names = ["Sun", "Storm", "Sky"]
@@ -125,13 +135,13 @@ def test_zero_importance_suppresses_movers():
     # Sanity: without the gate the mover would render.
     assert (
         _importance_detail_for_game(
-            game, outcome_matrix, playoff_sets, idx, team_names=names
+            game, outcome_matrix, fate_levels, idx, team_names=names
         )
         is not None
     )
     assert (
         _importance_detail_for_game(
-            game, outcome_matrix, playoff_sets, idx, team_names=names, importance=0.0
+            game, outcome_matrix, fate_levels, idx, team_names=names, importance=0.0
         )
         is None
     )

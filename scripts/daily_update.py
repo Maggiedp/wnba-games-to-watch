@@ -1267,7 +1267,7 @@ def compute_daily_scores(
         importance_detail = _importance_detail_for_game(
             game,
             outcome_matrix,
-            playoff_sets,
+            fate_levels,
             remaining_event_index,
             bracket_state=bracket_state,
             bracket_outcomes=bracket_outcomes,

@@ -408,34 +408,81 @@ def compute_importance_from_matrix(
     return swings
 
 
+# Cumulative milestones for the "What's at stake" panel. The swing sums
+# over exclusive fate levels; the panel reports the milestone whose odds
+# moved most, because "odds of reaching the semis" reads naturally and
+# "odds of losing in the semifinals" does not.
+_MILESTONES: tuple[tuple[str, frozenset[str]], ...] = (
+    (
+        "playoffs",
+        frozenset({FATE_LOST_QF, FATE_LOST_SF, FATE_LOST_FINALS, FATE_CHAMPION}),
+    ),
+    ("semis", frozenset({FATE_LOST_SF, FATE_LOST_FINALS, FATE_CHAMPION})),
+    ("finals", frozenset({FATE_LOST_FINALS, FATE_CHAMPION})),
+    ("championship", frozenset({FATE_CHAMPION})),
+)
+
+
 def compute_directional_movers_from_matrix(
     outcome_matrix: list[list[bool | None]],
-    playoff_sets: list[set[str]],
+    fate_levels: list[dict[str, str]],
     game_idx: int,
     team_names: list[str],
     top_n: int = 3,
     min_delta: float = 0.03,
 ) -> list[dict]:
-    """Per-team directional playoff-odds movers for one focal game.
+    """Per-team directional milestone movers for one focal game.
 
     Partitions the sim set by who won ``game_idx`` (same split as
-    ``compute_importance_from_matrix``), then for each team computes
-    P(make playoffs | team_a won) and P(make playoffs | team_b won).
-    Returns up to ``top_n`` teams with the largest ``|if_a - if_b|``, keeping
-    only those whose delta is >= ``min_delta``, sorted descending by delta.
-    Returns ``[]`` if either outcome bucket is empty (game decided/unplayed in
-    all sims). Each dict: ``{"team": str, "if_a": float, "if_b": float}``.
+    ``compute_importance_from_matrix``), then for each team finds the
+    cumulative milestone (make playoffs / reach semis / reach finals / win
+    title) whose odds moved most between the two partitions — because the
+    swing itself sums over five *exclusive* round-reached fate levels, but
+    "odds of reaching the semis" reads naturally on the panel while "odds
+    of losing in the semifinals" does not. Each team reports exactly one
+    milestone: its own biggest mover, not a fixed milestone shared across
+    teams. Returns up to ``top_n`` teams with the largest such delta,
+    keeping only those whose delta is >= ``min_delta``, sorted descending
+    by delta. Returns ``[]`` if either outcome bucket is empty (game
+    decided/unplayed in all sims). Each dict:
+    ``{"team": str, "level": str, "if_a": float, "if_b": float}``.
     """
     a_indices, b_indices = _partition_outcomes(outcome_matrix, game_idx)
     if not a_indices or not b_indices:
         return []
 
+    n_a, n_b = len(a_indices), len(b_indices)
     movers: list[dict] = []
     for team in team_names:
-        rate_a = sum(1 for s in a_indices if team in playoff_sets[s]) / len(a_indices)
-        rate_b = sum(1 for s in b_indices if team in playoff_sets[s]) / len(b_indices)
-        if abs(rate_a - rate_b) >= min_delta:
-            movers.append({"team": team, "if_a": rate_a, "if_b": rate_b})
+        counts_a = dict.fromkeys(FATE_LEVELS, 0)
+        counts_b = dict.fromkeys(FATE_LEVELS, 0)
+        for s in a_indices:
+            level = fate_levels[s].get(team)
+            if level is not None:
+                counts_a[level] += 1
+        for s in b_indices:
+            level = fate_levels[s].get(team)
+            if level is not None:
+                counts_b[level] += 1
+
+        best: dict | None = None
+        best_delta = 0.0
+        for label, members in _MILESTONES:
+            rate_a = sum(counts_a[lv] for lv in members) / n_a
+            rate_b = sum(counts_b[lv] for lv in members) / n_b
+            delta = abs(rate_a - rate_b)
+            # Strict > keeps the first milestone on a tie, so _MILESTONES
+            # order makes the choice deterministic.
+            if delta > best_delta:
+                best_delta = delta
+                best = {
+                    "team": team,
+                    "level": label,
+                    "if_a": rate_a,
+                    "if_b": rate_b,
+                }
+        if best is not None and best_delta >= min_delta:
+            movers.append(best)
 
     movers.sort(key=lambda m: abs(m["if_a"] - m["if_b"]), reverse=True)
     return movers[:top_n]
