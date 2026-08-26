@@ -237,6 +237,18 @@ def seed(session) -> None:
     # --- Shot-making: one leaderboard row per team (for /shot-making). Varied
     # points_added (+ and -) and diet mixes so the walk overflow-checks the
     # populated table, legend, and diet bars at phone widths.
+    #
+    # The Player column is what sets the leaderboard's min-content width, so one
+    # row has to carry a name as long as the longest REAL one or a fit assert on
+    # .shots-table-scroll passes on data that is incapable of failing it. That
+    # was not hypothetical: with the old uniform `Shooter LVA 0` (13 chars) the
+    # seeded table's min-content was 680px against production's 710px, so the
+    # walk stayed green at 769px while production overflowed its wrapper by
+    # 30px. Production's longest name (measured 2026-08-23) is "Charlisse
+    # Leger-Walker" at 22 characters; this is 25, so the seed is the tighter
+    # case. Shooter 0 keeps its short name — it is the row the walk expands, and
+    # its bridge geometry is tuned in the comment below.
+    _LONGEST_NAME = "Shooter Leger-Vandersloot"
     _diets = [
         {"rim": 0.5, "mid": 0.3, "three": 0.2},
         {"three": 0.5, "mid": 0.3, "rim": 0.2},
@@ -265,7 +277,7 @@ def seed(session) -> None:
             session,
             season,
             f"smoke-shooter-{i}",
-            athlete_name=f"Shooter {t.abbreviation} {i}",
+            athlete_name=_LONGEST_NAME if i == 1 else f"Shooter {t.abbreviation} {i}",
             team_id=str(t.id),
             team_abbr=t.abbreviation,
             fga=fga,

@@ -88,7 +88,14 @@
             }
             .shots-defs b { color: var(--navy-3); font-weight: 600; }
             .xpps-mark { color: var(--text-subtle); font-size: 0.85em; margin-left: 3px; }
-            .shots-table-scroll { overflow-x: auto; }
+            /* container-type makes this the query container for `cqw` units, so
+               the expand panel can size itself to the VISIBLE region rather than
+               to the table it sits inside — see `.shot-panel` in the 768px
+               query. It also applies inline-size + layout containment; that is
+               harmless here (this div's own width never depended on its
+               contents) and was verified not to disturb the bridge's absolutely
+               positioned marks, which stay at 49% of the axis before and after. */
+            .shots-table-scroll { overflow-x: auto; container-type: inline-size; }
             .shots-table {
                 width: 100%;
                 border-collapse: collapse;
@@ -137,7 +144,20 @@
             .diet-three { background: var(--navy); }
             .diet-other { background: #c7ccd4; }
 
-            @media (max-width: 768px) {
+            /* 800, not the 768 card breakpoint the rest of the page uses, and
+               the two are decoupled on purpose — they solve different problems.
+               Condensing is about whether the TABLE fits its wrapper, and the
+               full-size table's min-content is 710px while the wrapper is only
+               680-709px wide from 769px up to 798px. Ending the condensed
+               styling at 768 therefore left a 30px-tapering band where the
+               leaderboard side-scrolled inside .shots-table-scroll (measured on
+               production 2026-08-23: 30px at 769, 19 at 780, 9 at 790, 1 at 798,
+               0 at 799). 800 is the measured bound, not a round number: at 801
+               the wrapper is 712px against the desktop table's 710px, so the
+               desktop styling has exactly enough room the moment this rule
+               stops applying. The panel's own 768px collapse below is
+               independent — don't "reconcile" them to one number. */
+            @media (max-width: 800px) {
                 .shots-table { font-size: 13px; }
                 .shots-table th, .shots-table td { padding: 5px 6px; }
                 .diet-bar { width: 70px; }
@@ -226,6 +246,19 @@
             @media (max-width: 768px) {
                 .shot-panel { grid-template-columns: 1fr; gap: 12px; }
                 .shot-panel .chart-wrap { max-width: 100%; }
+                /* The panel lives in a `colspan` cell INSIDE .shots-table-scroll,
+                   so by default it is laid out against the table's width, not the
+                   screen's: at a 390px viewport the cell is 549px and the chart
+                   rendered ~1.7x the visible region, needing a sideways scroll to
+                   see all of. `100cqw` resolves against .shots-table-scroll's
+                   client width, so the panel is exactly the visible region with no
+                   measured constant and no resize listener; sticky pins it to the
+                   scrollport so the chart stays put while the table's columns
+                   scroll under it. Scoped to phones only so desktop is provably
+                   untouched — above the breakpoint 100cqw already equals the cell
+                   width, so this would be a no-op there anyway (verified: panel
+                   846px, chart 420px, zones and bridge unmoved at 961px). */
+                .shot-panel { position: sticky; left: 0; width: 100cqw; }
             }
 
             /* ---------- Vs-league chart: one axis, two marks ----------
