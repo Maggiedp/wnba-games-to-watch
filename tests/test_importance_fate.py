@@ -1,3 +1,4 @@
+import math
 import random
 
 from src.scoring.monte_carlo import (
@@ -8,6 +9,7 @@ from src.scoring.monte_carlo import (
     FATE_LOST_SF,
     FATE_MISSED,
     _fate_levels_for_sim,
+    compute_importance_from_matrix,
     run_monte_carlo_simulation,
 )
 from tests.test_monte_carlo import _G2, _S3
@@ -132,3 +134,104 @@ def test_fate_levels_are_consistent_with_the_real_bracket_for_eight_teams():
 
         # A concrete semifinal loser must read lost_sf, not lost_finals.
         assert sf_losers[0] not in finals_losers
+
+
+def _fate(level_by_team):
+    return dict(level_by_team)
+
+
+def test_locked_field_seeding_swing_is_not_zero():
+    """THE DEFECT. All berths decided, but the game moves seeding.
+
+    Every team makes the playoffs in every sim, so the old
+    make-playoffs fate scores this exactly 0. The round-reached fate
+    sees the seeding move.
+    """
+    teams = ["A", "B"]
+    # 100 sims: A won the game in the first 50, B in the rest.
+    outcome_matrix = [[True]] * 50 + [[False]] * 50
+    fate_levels = [_fate({"A": FATE_LOST_SF, "B": FATE_LOST_QF})] * 50 + [
+        _fate({"A": FATE_LOST_QF, "B": FATE_LOST_SF})
+    ] * 50
+    swings = compute_importance_from_matrix(
+        outcome_matrix, fate_levels, [("A", "B")], teams
+    )
+    assert swings[0] > 0.5
+
+
+def test_bubble_game_still_swings():
+    """A berth genuinely in play must stay high (spec section 5, gate 1)."""
+    teams = ["A", "B"]
+    outcome_matrix = [[True]] * 50 + [[False]] * 50
+    fate_levels = [_fate({"A": FATE_LOST_QF, "B": FATE_MISSED})] * 50 + [
+        _fate({"A": FATE_MISSED, "B": FATE_LOST_QF})
+    ] * 50
+    swings = compute_importance_from_matrix(
+        outcome_matrix, fate_levels, [("A", "B")], teams
+    )
+    assert swings[0] > 0.5
+
+
+def test_decided_season_swings_zero():
+    """Nothing moves: both outcomes leave every fate identical."""
+    teams = ["A", "B"]
+    outcome_matrix = [[True]] * 50 + [[False]] * 50
+    fate_levels = [_fate({"A": FATE_CHAMPION, "B": FATE_MISSED})] * 100
+    swings = compute_importance_from_matrix(
+        outcome_matrix, fate_levels, [("A", "B")], teams
+    )
+    assert swings[0] == 0.0
+
+
+def test_noise_floor_is_subtracted_per_level_not_per_team():
+    """The floor is Σ over LEVELS of a half-normal term, not one term per team.
+
+    Fixture: a single team "A" whose fate splits 80/20 between lost_qf and
+    lost_sf depending on which side of the game outcome the sim falls on
+    (n_a = n_b = 100). That's a genuinely positive raw swing:
+
+        raw = |80/100 - 20/100| (lost_qf) + |20/100 - 80/100| (lost_sf) = 1.2
+
+    The correct floor sums one half-normal term per level, using each
+    level's own pooled rate (lost_qf and lost_sf are both pooled 0.5; the
+    other three levels are pooled 0 and contribute 0):
+
+        floor = 2 * sqrt(2/pi * 0.5*0.5*(1/100 + 1/100))
+              = 2 * sqrt(2/pi * 0.005)
+
+    A buggy version that accumulates ONE floor term per team (rather than
+    per level) has no single well-defined pooled rate to use here — the
+    per-team aggregate count for "A" is 100 on each side by construction
+    (every sim assigns A exactly one level), so its pooled rate is always
+    1.0 and the half-normal variance term collapses to 0. That version
+    reports the floor as 0 and the corrected swing as the raw 1.2 — a
+    different number from the correct ~1.0872, which is exactly what this
+    test's exact-value assertion catches.
+
+    The expected floor is inlined per the repo's anti-tautology convention
+    (src/scoring/CLAUDE.md) — never call _noise_floor_term from a test that
+    asserts its value.
+    """
+    teams = ["A"]
+    outcome_matrix = [[True]] * 100 + [[False]] * 100
+    fate_levels = (
+        [_fate({"A": FATE_LOST_QF})] * 80
+        + [_fate({"A": FATE_LOST_SF})] * 20
+        + [_fate({"A": FATE_LOST_SF})] * 80
+        + [_fate({"A": FATE_LOST_QF})] * 20
+    )
+    swings = compute_importance_from_matrix(
+        outcome_matrix, fate_levels, [("A", "A")], teams
+    )
+
+    n_a = n_b = 100
+    raw = abs(80 / n_a - 20 / n_b) + abs(20 / n_a - 80 / n_b)  # lost_qf + lost_sf
+
+    floor = 0.0
+    for pooled in (0.0, 0.5, 0.5, 0.0, 0.0):  # missed, qf, sf, finals, champ
+        variance = pooled * (1.0 - pooled) * (1.0 / n_a + 1.0 / n_b)
+        floor += math.sqrt(2.0 / math.pi * variance)
+
+    expected = raw - floor
+    assert expected > 1.0
+    assert swings[0] == expected

@@ -1215,7 +1215,7 @@ def compute_daily_scores(
 
     team_names = list(standings.keys())
     raw_swings = compute_importance_from_matrix(
-        outcome_matrix, playoff_sets, remaining_games, team_names
+        outcome_matrix, fate_levels, remaining_games, team_names
     )
     # Pre-compute (slot, game_num) per upcoming postseason game so multiple
     # scheduled games in the same series get distinct ordinals (Game 1, 2, 3...

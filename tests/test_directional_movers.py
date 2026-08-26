@@ -1,3 +1,5 @@
+import pytest
+
 from src.scoring.monte_carlo import (
     _noise_floor_term,
     compute_directional_movers_from_matrix,
@@ -42,6 +44,31 @@ def test_directional_movers_respects_top_n_and_min_delta():
     assert len(movers) == 1 and movers[0]["team"] == "A"
 
 
+@pytest.mark.xfail(
+    reason=(
+        "Superseded by design (stretch-run-importance spec, sec 4d), not a "
+        "regression: compute_directional_movers_from_matrix still reports "
+        "the OLD binary-playoff_sets model, one delta per team. But "
+        "compute_importance_from_matrix (Task 2, this branch) now sums "
+        "swing over five round-reached fate levels per team, so the "
+        "movers' sum is no longer equal to the corrected swing plus its "
+        "floor -- the design's stated intent is that once movers report "
+        "ONE milestone per team (the level whose odds moved most), their "
+        "sum becomes a LOWER BOUND on the raw multi-level swing, not an "
+        "equality. This test's premise (directional_sum == corrected_swing "
+        "+ floor) is exactly the relationship the design ends. Task 3 owns "
+        "compute_directional_movers_from_matrix's rewrite to the new "
+        "fate_levels signature; once that lands, this test must be "
+        "rewritten against the new signature (asserting the lower-bound "
+        "relationship, not equality) and this xfail marker removed. NOTE "
+        "for that rewrite: this test currently builds its expected floor "
+        "by calling _noise_floor_term(...) directly -- the repo's "
+        "anti-tautology convention (src/scoring/CLAUDE.md) forbids that "
+        "for a test asserting its value; inline the sqrt(2/pi * ...) "
+        "arithmetic instead, as the sibling tests in test_importance_fate.py "
+        "and test_monte_carlo.py do."
+    ),
+)
 def test_directional_sum_matches_existing_swing():
     # Movers report raw per-team deltas. The swing is floor-corrected.
     # Verify: directional_sum == corrected_swing + floor (within numerical precision).

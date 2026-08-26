@@ -339,16 +339,20 @@ def _noise_floor_term(pooled_rate: float, n_a: int, n_b: int) -> float:
 
 def compute_importance_from_matrix(
     outcome_matrix: list[list[bool | None]],
-    playoff_sets: list[set[str]],
+    fate_levels: list[dict[str, str]],
     remaining_games: list[tuple[str, str]],
     team_names: list[str],
 ) -> list[float]:
     """Compute importance swing for every remaining game from one simulation run.
 
-    Splits the simulation set by who won each game, then computes the all-team
-    sum of |playoff_rate(a_won_sims) - playoff_rate(b_won_sims)|, minus the
-    analytic noise floor (sum of per-team half-normal means under H0), clamped
-    at 0 — so finite-sample noise doesn't inflate dead-rubbers (~8/100 measured).
+    Splits the simulation set by who won each game, then for each team sums
+    |rate(level, a_won_sims) - rate(level, b_won_sims)| over the five
+    round-reached fate levels, minus the analytic noise floor (sum of
+    per-team-per-level half-normal means under H0), clamped at 0 — so
+    finite-sample noise doesn't inflate dead-rubbers. Using round-reached
+    fate (rather than binary make-playoffs) means a game that only moves
+    seeding — not who's in the field — still scores nonzero once the
+    playoff picture is locked.
 
     Works because Elo ratings are fixed during simulation — game outcomes don't
     affect downstream win probabilities, so observed splits and forced splits
@@ -357,7 +361,8 @@ def compute_importance_from_matrix(
     Args:
         outcome_matrix: shape (num_sims, num_remaining_games); True = team_a won,
             False = team_b won, None = unknown team (skip this sim for this game).
-        playoff_sets: shape (num_sims,); set of team names that made playoffs.
+        fate_levels: shape (num_sims,); per-sim map of team name -> one of
+            FATE_LEVELS (how far that team got in that sim).
         remaining_games: list of (home_team, away_team) used to produce the matrix.
         team_names: all team names to sum swing across.
 
@@ -378,10 +383,26 @@ def compute_importance_from_matrix(
         swing = 0.0
         floor = 0.0
         for team in team_names:
-            count_a = sum(1 for s in a_indices if team in playoff_sets[s])
-            count_b = sum(1 for s in b_indices if team in playoff_sets[s])
-            swing += abs(count_a / n_a - count_b / n_b)
-            floor += _noise_floor_term((count_a + count_b) / (n_a + n_b), n_a, n_b)
+            # One pass per bucket per team, NOT one per level: this keeps
+            # the function at O(games x teams x sims), the same cost as the
+            # binary-fate version. A nested per-level scan is 5x and can
+            # push the synchronous daily job toward Cloud Run's timeout.
+            counts_a = dict.fromkeys(FATE_LEVELS, 0)
+            counts_b = dict.fromkeys(FATE_LEVELS, 0)
+            for s in a_indices:
+                level = fate_levels[s].get(team)
+                if level is not None:
+                    counts_a[level] += 1
+            for s in b_indices:
+                level = fate_levels[s].get(team)
+                if level is not None:
+                    counts_b[level] += 1
+
+            for level in FATE_LEVELS:
+                count_a = counts_a[level]
+                count_b = counts_b[level]
+                swing += abs(count_a / n_a - count_b / n_b)
+                floor += _noise_floor_term((count_a + count_b) / (n_a + n_b), n_a, n_b)
         swings.append(max(0.0, swing - floor))
 
     return swings
