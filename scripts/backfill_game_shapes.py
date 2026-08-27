@@ -22,6 +22,7 @@ import logging
 import sys
 from datetime import date
 
+from scripts._recompute_gate import recompute_gate
 from scripts.daily_update import ShapeResult, _build_and_store_shape
 from src.constants import GameStatus
 from src.data.espn_api import fetch_games_for_range
@@ -146,17 +147,17 @@ def main() -> int:
                     "re-run to fill the gaps (idempotent)."
                 )
                 return 1
-            if failed_games:
-                # Populated only in --recompute mode: existing rows that couldn't
-                # be refreshed, so their stale pre-fix data persists. Fail closed
-                # so the operator re-runs until the archive fully converges.
-                logger.error(
-                    f"Recompute INCOMPLETE: {len(failed_games)} stored game(s) "
-                    f"could not be refreshed (stale rows kept): {failed_games}. "
-                    "Re-run to retry; a game that stays 'unshapeable' needs "
-                    "--recompute --purge-unshapeable to remove its row."
-                )
-                return 1
+            # Populated only in --recompute mode: existing rows that couldn't
+            # be refreshed, so their stale pre-fix data persists. Fail closed
+            # so the operator re-runs until the archive fully converges.
+            gate = recompute_gate(
+                failed_games,
+                "game",
+                extra_hint="A game that stays 'unshapeable' needs "
+                "--recompute --purge-unshapeable to remove its row.",
+            )
+            if gate:
+                return gate
             logger.info(f"=== Backfill complete: {total} stored ===")
             return 0
         finally:

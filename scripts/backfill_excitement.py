@@ -26,6 +26,7 @@ Usage:
 import logging
 import sys
 
+from scripts._recompute_gate import recompute_gate
 from scripts.daily_update import (
     populate_excitement_for_recent_completions,
     refresh_recent_excitement_scores,
@@ -56,13 +57,9 @@ def main() -> int:
             # No retry cap and the live-WP timeout — one-shot script,
             # we want every backlog row attempted.
             populate_excitement_for_recent_completions(session, limit=None, timeout=10)
-            if failed:
-                logger.error(
-                    f"Recompute INCOMPLETE: {len(failed)} stored game(s) could "
-                    f"not be refreshed (stale values kept): {failed}. "
-                    "Re-run to retry."
-                )
-                return 1
+            gate = recompute_gate(failed, "game")
+            if gate:
+                return gate
             logger.info("=== Backfill complete ===")
             return 0
         finally:
