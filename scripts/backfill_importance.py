@@ -39,10 +39,16 @@ silently stop agreeing with its own components.
 A regular-season game that can't be located in the remaining-games universe
 (e.g. a schedule mismatch) gets importance_score=None, exactly like
 compute_daily_scores' "not simulated" case — and `_impute_missing_importance`
-is reused verbatim so its contribution to `overall` blends in at that date's
-mean importance rather than deflating to 0. The mean is taken over ALL of
-that date's rankings (untouched preseason/postseason values included, same
-as production), not just the regular-season ones being rewritten.
+is reused verbatim so its contribution to `overall` blends in at the mean
+importance production would have imputed, rather than deflating to 0. That
+mean is NOT taken over just date_str's own games — compute_daily_scores
+scores every `upcoming_game` (every remaining regular-season game of the
+season, any future date) in ONE MC run each morning, and imputes over that
+whole run's `partial`. So the reconstructed pool here is every game in the
+SAME remaining-games universe (date >= date_str) fed to this date's MC run,
+normalized from that run's own `raw_swings` — not other dates' currently-
+stored `daily_rankings` rows, which would depend on this script's processing
+order and go stale/wrong-scale for dates not yet rebuilt.
 
 Each date is rewritten in ONE transaction, so a mid-run failure can't leave
 a date half-updated. Fails closed via scripts._recompute_gate.recompute_gate:
@@ -157,18 +163,24 @@ def rebuild_date(
             outcome_matrix, fate_levels, remaining, team_names
         )
 
-        # Map today's game(s) (unordered team pair, since home/away order in
-        # the ranking row isn't guaranteed to match the fetched schedule's)
-        # to their index in the swing list.
-        index_by_teams: dict[frozenset, int] = {
-            frozenset({g["team_a"], g["team_b"]}): i
-            for i, g in enumerate(remaining_rows)
-            if g.get("date") == date_str
+        # Map each remaining game to its index in the swing list by espn_id
+        # — mirrors daily_update.compute_daily_scores' remaining_event_index
+        # exactly (and its own `_importance_for_game` lookup). NOT a
+        # team-name frozenset: that degrades silently to "unmatched" on any
+        # team-name drift (rename, encoding difference), where an espn_id is
+        # immune. `game_row.espn_id` is already queried below.
+        remaining_event_index: dict[str, int] = {
+            g["event_id"]: i for i, g in enumerate(remaining_rows) if g.get("event_id")
         }
 
         # First pass: new importance (or None if unmatched) for regular-
         # season rows only; preseason/postseason rows are left alone
-        # entirely (their swing metric never changed scale).
+        # entirely (their swing metric never changed scale). A team_by_id
+        # miss or game_row is None/non-regular-season is a data-integrity
+        # edge case (unreachable in a healthy DB — see scripts/CLAUDE.md):
+        # such a row is simply skipped, left exactly as stored. It can no
+        # longer contaminate the imputation pool below (that pool is now
+        # reconstructed from raw_swings, not from stored rows).
         new_importance: dict[int, float | None] = {}
         for ranking in rankings:
             team_a = team_by_id.get(ranking.team_a_id)
@@ -186,7 +198,7 @@ def rebuild_date(
             )
             if game_row is None or game_row.season_type != 2:
                 continue
-            idx = index_by_teams.get(frozenset({team_a.name, team_b.name}))
+            idx = remaining_event_index.get(game_row.espn_id)
             new_importance[ranking.id] = (
                 normalize_importance_score(
                     raw_swings[idx], max_swing=REGULAR_SEASON_MAX_SWING
@@ -198,14 +210,22 @@ def rebuild_date(
         if not new_importance:
             return 0
 
-        # Impute exactly as compute_daily_scores does: the mean importance of
-        # every game ranked that day (untouched preseason/postseason values
-        # included), not just the regular-season games being rewritten.
-        all_importances = [
-            new_importance[r.id] if r.id in new_importance else r.importance_score
-            for r in rankings
+        # Impute exactly as compute_daily_scores does: the mean importance
+        # over the SAME population that morning's one MC run actually
+        # scored — every remaining regular-season game (date >= date_str),
+        # not just date_str's own games. Reconstructed straight from this
+        # run's raw_swings (index-aligned with `remaining`), not from other
+        # dates' currently-stored daily_rankings rows — those depend on
+        # this script's processing order and may still be old-scale/stale
+        # for dates not yet rebuilt. (Known scope limit: unlike production,
+        # this doesn't fold in any preseason/postseason games that were
+        # also "upcoming" as of date_str — structurally absent from the
+        # regular-season stretch this backfill covers; see scripts/CLAUDE.md.)
+        remaining_importances = [
+            normalize_importance_score(s, max_swing=REGULAR_SEASON_MAX_SWING)
+            for s in raw_swings
         ]
-        imputed = _impute_missing_importance(all_importances)
+        imputed = _impute_missing_importance(remaining_importances)
 
         changed = 0
         for ranking in rankings:
