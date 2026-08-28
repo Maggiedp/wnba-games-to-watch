@@ -77,21 +77,24 @@ fatigue signal to capture.) The tooling stays in the tree to re-check as more se
 
 ---
 
-## Importance — Monte Carlo playoff swing (validated, with a measured bias)
+## Importance — Monte Carlo round-reached swing (validated, with a measured bias)
 
-How much does tonight's result move the playoff picture?
+How much does tonight's result move each team's postseason fate?
 
 - A **single 10,000-run** Monte Carlo simulation plays out the rest of the regular season (and the
   bracket, once it exists), using the Elo win probabilities above for every game.
 - We record a full outcome matrix, then **partition** the 10k sims by who won each game and read off
-  the conditional playoff rates. Importance for one game is:
+  the conditional rates for **five exclusive fate levels** per team: missed the playoffs, lost in the
+  quarterfinals, lost in the semifinals, lost in the finals, or won the championship. Importance for
+  one game is:
 
   ```
-  swing = Σ_teams | P(team makes playoffs | team_a won) − P(team makes playoffs | team_b won) |
+  swing = Σ_teams Σ_levels | P(team's fate = level | team_a won) − P(team's fate = level | team_b won) |
   ```
 
-  summed across **all** teams — so a game that decides a bubble team's fate scores high even if
-  neither bubble team is playing in it.
+  summed across **all** teams and **all five levels** — so a game that only reshuffles a
+  contender's likely seed (and therefore its likely bracket path) shows up, even if it changes
+  nobody's playoff berth.
 - The partition trick is valid because Elo ratings are *frozen* during a sim, so a game's outcome
   doesn't change downstream win probabilities — conditioning on the observed outcome is
   distributionally identical to forcing it. This is why one 10k run suffices instead of
@@ -99,35 +102,73 @@ How much does tonight's result move the playoff picture?
 - Playoff odds shown on the site and the importance score come from the *same* run, so they're
   mutually consistent by construction.
 
-### Corrected bias: Σ|Δ| noise floor (analytic subtraction)
+### Why "reaches the playoffs" wasn't enough
+
+Through 2026-06, importance measured only whether a game swung a team's odds of *making* the
+playoffs. That metric has a structural failure mode: **once the playoff field clinches, every
+remaining regular-season game scores exactly 0.0**, because nobody's berth is in question anymore —
+even though seeding, and with it each team's bracket path, is still very much live. This isn't
+hypothetical: it happened. The 2026 field clinched in August, and all 47 remaining regular-season
+games scored 0.0 for the rest of the season — the tool's headline number went dead for exactly the
+stretch run, the stretch when seeding races matter most.
+
+The fix generalizes the fate variable from binary (makes the playoffs / doesn't) to the five-level
+round-reached scale above. The swing formula keeps its shape; it just sums over more outcomes per
+team. Because the bracket is single-elimination with a fixed no-reseed structure, sliding from a 5
+seed to an 8 seed means drawing the #1 seed in round one — which shows up on its own as lost
+`reach_semis` mass, without the model ever having to invent a seeding-importance weighting.
+
+**Measured (2025 season, 287 games over 102 dates, identical simulation draws under both fates):**
+
+| | berth-only (old) | round-reached (new) |
+|---|---|---|
+| max | 0.5174 | 1.0032 |
+| p99 | 0.4266 | 0.8889 |
+| p95 | 0.3221 | 0.6443 |
+| mean | 0.1063 | 0.2340 |
+
+Early season does **not** collapse under the new fate — May's day-max mean went 0.1683 → 0.3260,
+June's 0.1602 → 0.3106, so this isn't just a late-season patch. Locked-field dates lift off zero:
+the old fate had 6 zero-days across the season; the new fate has 1. The final date of the 2025
+season (2025-09-11, 4 games, nothing left to decide but seeding) went from 0.0000 to 0.4346. And the
+metric still reports zero when zero is genuinely true — 2025-09-10, a single game deciding nothing,
+stays at 0.0000 under both fates; it was not inflated into always-nonzero.
+
+### Corrected bias: Σ|Δ| noise floor (analytic subtraction, now per level)
 
 Summing the **absolute value** of finitely-estimated per-team rate differences is positively biased:
-even a game that changes nothing has `E[Σ|Δ|] > 0`, because each team's `|rate_a − rate_b|` is the
-absolute value of a noisy estimate. We measured it with a placebo bootstrap (re-split the same sims
-into same-size buckets *independent* of the game outcome): **≈ 8 normalized importance points
-(median 8.2, range 8.0–9.0)**, near-constant across realistic games — 10k sims keep both outcome
-buckets in the thousands even for a ~78% favorite, so the floor barely varied and mostly inflated
-absolute numbers, not the *ranking*. The games it genuinely distorted were true dead-rubbers (both
-teams locked in or eliminated), which scored ~8 instead of ~0.
-
-**Correction (since 2026-06):** under H₀ (outcome independent of a team's fate) each per-team
-difference is ≈ Normal(0, p(1−p)(1/n_a + 1/n_b)), so its absolute value is half-normal with mean
-`√(2/π)·σ`. We subtract the summed per-team floor
+even a game that changes nothing has `E[Σ|Δ|] > 0`, because each difference is the absolute value of
+a noisy estimate. Under the round-reached fate this bias accrues **once per team per level** — five
+half-normal terms per team instead of one — so the correction sums over both:
 
 ```
-Σ_t √(2/π)·√(p_t(1−p_t)·(1/n_a + 1/n_b))      (p_t = pooled rate across both buckets)
+Σ_t Σ_levels √(2/π)·√(p_level(1−p_level)·(1/n_a + 1/n_b))      (p_level = pooled rate across both buckets)
 ```
 
-from each game's raw swing and clamp at 0 (both regular-season playoff-odds swing and postseason
-championship swing). Dead-rubbers now score ~0; games with real stakes move by ~the constant the
-placebo measured. The same correction runs inside the season-ceiling calibration, so normalized
-scores stay on a consistent scale. The per-game placebo bootstrap remains the validation tool, not
-the production correction — it's expensive daily and the analytic floor matches it within noise.
+subtracted from each game's raw swing and clamped at 0 (both regular-season swing and postseason
+championship swing, which stays single-level). Dead-rubbers — both teams' entire fate distribution
+already locked in — still score ~0; games with real stakes move by however much signal clears the
+floor. The per-game placebo-bootstrap methodology that originally validated the single-level floor
+(re-split sims into outcome-independent buckets and measure `E[Σ|Δ|]`) applies the same way to each
+of the five levels; the analytic formula stays the production path because a fresh bootstrap every
+night is too slow.
 
 The per-team "What's at stake" movers still display **raw** conditional probabilities (correcting
-a displayed probability pair would misrepresent the simulation output), so a game whose corrected
-swing clamps to 0 suppresses its movers panel entirely — a zero-stakes headline never ships a
-stakes panel built from the same noise.
+a displayed probability pair would misrepresent the simulation output). Each mover now reports the
+one **cumulative milestone** (make the playoffs / reach the semis / reach the finals / win it all)
+whose odds moved most for that team, so the movers' sum is a **lower bound** on the raw swing, not
+an equality — a team's fate can cross more than one exclusive level between the two outcomes, but a
+mover reports only its single biggest cumulative jump. A game whose corrected swing clamps to 0
+still suppresses its movers panel entirely — a zero-stakes headline never ships a stakes panel built
+from the same noise.
+
+### Ceiling: re-pinned to the round-reached scale
+
+`REGULAR_SEASON_MAX_SWING` — the prior season's observed peak swing, used to normalize every score
+to 0–1 — moved from **0.5174** (2025's peak berth-only swing) to **1.0032** (2025's peak
+round-reached swing, same games, same simulation draws). The new fate's max/p99 ratio (1.13) is
+actually a tighter fit than the old fate's (1.21), so the pinned ceiling is less of an outlier than
+before, not more.
 
 ### "No importance score" means *not simulated*, not *zero stakes*
 
