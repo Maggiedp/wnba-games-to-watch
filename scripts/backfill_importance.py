@@ -189,16 +189,22 @@ def rebuild_date(
         # note below) for regular-season rows only. Preseason/postseason
         # rows are a LEGITIMATE, expected skip (their swing metric never
         # changed scale) — but that's only provable by actually finding the
-        # Game row and reading season_type != 2. A row whose Game row can't
-        # be found at all, or whose team_a_id/team_b_id don't resolve to
-        # real Team rows, can NOT be assumed preseason/postseason — every
-        # DailyRanking row's (date, team_a_id, team_b_id) has a matching
-        # Game row written the same morning in a healthy DB, so either
-        # failure means this row IS (or would be) regular-season and its
-        # stale importance_score/overall_score would otherwise survive
-        # untouched with nothing visible to the operator. Collected here and
-        # raised below rather than silently skipped, so a mid-run crash
-        # still means "no writes for this date" (one transaction per date).
+        # Game row and reading an EXPLICIT season_type of 1 or 3.
+        # season_type IS None is a known degraded state ("the season-type
+        # backfill hasn't classified this row yet" — see
+        # compute_standings, which separately skips + warns on it), NOT
+        # proof the game is preseason/postseason, so it must NOT be treated
+        # as a legitimate skip. A row whose Game row can't be found at all,
+        # whose season_type is still None, or whose team_a_id/team_b_id
+        # don't resolve to real Team rows, can NOT be assumed
+        # preseason/postseason — every DailyRanking row's (date,
+        # team_a_id, team_b_id) has a matching, classified Game row written
+        # the same morning in a healthy DB, so any of these failures means
+        # this row IS (or would be) regular-season and its stale
+        # importance_score/overall_score would otherwise survive untouched
+        # with nothing visible to the operator. Collected here and raised
+        # below rather than silently skipped, so a mid-run crash still
+        # means "no writes for this date" (one transaction per date).
         new_importance: dict[int, float | None] = {}
         unmatchable: list[str] = []
         for ranking in rankings:
@@ -211,17 +217,27 @@ def rebuild_date(
                 )
                 .first()
             )
-            if game_row is not None and game_row.season_type != 2:
+            if (
+                game_row is not None
+                and game_row.season_type is not None
+                and game_row.season_type != 2
+            ):
                 continue  # preseason/postseason: legitimate, expected skip
             team_a = team_by_id.get(ranking.team_a_id)
             team_b = team_by_id.get(ranking.team_b_id)
-            if team_a is None or team_b is None or game_row is None:
+            if (
+                team_a is None
+                or team_b is None
+                or game_row is None
+                or game_row.season_type is None
+            ):
                 unmatchable.append(
                     f"ranking_id={ranking.id} date={date_str} "
                     f"team_a_id={ranking.team_a_id} team_b_id={ranking.team_b_id} "
                     f"(team_a_resolved={team_a is not None}, "
                     f"team_b_resolved={team_b is not None}, "
-                    f"game_row_found={game_row is not None})"
+                    f"game_row_found={game_row is not None}, "
+                    f"season_type={game_row.season_type if game_row else None})"
                 )
                 continue
             idx = remaining_event_index.get(game_row.espn_id)
@@ -266,13 +282,25 @@ def rebuild_date(
             if ranking.id not in new_importance:
                 continue
             new_val = new_importance[ranking.id]
-            if new_val == ranking.importance_score:
-                continue
+            # Compute the FULL target state (both fields) before deciding
+            # whether to write. A row that stays unmatched keeps
+            # importance_score=None on both sides of this update — but its
+            # overall_score must still move if the imputed mean did (every
+            # other regular-season row on this date just moved to the new
+            # scale). Gating the write on `new_val == ranking.importance_score`
+            # alone short-circuits on None == None and leaves such a row's
+            # overall_score frozen on the OLD-scale imputed mean while every
+            # sibling row moves — exactly the cross-field inconsistency this
+            # backfill exists to eliminate. Write whenever EITHER differs.
             importance_for_overall = new_val if new_val is not None else imputed
+            new_overall = ranking.quality_score * 0.6 + importance_for_overall * 0.4
+            if (
+                new_val == ranking.importance_score
+                and new_overall == ranking.overall_score
+            ):
+                continue
             ranking.importance_score = new_val
-            ranking.overall_score = (
-                ranking.quality_score * 0.6 + importance_for_overall * 0.4
-            )
+            ranking.overall_score = new_overall
             changed += 1
 
         session.commit()
@@ -291,6 +319,16 @@ def main() -> int:
         session = get_session()
         try:
             failed_windows: list[str] = []
+            # No explicit guard for an empty `history` (e.g. a fetch that
+            # returns [] without populating failed_windows): every 2026
+            # regular-season game would then be absent from
+            # regular_season_games, so rebuild_date's per-row fail-closed
+            # path (unmatchable -> RuntimeError) already catches it — every
+            # regular-season ranking row on every date becomes unmatchable
+            # and the run exits non-zero, just via that path rather than a
+            # dedicated check here. Declined as a deliberate no-op (Codex
+            # adversarial review, stretch-run-importance): already gated,
+            # just less directly.
             history = fetch_games_for_range(
                 _ELO_HISTORY_START, _SEASON_END, failed_windows=failed_windows
             )

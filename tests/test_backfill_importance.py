@@ -167,7 +167,61 @@ def test_rebuild_date_raises_when_regular_season_row_has_no_matching_game(env):
     session.close()
 
 
-def _eight_team_bubble_scenario(session, include_focal_in_schedule=True):
+def test_rebuild_date_raises_on_null_season_type_row(env):
+    """NULL season_type means 'not yet classified by the season-type
+    backfill' (a known degraded state — see compute_standings, which
+    separately skips + warns on it), NOT proof the game is preseason or
+    postseason. A found Game row with season_type=None must route into
+    the same fail-closed path as any other unmatchable row, not be
+    silently treated as a legitimate preseason/postseason exemption."""
+    session = env.get_session()
+    a_id, b_id = _two_teams(session)
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-08-01",
+        time="",
+        broadcaster="",
+        season_type=None,
+        espn_id="LEGACY1",
+    )
+    stale_importance = 987.0
+    upsert_daily_ranking(
+        session,
+        date="2026-08-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=60.0,
+        importance_score=stale_importance,
+        overall_score=60.0 * 0.6 + stale_importance * 0.4,
+        broadcaster="",
+    )
+    session.commit()
+    session.close()
+
+    session = env.get_session()
+    with pytest.raises(RuntimeError, match="could not be re-matched"):
+        rebuild_date(session, "2026-08-01", [], [])
+    session.close()
+
+    # Nothing should have been committed — the stale value survives.
+    session = env.get_session()
+    row = (
+        session.query(env.DailyRanking)
+        .filter_by(date="2026-08-01", team_a_id=a_id, team_b_id=b_id)
+        .one()
+    )
+    assert row.importance_score == stale_importance
+    session.close()
+
+
+def _eight_team_bubble_scenario(
+    session,
+    include_focal_in_schedule=True,
+    focal_importance_score=987.0,
+    focal_overall_score=None,
+):
     """8 teams (enough that the PLAYOFF_TEAMS=8 cutoff actually bites) with
     a close Seattle/Phoenix bubble race. A completed "boundary" game between
     Seattle and Phoenix falls exactly ON date_str ("2026-08-10") — nothing
@@ -182,8 +236,17 @@ def _eight_team_bubble_scenario(session, include_focal_in_schedule=True):
     unmatched-game imputation test, which needs the REST of this scenario's
     genuinely nonzero swings as the imputation pool.
 
+    `focal_importance_score`/`focal_overall_score` set the seeded
+    DailyRanking row's STORED values before rebuild_date runs — defaults
+    match the original stale-987.0 scenario; pass `focal_importance_score=
+    None` (with an explicit stale `focal_overall_score`) to seed a row
+    that was ALREADY unmatched under the old imputed mean, for the
+    overall-must-still-move-when-importance-stays-None regression test.
+
     Returns (date_str, team_ids, regular_season_games, elo_games).
     """
+    if focal_overall_score is None:
+        focal_overall_score = 60.0 * 0.6 + focal_importance_score * 0.4
     teams = [
         "Las Vegas Aces",
         "New York Liberty",  # focal matchup, scored on date_str
@@ -290,8 +353,8 @@ def _eight_team_bubble_scenario(session, include_focal_in_schedule=True):
         team_a_id=ids["Las Vegas Aces"],
         team_b_id=ids["New York Liberty"],
         quality_score=60.0,
-        importance_score=987.0,
-        overall_score=60.0 * 0.6 + 987.0 * 0.4,
+        importance_score=focal_importance_score,
+        overall_score=focal_overall_score,
         broadcaster="",
     )
     session.commit()
@@ -383,6 +446,52 @@ def test_rebuild_date_unmatched_game_imputes_from_remaining_pool_not_zero(env):
     # Not deflated to 0: overall must reflect a nonzero imputed importance
     # drawn from the OTHER remaining games' own computed swings.
     assert row.overall_score != row.quality_score * 0.6
+    assert row.quality_score * 0.6 < row.overall_score <= 100.0
+    session.close()
+
+
+def test_rebuild_date_moves_overall_when_already_unmatched_stays_none(env):
+    """A regular-season row that was ALREADY unmatched under the OLD
+    imputed mean (importance_score stored as None, overall_score derived
+    from a stale imputed value) must still have overall_score rewritten to
+    the NEW imputed mean — importance_score correctly stays None, but
+    `overall` can't be allowed to freeze on the old scale while every
+    sibling row on the date moves, or the archive row's own stored fields
+    stop agreeing with each other.
+
+    Reuses the 8-team bubble scenario with `include_focal_in_schedule=False`
+    (so the focal game is unmatched both before and after) and seeds the
+    focal row's STORED state as `importance_score=None` with a stale
+    overall_score computed from an old-scale imputed mean of 987.0 — i.e.
+    exactly what an old-scale unmatched row would have looked like.
+    """
+    session = env.get_session()
+    stale_overall = 60.0 * 0.6 + 987.0 * 0.4
+    date_str, ids, regular_season_games, elo_games = _eight_team_bubble_scenario(
+        session,
+        include_focal_in_schedule=False,
+        focal_importance_score=None,
+        focal_overall_score=stale_overall,
+    )
+    session.close()
+
+    session = env.get_session()
+    changed = rebuild_date(session, date_str, elo_games, regular_season_games)
+    assert changed == 1
+
+    row = (
+        session.query(env.DailyRanking)
+        .filter_by(
+            date=date_str,
+            team_a_id=ids["Las Vegas Aces"],
+            team_b_id=ids["New York Liberty"],
+        )
+        .one()
+    )
+    assert row.importance_score is None
+    assert row.overall_score != stale_overall
+    # Same nonzero-blend bound as the sibling imputation test — this is
+    # the same imputed pool, just approached from an already-None start.
     assert row.quality_score * 0.6 < row.overall_score <= 100.0
     session.close()
 
