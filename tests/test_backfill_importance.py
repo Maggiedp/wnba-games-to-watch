@@ -7,6 +7,8 @@ needed for the core recompute logic; `main()`'s own fetch + wiring is
 covered separately by monkeypatching `fetch_games_for_range`.
 """
 
+import pytest
+
 from scripts.backfill_importance import rebuild_date
 from src.db.queries import upsert_daily_ranking, upsert_game, upsert_team
 
@@ -121,6 +123,47 @@ def test_rebuild_date_leaves_preseason_and_postseason_untouched(env):
     )
     assert row.importance_score == 0.0
     assert row.overall_score == 55.0 * 0.6
+    session.close()
+
+
+def test_rebuild_date_raises_when_regular_season_row_has_no_matching_game(env):
+    """A DailyRanking row with no matching Game row can't be proven
+    preseason/postseason (season_type only lives on Game), so it must be
+    treated as a possibly-regular-season row and hard-fail rather than
+    silently pass as untouched — this deliberately reproduces what used to
+    be a silent skip (confirmed by manually reverting the fix and re-running
+    this test, see task-6-report.md: it failed with no exception raised)."""
+    session = env.get_session()
+    a_id, b_id = _two_teams(session)
+    # Deliberately no upsert_game call: the (date, team_a_id, team_b_id)
+    # Game lookup inside rebuild_date will find nothing.
+    stale_importance = 987.0
+    upsert_daily_ranking(
+        session,
+        date="2026-08-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=60.0,
+        importance_score=stale_importance,
+        overall_score=60.0 * 0.6 + stale_importance * 0.4,
+        broadcaster="",
+    )
+    session.commit()
+    session.close()
+
+    session = env.get_session()
+    with pytest.raises(RuntimeError, match="could not be re-matched"):
+        rebuild_date(session, "2026-08-01", [], [])
+    session.close()
+
+    # Nothing should have been committed — the stale value survives.
+    session = env.get_session()
+    row = (
+        session.query(env.DailyRanking)
+        .filter_by(date="2026-08-01", team_a_id=a_id, team_b_id=b_id)
+        .one()
+    )
+    assert row.importance_score == stale_importance
     session.close()
 
 

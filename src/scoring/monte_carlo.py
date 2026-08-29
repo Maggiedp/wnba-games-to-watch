@@ -330,8 +330,12 @@ def _noise_floor_term(pooled_rate: float, n_a: int, n_b: int) -> float:
 
     Under H0 the rate difference is ~ Normal(0, p(1-p)(1/n_a + 1/n_b)), so its
     absolute value is half-normal with mean sqrt(2/pi) * sigma. Summing |delta|
-    over teams without subtracting this is positively biased (measured at ~8/100
-    normalized, near-constant — see METHODOLOGY.md "noise floor").
+    over teams without subtracting this is positively biased — under the
+    five-level round-reached fate this floor is summed per team PER LEVEL
+    (five times the terms of the old binary make-playoffs floor), so it is
+    substantially larger in swing units than the binary-fate figure once
+    quoted here; see METHODOLOGY.md "noise floor" for the current
+    quantitative treatment rather than a number pinned in this docstring.
     """
     variance = pooled_rate * (1.0 - pooled_rate) * (1.0 / n_a + 1.0 / n_b)
     return math.sqrt(2.0 / math.pi * variance)

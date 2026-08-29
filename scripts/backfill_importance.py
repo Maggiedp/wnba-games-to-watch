@@ -136,6 +136,17 @@ def rebuild_date(
     Returns the number of rows whose importance_score actually changed.
     Runs in one transaction: any fault raises and rolls back, so a mid-run
     failure can't leave this date half-rewritten.
+
+    Raises RuntimeError if a REGULAR-SEASON ranking row can't be re-matched
+    to both its teams and a Game row — that combination should be
+    unreachable in a healthy DB (every DailyRanking row's
+    (date, team_a_id, team_b_id) has a matching Game row written the same
+    morning; see scripts/CLAUDE.md), but "unreachable today" is not "fails
+    closed": silently skipping such a row would leave its stale, possibly
+    old-scale importance_score/overall_score in place with nothing visible
+    to the operator, contradicting this script's own fail-closed contract.
+    Preseason/postseason rows are a legitimate, expected skip and never
+    raise.
     """
     rankings = get_daily_rankings(session, date_str)
     if not rankings:
@@ -173,20 +184,24 @@ def rebuild_date(
             g["event_id"]: i for i, g in enumerate(remaining_rows) if g.get("event_id")
         }
 
-        # First pass: new importance (or None if unmatched) for regular-
-        # season rows only; preseason/postseason rows are left alone
-        # entirely (their swing metric never changed scale). A team_by_id
-        # miss or game_row is None/non-regular-season is a data-integrity
-        # edge case (unreachable in a healthy DB — see scripts/CLAUDE.md):
-        # such a row is simply skipped, left exactly as stored. It can no
-        # longer contaminate the imputation pool below (that pool is now
-        # reconstructed from raw_swings, not from stored rows).
+        # First pass: new importance (or None if unmatched IN THE SIM
+        # UNIVERSE — the designed "not simulated" path, see the imputation
+        # note below) for regular-season rows only. Preseason/postseason
+        # rows are a LEGITIMATE, expected skip (their swing metric never
+        # changed scale) — but that's only provable by actually finding the
+        # Game row and reading season_type != 2. A row whose Game row can't
+        # be found at all, or whose team_a_id/team_b_id don't resolve to
+        # real Team rows, can NOT be assumed preseason/postseason — every
+        # DailyRanking row's (date, team_a_id, team_b_id) has a matching
+        # Game row written the same morning in a healthy DB, so either
+        # failure means this row IS (or would be) regular-season and its
+        # stale importance_score/overall_score would otherwise survive
+        # untouched with nothing visible to the operator. Collected here and
+        # raised below rather than silently skipped, so a mid-run crash
+        # still means "no writes for this date" (one transaction per date).
         new_importance: dict[int, float | None] = {}
+        unmatchable: list[str] = []
         for ranking in rankings:
-            team_a = team_by_id.get(ranking.team_a_id)
-            team_b = team_by_id.get(ranking.team_b_id)
-            if team_a is None or team_b is None:
-                continue
             game_row = (
                 session.query(Game)
                 .filter_by(
@@ -196,7 +211,18 @@ def rebuild_date(
                 )
                 .first()
             )
-            if game_row is None or game_row.season_type != 2:
+            if game_row is not None and game_row.season_type != 2:
+                continue  # preseason/postseason: legitimate, expected skip
+            team_a = team_by_id.get(ranking.team_a_id)
+            team_b = team_by_id.get(ranking.team_b_id)
+            if team_a is None or team_b is None or game_row is None:
+                unmatchable.append(
+                    f"ranking_id={ranking.id} date={date_str} "
+                    f"team_a_id={ranking.team_a_id} team_b_id={ranking.team_b_id} "
+                    f"(team_a_resolved={team_a is not None}, "
+                    f"team_b_resolved={team_b is not None}, "
+                    f"game_row_found={game_row is not None})"
+                )
                 continue
             idx = remaining_event_index.get(game_row.espn_id)
             new_importance[ranking.id] = (
@@ -205,6 +231,14 @@ def rebuild_date(
                 )
                 if idx is not None
                 else None
+            )
+
+        if unmatchable:
+            raise RuntimeError(
+                f"{len(unmatchable)} regular-season daily_rankings row(s) on "
+                f"{date_str} could not be re-matched to both teams and a "
+                f"Game row (stale importance_score/overall_score would "
+                f"otherwise be left in place unnoticed): {unmatchable}"
             )
 
         if not new_importance:
