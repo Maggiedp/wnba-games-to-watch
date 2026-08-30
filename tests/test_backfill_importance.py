@@ -496,6 +496,67 @@ def test_rebuild_date_moves_overall_when_already_unmatched_stays_none(env):
     session.close()
 
 
+def test_main_fails_closed_on_empty_fetch_with_ranked_dates_present(env, monkeypatch):
+    """An empty ESPN fetch does NOT make a healthy row unmatchable —
+    rebuild_date's unmatchable check keys off the DB's own Game table and
+    get_all_teams(session), both independent of this fetch. Without an
+    explicit guard, an empty fetch would leave regular_season_games empty,
+    every regular-season row would fall into the "not in sim universe"
+    branch (importance=None), _impute_missing_importance([]) would return
+    0.0 rather than raising, and main() would silently rewrite the whole
+    archive to importance=None/overall=quality*0.6 and exit 0.
+
+    Deliberately does NOT monkeypatch rebuild_date (unlike the sibling
+    main() tests below) — the real rebuild_date must be reachable for this
+    test to actually exercise the guard it's meant to short-circuit.
+    """
+    session = env.get_session()
+    a_id, b_id = _two_teams(session)
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-08-01",
+        time="",
+        broadcaster="",
+        season_type=2,
+        espn_id="G1",
+    )
+    stale_importance = 987.0
+    stale_overall = 60.0 * 0.6 + stale_importance * 0.4
+    upsert_daily_ranking(
+        session,
+        date="2026-08-01",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=60.0,
+        importance_score=stale_importance,
+        overall_score=stale_overall,
+        broadcaster="",
+    )
+    session.commit()
+    session.close()
+
+    import scripts.backfill_importance as bf
+
+    monkeypatch.setattr(
+        bf, "fetch_games_for_range", lambda start, end, failed_windows=None: []
+    )
+    monkeypatch.setattr(bf.sys, "argv", ["backfill_importance", "--recompute"])
+
+    assert bf.main() == 1
+
+    session = env.get_session()
+    row = (
+        session.query(env.DailyRanking)
+        .filter_by(date="2026-08-01", team_a_id=a_id, team_b_id=b_id)
+        .one()
+    )
+    assert row.importance_score == stale_importance
+    assert row.overall_score == stale_overall
+    session.close()
+
+
 def test_main_recompute_fails_closed_when_a_date_errors(env, monkeypatch):
     """One date raising must not silently exit 0 — the operator needs to
     know to re-run (mirrors the other two backfills' fail-closed gate)."""

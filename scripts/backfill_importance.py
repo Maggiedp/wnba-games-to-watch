@@ -319,16 +319,22 @@ def main() -> int:
         session = get_session()
         try:
             failed_windows: list[str] = []
-            # No explicit guard for an empty `history` (e.g. a fetch that
-            # returns [] without populating failed_windows): every 2026
-            # regular-season game would then be absent from
-            # regular_season_games, so rebuild_date's per-row fail-closed
-            # path (unmatchable -> RuntimeError) already catches it — every
-            # regular-season ranking row on every date becomes unmatchable
-            # and the run exits non-zero, just via that path rather than a
-            # dedicated check here. Declined as a deliberate no-op (Codex
-            # adversarial review, stretch-run-importance): already gated,
-            # just less directly.
+            # rebuild_date's per-row unmatchable check does NOT cover an
+            # empty fetch here: it keys off the DB's own Game table +
+            # get_all_teams(session), both independent of this ESPN fetch.
+            # An empty `history` only empties regular_season_games/
+            # elo_games, not the DB — so a normal, healthy row (real
+            # classified Game row, resolvable teams) is NOT unmatchable; it
+            # falls into the "not in sim universe" branch, gets
+            # importance=None, and _impute_missing_importance([]) returns
+            # 0.0 rather than raising. Net effect without the guard below:
+            # every regular-season row on every date would silently get
+            # importance_score=None / overall_score=quality*0.6, the
+            # commit would succeed, and the run would exit 0 — silently
+            # wiping the archive's importance signal. Hence the explicit
+            # guard immediately below, checked before any date-level
+            # recompute begins (was wrongly believed redundant in an
+            # earlier round; a re-review traced the false premise).
             history = fetch_games_for_range(
                 _ELO_HISTORY_START, _SEASON_END, failed_windows=failed_windows
             )
@@ -370,6 +376,24 @@ def main() -> int:
                 logger.info(f"Would recompute: {ranked_dates}")
                 logger.info("Pass --recompute to write changes.")
                 return 0
+
+            # Fail closed BEFORE any date-level recompute begins if the
+            # fetch looks incomplete for a season that already has ranked
+            # rows to rewrite: see the comment above the fetch call for why
+            # rebuild_date's own per-row unmatchable check does not catch
+            # this (it keys off DB state, not this fetch's output).
+            if ranked_dates and not regular_season_games:
+                logger.error(
+                    f"INCOMPLETE: fetched 0 {_SEASON_YEAR} regular-season games "
+                    f"from ESPN, but {len(ranked_dates)} date(s) have stored "
+                    "daily_rankings rows to rewrite. The fetch looks incomplete "
+                    "(a transient ESPN issue, or a range that returned no "
+                    "events) — refusing to recompute against an empty sim "
+                    "universe, which would silently blank out every "
+                    "regular-season row's importance signal. Nothing was "
+                    "rewritten; re-run once the fetch is healthy."
+                )
+                return 1
 
             failed_dates: list[str] = []
             total_changed = 0
