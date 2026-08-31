@@ -104,7 +104,38 @@ def _standings_as_of(
     """Standings as of the morning of `date_str`: every known team seeded
     0-0, then regular-season results strictly before `date_str` applied on
     top — mirrors daily_update.compute_standings, minus the as-of-date
-    restriction it lacks."""
+    restriction it lacks.
+
+    A game counts toward prior standings only when its CURRENT `date` is
+    strictly before `date_str` AND it has a `winner_team`. A not-yet-played
+    game can never be pulled in by mistake: the `if not winner: continue`
+    guard below covers that regardless of what its `date` says.
+
+    This reconstructs the retrospectively ACCURATE history — not the
+    schedule as production believed it live on that morning. `upsert_game`
+    is reschedule-aware and re-keys a game's `date` by `espn_id` (see root
+    CLAUDE.md), so a game that later moved carries its NEW date here too:
+    moved later, it correctly still counts as remaining/unplayed as of
+    `date_str`; moved earlier and played, it correctly counts as a
+    completed prior result. This can only diverge from what production
+    actually computed live in the narrow window between a reschedule
+    landing in ESPN's feed and the next daily run picking it up — and in
+    that window this reconstruction's version is the MORE accurate one.
+    Deliberate: an archive recompute should reflect what actually
+    happened, not the schedule's transient in-flight state.
+
+    One real, unclosed gap: a game that is STILL unplayed while its
+    stored `date` is already in the past (a postponement ESPN hasn't
+    re-dated yet, or a lingering TBD) falls out of BOTH sides of this
+    reconstruction — no `winner_team`, so it's not counted into prior
+    standings; `date < date_str`, so it's also excluded from
+    `rebuild_date`'s remaining-games universe (see the matching `>=`
+    split there). It simply vanishes from that date's simulation,
+    producing slightly-off importance for the dates it touches. Bounded to
+    the specific games affected, not season-wide, and not fixed here —
+    see scripts/CLAUDE.md for the pre-run audit query that checks whether
+    any such game exists before a production run.
+    """
     prior_elo_games = [g for g in elo_games if g.get("date", "") < date_str]
     elo = replay_games(prior_elo_games).final_ratings
     standings: dict[str, dict] = {
@@ -173,6 +204,12 @@ def rebuild_date(
     try:
         standings = _standings_as_of(date_str, teams, elo_games, regular_season_games)
 
+        # The `>=` here is the other half of _standings_as_of's `<` split —
+        # together they partition regular_season_games by CURRENT date, not
+        # by what was known live on date_str's morning (see that docstring
+        # for the reschedule-accuracy tradeoff and the one real gap: a
+        # still-unplayed game whose date is already in the past falls out
+        # of both halves and is silently missing from this date's sim).
         remaining_rows = [
             g for g in regular_season_games if g.get("date", "") >= date_str
         ]
