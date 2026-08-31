@@ -200,6 +200,14 @@ def rebuild_date(
 
     teams = get_all_teams(session)
     team_by_id = {t.id: t for t in teams}
+    # One query per date rather than one per ranking row: the per-row lookup
+    # below is a point read, but at ~10-15 rows x ~116 dates that was ~1,500
+    # round-trips for a season. `DailyRanking` has a (date, team_a_id,
+    # team_b_id) unique constraint, so this key is unique within a date.
+    game_by_teams = {
+        (g.team_a_id, g.team_b_id): g
+        for g in session.query(Game).filter_by(date=date_str).all()
+    }
 
     try:
         standings = _standings_as_of(date_str, teams, elo_games, regular_season_games)
@@ -261,15 +269,7 @@ def rebuild_date(
         new_detail: dict[int, str | None] = {}
         unmatchable: list[str] = []
         for ranking in rankings:
-            game_row = (
-                session.query(Game)
-                .filter_by(
-                    date=date_str,
-                    team_a_id=ranking.team_a_id,
-                    team_b_id=ranking.team_b_id,
-                )
-                .first()
-            )
+            game_row = game_by_teams.get((ranking.team_a_id, ranking.team_b_id))
             if (
                 game_row is not None
                 and game_row.season_type is not None
