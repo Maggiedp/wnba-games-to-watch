@@ -7,6 +7,8 @@ needed for the core recompute logic; `main()`'s own fetch + wiring is
 covered separately by monkeypatching `fetch_games_for_range`.
 """
 
+import json
+
 import pytest
 
 from scripts.backfill_importance import rebuild_date
@@ -79,6 +81,15 @@ def test_rebuild_date_rewrites_importance_and_overall_consistently(env):
     assert row.importance_score is not None
     assert 0.0 <= row.importance_score <= 100.0
     assert row.overall_score == row.quality_score * 0.6 + row.importance_score * 0.4
+    # This 2-team scenario has no bubble competition at all (both teams
+    # always land in the same fate bucket regardless of who wins), so the
+    # swing is exactly 0.0 — verified independently by calling
+    # run_monte_carlo_simulation/compute_importance_from_matrix with this
+    # exact standings+seed outside the test. The zero-gate in
+    # _importance_detail_for_game must therefore suppress the panel: a
+    # scored-but-zero-stakes game must not carry raw-noise movers.
+    assert row.importance_score == 0.0
+    assert row.importance_detail is None
     session.close()
 
 
@@ -402,6 +413,48 @@ def test_rebuild_date_as_of_date_boundary_is_strict(env):
     session.close()
 
 
+def test_rebuild_date_populates_importance_detail_for_a_nonzero_row(env):
+    """A rewritten row whose new importance is non-zero must get a
+    populated, well-formed importance_detail (the "What's at stake" movers
+    JSON) — this backfill used to leave it untouched/NULL even when it
+    rewrote a real, non-zero importance_score alongside it.
+
+    Reuses the 8-team bubble scenario (proven non-zero — ~14.17 — by
+    test_rebuild_date_as_of_date_boundary_is_strict) and parses the stored
+    JSON to confirm it's the same "playoffs" movers shape
+    daily_update._importance_detail_for_game produces, not just "truthy."
+    """
+    session = env.get_session()
+    date_str, ids, regular_season_games, elo_games = _eight_team_bubble_scenario(
+        session
+    )
+    session.close()
+
+    session = env.get_session()
+    changed = rebuild_date(session, date_str, elo_games, regular_season_games)
+    assert changed == 1
+
+    row = (
+        session.query(env.DailyRanking)
+        .filter_by(
+            date=date_str,
+            team_a_id=ids["Las Vegas Aces"],
+            team_b_id=ids["New York Liberty"],
+        )
+        .one()
+    )
+    assert row.importance_score is not None
+    assert row.importance_score > 0.0
+    assert row.importance_detail is not None
+    detail = json.loads(row.importance_detail)
+    assert detail["metric"] == "playoffs"
+    assert detail["if_a_team"] == "Las Vegas Aces"
+    assert detail["if_b_team"] == "New York Liberty"
+    assert isinstance(detail["movers"], list)
+    assert len(detail["movers"]) > 0
+    session.close()
+
+
 def test_rebuild_date_no_rankings_is_a_noop(env):
     """A date with no stored rankings returns 0 without error (main() will
     only ever call this for dates the DB says have rows, but the function
@@ -559,7 +612,17 @@ def test_main_fails_closed_on_empty_fetch_with_ranked_dates_present(env, monkeyp
 
 def test_main_recompute_fails_closed_when_a_date_errors(env, monkeypatch):
     """One date raising must not silently exit 0 — the operator needs to
-    know to re-run (mirrors the other two backfills' fail-closed gate)."""
+    know to re-run (mirrors the other two backfills' fail-closed gate).
+
+    Must stub `fetch_games_for_range` with a NON-empty regular-season
+    fetch — an empty one (`[]`) makes `regular_season_games` empty, which
+    the empty-fetch guard in `main()` now catches BEFORE the per-date loop
+    ever runs, so `fake_rebuild` would never be invoked and this test would
+    silently stop covering the per-date-exception fail-closed path it's
+    named for (this happened for real; see task-6-report.md). Asserting
+    `calls["n"] == 1` makes that regression impossible to reintroduce
+    unnoticed — the test can't pass while skipping its own scenario.
+    """
     session = env.get_session()
     a_id, b_id = _two_teams(session)
     upsert_game(
@@ -587,17 +650,36 @@ def test_main_recompute_fails_closed_when_a_date_errors(env, monkeypatch):
 
     import scripts.backfill_importance as bf
 
+    fake_history = [
+        {
+            "team_a": "Las Vegas Aces",
+            "team_b": "New York Liberty",
+            "date": "2026-08-01",
+            "event_id": "G1",
+            "season_type": 2,
+            "winner_team": "Las Vegas Aces",
+        }
+    ]
     monkeypatch.setattr(
-        bf, "fetch_games_for_range", lambda start, end, failed_windows=None: []
+        bf,
+        "fetch_games_for_range",
+        lambda start, end, failed_windows=None: fake_history,
     )
 
+    calls = {"n": 0}
+
     def fake_rebuild(session, date_str, elo_games, regular_season_games):
+        calls["n"] += 1
         raise RuntimeError("boom")
 
     monkeypatch.setattr(bf, "rebuild_date", fake_rebuild)
     monkeypatch.setattr(bf.sys, "argv", ["backfill_importance", "--recompute"])
 
     assert bf.main() == 1
+    # The raising rebuild_date must actually have been reached — this is
+    # what makes the test genuinely exercise the per-date-exception path
+    # rather than passing on the exit code alone.
+    assert calls["n"] == 1
 
     # Stale value must survive the failed run untouched.
     session = env.get_session()

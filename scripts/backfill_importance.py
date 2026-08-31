@@ -36,6 +36,15 @@ overall_score IS rewritten in the same pass (`quality * 0.6 + importance *
 0.4`), mirroring compute_daily_scores exactly, else the stored overall would
 silently stop agreeing with its own components.
 
+importance_detail (the "What's at stake" movers JSON) is ALSO rewritten in
+the same pass, by reusing daily_update._importance_detail_for_game verbatim
+against this run's own outcome_matrix/fate_levels — not duplicated. Its
+existing semantics carry over unchanged: importance == 0.0 stores NULL
+(raw movers would show spurious stakes on a no-signal game), importance is
+None does NOT suppress (an unmatched row's game_index lookup inside that
+helper also misses, so it naturally returns None anyway), preseason rows
+never reach this code path at all, and postseason stays untouched.
+
 A regular-season game that can't be located in the remaining-games universe
 (e.g. a schedule mismatch) gets importance_score=None, exactly like
 compute_daily_scores' "not simulated" case — and `_impute_missing_importance`
@@ -66,7 +75,11 @@ import random
 import sys
 
 from scripts._recompute_gate import recompute_gate
-from scripts.daily_update import _ELO_HISTORY_START, _impute_missing_importance
+from scripts.daily_update import (
+    _ELO_HISTORY_START,
+    _impute_missing_importance,
+    _importance_detail_for_game,
+)
 from src.data.espn_api import _SEASON_END, fetch_games_for_range
 from src.db.queries import get_all_teams, get_daily_rankings
 from src.db.schema import DailyRanking, Game, get_session, init_db
@@ -124,8 +137,9 @@ def rebuild_date(
     elo_games: list[dict],
     regular_season_games: list[dict],
 ) -> int:
-    """Recompute importance_score + overall_score for every regular-season
-    daily_rankings row on `date_str`, from standings as of that date.
+    """Recompute importance_score + overall_score + importance_detail for
+    every regular-season daily_rankings row on `date_str`, from standings
+    as of that date.
 
     `elo_games`: completed non-preseason games (any season_type != 1) across
     the full Elo replay window, used to derive Elo ratings as of `date_str`.
@@ -133,9 +147,10 @@ def rebuild_date(
     schedule, completed or not, used both for prior W-L/h2h and as the
     remaining-games simulation universe.
 
-    Returns the number of rows whose importance_score actually changed.
-    Runs in one transaction: any fault raises and rolls back, so a mid-run
-    failure can't leave this date half-rewritten.
+    Returns the number of rows whose stored state actually changed (any of
+    importance_score/overall_score/importance_detail). Runs in one
+    transaction: any fault raises and rolls back, so a mid-run failure
+    can't leave this date half-rewritten.
 
     Raises RuntimeError if a REGULAR-SEASON ranking row can't be re-matched
     to both its teams and a Game row — that combination should be
@@ -206,6 +221,7 @@ def rebuild_date(
         # below rather than silently skipped, so a mid-run crash still
         # means "no writes for this date" (one transaction per date).
         new_importance: dict[int, float | None] = {}
+        new_detail: dict[int, str | None] = {}
         unmatchable: list[str] = []
         for ranking in rankings:
             game_row = (
@@ -241,12 +257,36 @@ def rebuild_date(
                 )
                 continue
             idx = remaining_event_index.get(game_row.espn_id)
-            new_importance[ranking.id] = (
+            new_val = (
                 normalize_importance_score(
                     raw_swings[idx], max_swing=REGULAR_SEASON_MAX_SWING
                 )
                 if idx is not None
                 else None
+            )
+            new_importance[ranking.id] = new_val
+            # Reuse daily_update's own detail builder verbatim rather than
+            # duplicating its payload construction/guards — passing the
+            # SAME importance value preserves its zero-gate (importance ==
+            # 0.0 -> NULL detail, since raw movers would show spurious
+            # stakes on a no-signal game) and its None-does-not-suppress
+            # semantics (an unmatched row's game_index lookup inside the
+            # helper also misses, so it naturally returns None too — no
+            # special-casing needed here). Postseason is never reached
+            # (this loop only ever adds season_type==2 rows past this
+            # point); preseason rows never reach this loop at all.
+            new_detail[ranking.id] = _importance_detail_for_game(
+                {
+                    "team_a": team_a.name,
+                    "team_b": team_b.name,
+                    "event_id": game_row.espn_id,
+                    "season_type": 2,
+                },
+                outcome_matrix,
+                fate_levels,
+                remaining_event_index,
+                team_names=team_names,
+                importance=new_val,
             )
 
         if unmatchable:
@@ -282,8 +322,9 @@ def rebuild_date(
             if ranking.id not in new_importance:
                 continue
             new_val = new_importance[ranking.id]
-            # Compute the FULL target state (both fields) before deciding
-            # whether to write. A row that stays unmatched keeps
+            new_detail_val = new_detail[ranking.id]
+            # Compute the FULL target state (all three fields) before
+            # deciding whether to write. A row that stays unmatched keeps
             # importance_score=None on both sides of this update — but its
             # overall_score must still move if the imputed mean did (every
             # other regular-season row on this date just moved to the new
@@ -291,16 +332,19 @@ def rebuild_date(
             # alone short-circuits on None == None and leaves such a row's
             # overall_score frozen on the OLD-scale imputed mean while every
             # sibling row moves — exactly the cross-field inconsistency this
-            # backfill exists to eliminate. Write whenever EITHER differs.
+            # backfill exists to eliminate. Write whenever ANY of the three
+            # differs.
             importance_for_overall = new_val if new_val is not None else imputed
             new_overall = ranking.quality_score * 0.6 + importance_for_overall * 0.4
             if (
                 new_val == ranking.importance_score
                 and new_overall == ranking.overall_score
+                and new_detail_val == ranking.importance_detail
             ):
                 continue
             ranking.importance_score = new_val
             ranking.overall_score = new_overall
+            ranking.importance_detail = new_detail_val
             changed += 1
 
         session.commit()
