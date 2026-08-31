@@ -110,7 +110,7 @@ def main() -> None:
         if not remaining:
             continue
 
-        _, matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
+        _, matrix, _, _, _, fate_levels = run_monte_carlo_simulation(
             standings,
             remaining,
             num_simulations=NUM_SIMULATIONS,
@@ -118,7 +118,7 @@ def main() -> None:
         )
         team_names = list(standings.keys())
         swings = compute_importance_from_matrix(
-            matrix, playoff_sets, remaining, team_names
+            matrix, fate_levels, remaining, team_names
         )
 
         todays = [g for g in remaining_rows if g.get("date", "") == d]

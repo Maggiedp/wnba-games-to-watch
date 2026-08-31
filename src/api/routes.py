@@ -934,12 +934,25 @@ def _short_team_name(name: str) -> str:
     return " ".join(parts[:-1]) if len(parts) > 1 else str(name)
 
 
+_LEVEL_LABELS = {
+    "playoffs": "playoff odds",
+    "semis": "semis odds",
+    "finals": "finals odds",
+    "championship": "title odds",
+}
+
+
 def _importance_movers_html(ranking) -> str:
     """Render the 'What's at stake' directional-odds block, or '' when absent.
 
     Reads ranking.importance_detail (JSON written by daily_update). Each mover
-    line shows the team's odds under each game outcome. Returns '' for missing,
-    malformed, or empty payloads so the caller falls back to the bar + blurb.
+    line shows the team's odds under each game outcome, at the milestone
+    (playoffs/semis/finals/championship) that moved most FOR THAT TEAM — the
+    "level" field, added alongside the round-reached fate levels; rows
+    written before that change have no "level" key and fall back to the
+    block-level metric label (playoffs for regular season, championship for
+    postseason). Returns '' for missing, malformed, or empty payloads so the
+    caller falls back to the bar + blurb.
     """
     raw = getattr(ranking, "importance_detail", None)
     if not raw:
@@ -956,7 +969,7 @@ def _importance_movers_html(ranking) -> str:
     if not isinstance(movers, list):
         return ""
 
-    odds_label = (
+    fallback_label = (
         "title odds" if data.get("metric") == "championship" else "playoff odds"
     )
     a_team = escape_html(_short_team_name(data.get("if_a_team", "Team A")))
@@ -970,6 +983,7 @@ def _importance_movers_html(ranking) -> str:
         if_b = _coerce_fraction(m.get("if_b"))
         if if_a is None or if_b is None:
             continue
+        odds_label = _LEVEL_LABELS.get(m.get("level"), fallback_label)
         team = escape_html(m.get("team", ""))
         if_a_pct = max(0.0, min(1.0, if_a)) * 100
         if_b_pct = max(0.0, min(1.0, if_b)) * 100

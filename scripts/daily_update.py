@@ -1047,7 +1047,7 @@ def _importance_for_game(
 def _importance_detail_for_game(
     game: dict,
     outcome_matrix: list[list[bool | None]],
-    playoff_sets: list[set[str]],
+    fate_levels: list[dict[str, str]],
     remaining_event_index: dict[str, int],
     bracket_state=None,
     bracket_outcomes: list[dict[tuple[str, int], bool]] | None = None,
@@ -1119,7 +1119,7 @@ def _importance_detail_for_game(
         return None
 
     movers = compute_directional_movers_from_matrix(
-        outcome_matrix, playoff_sets, game_index, team_names
+        outcome_matrix, fate_levels, game_index, team_names
     )
     if not movers:
         return None
@@ -1194,14 +1194,19 @@ def compute_daily_scores(
     logger.info(
         f"Running 10k Monte Carlo over {len(remaining_games)} remaining games..."
     )
-    round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions = (
-        run_monte_carlo_simulation(
-            standings,
-            remaining_games,
-            num_simulations=10000,
-            return_matrix=True,
-            bracket_state=bracket_state,
-        )
+    (
+        round_probs,
+        outcome_matrix,
+        playoff_sets,
+        bracket_outcomes,
+        champions,
+        fate_levels,
+    ) = run_monte_carlo_simulation(
+        standings,
+        remaining_games,
+        num_simulations=10000,
+        return_matrix=True,
+        bracket_state=bracket_state,
     )
 
     if not upcoming_games:
@@ -1210,7 +1215,7 @@ def compute_daily_scores(
 
     team_names = list(standings.keys())
     raw_swings = compute_importance_from_matrix(
-        outcome_matrix, playoff_sets, remaining_games, team_names
+        outcome_matrix, fate_levels, remaining_games, team_names
     )
     # Pre-compute (slot, game_num) per upcoming postseason game so multiple
     # scheduled games in the same series get distinct ordinals (Game 1, 2, 3...
@@ -1262,7 +1267,7 @@ def compute_daily_scores(
         importance_detail = _importance_detail_for_game(
             game,
             outcome_matrix,
-            playoff_sets,
+            fate_levels,
             remaining_event_index,
             bracket_state=bracket_state,
             bracket_outcomes=bracket_outcomes,

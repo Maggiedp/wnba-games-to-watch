@@ -11,6 +11,8 @@ import random
 import pytest
 
 from src.scoring.monte_carlo import (
+    FATE_LOST_QF,
+    FATE_MISSED,
     RoundProbabilities,
     TeamStanding,
     compute_importance_from_matrix,
@@ -278,13 +280,13 @@ _G2 = [
 
 
 def test_return_matrix_shape():
-    """return_matrix=True yields a 5-tuple; matrix has shape (num_sims, num_games)."""
+    """return_matrix=True yields a 6-tuple; matrix has shape (num_sims, num_games)."""
     random.seed(0)
     result = run_monte_carlo_simulation(
         _S3, _G2, num_simulations=50, return_matrix=True
     )
-    assert isinstance(result, tuple) and len(result) == 5
-    round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions = result
+    assert isinstance(result, tuple) and len(result) == 6
+    round_probs, outcome_matrix, playoff_sets, bracket_outcomes, champions, _ = result
     assert isinstance(round_probs, RoundProbabilities)
     assert len(outcome_matrix) == 50
     assert all(len(row) == 2 for row in outcome_matrix)
@@ -312,7 +314,7 @@ def test_bracket_outcomes_populated_when_eight_teams_seed():
         name: {"wins": 30 - i, "losses": i, "elo": 1600 - i * 20, "h2h": {}}
         for i, name in enumerate(eight_teams)
     }
-    _, _, _, bracket_outcomes, champions = run_monte_carlo_simulation(
+    _, _, _, bracket_outcomes, champions, _ = run_monte_carlo_simulation(
         standings, [], num_simulations=20, return_matrix=True
     )
     # Every sim must have played all 7 series.
@@ -327,7 +329,7 @@ def test_bracket_outcomes_populated_when_eight_teams_seed():
 def test_champions_none_when_fewer_than_eight_teams():
     """3-team fixture can never seed 8 → champions list is all None."""
     random.seed(0)
-    _, _, _, bracket_outcomes, champions = run_monte_carlo_simulation(
+    _, _, _, bracket_outcomes, champions, _ = run_monte_carlo_simulation(
         _S3, _G2, num_simulations=10, return_matrix=True
     )
     assert all(c is None for c in champions)
@@ -348,7 +350,7 @@ def test_return_matrix_probs_match_non_matrix():
     random.seed(42)
     probs_plain = run_monte_carlo_simulation(_S3, _G2, num_simulations=5000)
     random.seed(42)
-    probs_matrix, _, _, _, _ = run_monte_carlo_simulation(
+    probs_matrix, _, _, _, _, _ = run_monte_carlo_simulation(
         _S3, _G2, num_simulations=5000, return_matrix=True
     )
     for name in probs_plain.make_playoffs:
@@ -358,7 +360,7 @@ def test_return_matrix_probs_match_non_matrix():
 def test_playoff_sets_are_sets_of_team_names():
     """Each playoff_set entry is a set of team name strings."""
     random.seed(0)
-    _, _, playoff_sets, _, _ = run_monte_carlo_simulation(
+    _, _, playoff_sets, _, _, _ = run_monte_carlo_simulation(
         _S3, _G2, num_simulations=20, return_matrix=True
     )
     for s in playoff_sets:
@@ -400,11 +402,11 @@ _BUBBLE_GAMES = [
 def test_compute_importance_from_matrix_length():
     """Returns one swing value per remaining game."""
     random.seed(0)
-    _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
+    _, outcome_matrix, _, _, _, fate_levels = run_monte_carlo_simulation(
         _BUBBLE, _BUBBLE_GAMES, num_simulations=200, return_matrix=True
     )
     swings = compute_importance_from_matrix(
-        outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys())
+        outcome_matrix, fate_levels, _BUBBLE_GAMES, list(_BUBBLE.keys())
     )
     assert len(swings) == len(_BUBBLE_GAMES)
 
@@ -412,11 +414,11 @@ def test_compute_importance_from_matrix_length():
 def test_compute_importance_from_matrix_non_negative():
     """All swing values are >= 0."""
     random.seed(0)
-    _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
+    _, outcome_matrix, _, _, _, fate_levels = run_monte_carlo_simulation(
         _BUBBLE, _BUBBLE_GAMES, num_simulations=500, return_matrix=True
     )
     swings = compute_importance_from_matrix(
-        outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys())
+        outcome_matrix, fate_levels, _BUBBLE_GAMES, list(_BUBBLE.keys())
     )
     assert all(s >= 0.0 for s in swings)
 
@@ -424,11 +426,11 @@ def test_compute_importance_from_matrix_non_negative():
 def test_compute_importance_from_matrix_bubble_beats_safe():
     """Bubble game (index 0) has higher swing than safely-in game (index 2)."""
     random.seed(42)
-    _, outcome_matrix, playoff_sets, _, _ = run_monte_carlo_simulation(
+    _, outcome_matrix, _, _, _, fate_levels = run_monte_carlo_simulation(
         _BUBBLE, _BUBBLE_GAMES, num_simulations=5000, return_matrix=True
     )
     swings = compute_importance_from_matrix(
-        outcome_matrix, playoff_sets, _BUBBLE_GAMES, list(_BUBBLE.keys())
+        outcome_matrix, fate_levels, _BUBBLE_GAMES, list(_BUBBLE.keys())
     )
     assert swings[0] > swings[2], f"bubble={swings[0]:.3f} safe={swings[2]:.3f}"
 
@@ -437,11 +439,14 @@ def test_compute_importance_from_matrix_empty_subset_returns_zero():
     """When all sims agree on the outcome (degenerate case), swing is 0."""
     # Construct a matrix where team_a always wins game 0
     outcome_matrix = [[True, False]] * 100
-    playoff_sets = [{"Las Vegas Aces", "New York Liberty"} for _ in range(100)]
+    fate_levels = [
+        {"Las Vegas Aces": FATE_LOST_QF, "New York Liberty": FATE_LOST_QF}
+        for _ in range(100)
+    ]
     games = [("Las Vegas Aces", "Indiana Fever"), ("New York Liberty", "Indiana Fever")]
     swings = compute_importance_from_matrix(
         outcome_matrix,
-        playoff_sets,
+        fate_levels,
         games,
         ["Las Vegas Aces", "New York Liberty", "Indiana Fever"],
     )
@@ -449,28 +454,41 @@ def test_compute_importance_from_matrix_empty_subset_returns_zero():
 
 
 def test_compute_importance_floor_subtracted_exactly():
-    """Clean-flip game: corrected swing = raw 1.0 minus the analytic noise floor."""
-    # 50 sims team_a wins, 50 team_b wins; T1 makes playoffs iff team_a wins,
-    # T2 always makes playoffs.
+    """Clean-flip game: corrected swing = raw 2.0 minus the analytic noise floor.
+
+    50 sims team_a wins, 50 team_b wins; T1's fate is lost_qf iff team_a won,
+    else missed; T2's fate is always lost_qf (constant -> no swing, no floor).
+    A single team flipping between exactly two fate levels moves BOTH levels'
+    counts (one goes 1.0->0.0, the other 0.0->1.0), so the raw swing is 2.0,
+    not 1.0 -- this is the real behavior change from the old binary
+    make-playoffs fate (there, only one count existed per team).
+    """
     outcome_matrix = [[True]] * 50 + [[False]] * 50
-    playoff_sets = [{"T1", "T2"}] * 50 + [{"T2"}] * 50
+    fate_levels = [{"T1": FATE_LOST_QF, "T2": FATE_LOST_QF}] * 50 + [
+        {"T1": FATE_MISSED, "T2": FATE_LOST_QF}
+    ] * 50
     swings = compute_importance_from_matrix(
-        outcome_matrix, playoff_sets, [("T1", "T2")], ["T1", "T2"]
+        outcome_matrix, fate_levels, [("T1", "T2")], ["T1", "T2"]
     )
-    # T1: |1 - 0| = 1, pooled p = 0.5 -> floor term sqrt(2/pi)*sqrt(0.25*(1/50+1/50))
-    # T2: |1 - 1| = 0, pooled p = 1.0 -> p(1-p) = 0, no floor term
-    expected_floor = math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 50 + 1 / 50))
-    assert swings[0] == pytest.approx(1.0 - expected_floor, abs=1e-12)
+    # T1 lost_qf level: |1 - 0| = 1, pooled p = 0.5 -> one floor term.
+    # T1 missed level:  |0 - 1| = 1, pooled p = 0.5 -> one floor term (same value).
+    # T2: constant lost_qf, pooled p = 1.0 -> p(1-p) = 0, no floor term either level.
+    term = math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 50 + 1 / 50))
+    expected_floor = 2 * term
+    assert swings[0] == pytest.approx(2.0 - expected_floor, abs=1e-12)
 
 
 def test_compute_importance_clamps_at_zero():
     """No-signal game (identical rates in both buckets) corrects to exactly 0."""
-    # Outcome alternates by sim; T1's playoff rate is exactly 0.5 in each bucket,
-    # so raw swing = 0 and subtracting the positive floor must clamp at 0.
+    # Outcome alternates by sim; T1's fate-level rates are identical in both
+    # buckets, so raw swing = 0 and subtracting the positive floor must clamp
+    # at 0.
     outcome_matrix = [[s % 2 == 0] for s in range(100)]
-    playoff_sets = [({"T1"} if s % 4 in (0, 1) else set()) for s in range(100)]
+    fate_levels = [
+        {"T1": (FATE_LOST_QF if s % 4 in (0, 1) else FATE_MISSED)} for s in range(100)
+    ]
     swings = compute_importance_from_matrix(
-        outcome_matrix, playoff_sets, [("T1", "T2")], ["T1", "T2"]
+        outcome_matrix, fate_levels, [("T1", "T2")], ["T1", "T2"]
     )
     assert swings[0] == 0.0
 
