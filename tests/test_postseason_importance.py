@@ -1,6 +1,7 @@
 """Tests for per-game postseason importance derivation."""
 
 import math
+import random
 
 import pytest
 
@@ -14,8 +15,13 @@ from src.scoring.monte_carlo import (
     FATE_LOST_FINALS,
     FATE_LOST_QF,
     FATE_LOST_SF,
+    FATE_MISSED,
     compute_postseason_swing_from_matrix,
+    run_monte_carlo_simulation,
+    to_team_standings,
 )
+from src.scoring.playoffs import _GAMES_NEEDED_BO3, empty_bracket_state
+from src.scoring.tiebreakers import resolve_seeding
 
 
 def test_postseason_swing_reaches_four_for_win_or_go_home():
@@ -161,15 +167,140 @@ def test_postseason_swing_ignores_sims_with_no_bracket():
     swing = compute_postseason_swing_from_matrix(
         "qf1", 1, bracket_outcomes, fate_levels, ("A", "B")
     )
+
     # Higher bucket has 2 sims but only 1 carries fates, so rates are halved
-    # against n_h=2; the assertion is simply that this does not raise and stays
-    # within the structural bound.
-    assert 0.0 <= swing <= 4.0
+    # against n_h=2: A's champion rate is 0.5 (n_h) vs 0.0 (n_l=1) -> |0.5-0|;
+    # A's lost_qf rate is 0.0 vs 1.0 -> |0-1|; same shape for B with champion
+    # and lost_qf swapped. Raw = 3.0 (0.5+1.0 for each of A and B). Floor:
+    # only lost_qf's pooled rate is nonzero across both participants (A's
+    # champion pools with B's champion at rate 1/3 too) -- pooled rate is
+    # 1/3 for both the lost_qf level and the champion level, n_a=2, n_b=1,
+    # 4 such terms (2 participants x 2 nonzero levels).
+    def term(p, n_a, n_b):
+        variance = p * (1 - p) * (1 / n_a + 1 / n_b)
+        return math.sqrt(2 / math.pi * variance)
+
+    expected = 3.0 - 4 * term(1 / 3, 2, 1)
+    assert swing == pytest.approx(expected, abs=1e-9)
+
+
+def test_postseason_swing_ignores_non_participant_teams():
+    """A team not in `participants` must not contribute to the swing, even
+    when its fate correlates perfectly with the focal game's outcome --
+    that's bracket bookkeeping (which opponent a non-participant draws
+    next), not fate, per compute_postseason_swing_from_matrix's docstring
+    ("Participants-only, unlike the regular season's all-teams sum").
+
+    Same shape as test_postseason_swing_four_when_game_decides_both_seasons
+    (Finals Game 7, A/B), with a third team C added whose fate is CHAMPION
+    whenever A wins and MISSED whenever A loses -- a stronger correlation
+    with the focal outcome than either participant's own fate swing. If the
+    function summed over every team in `fate_levels` instead of only
+    `participants`, C's perfectly-correlated champion/missed swing would
+    inflate this above the exact two-participant value asserted below.
+    """
+    n = 500
+    bracket_outcomes = [
+        *({("f", 7): True} for _ in range(n)),
+        *({("f", 7): False} for _ in range(n)),
+    ]
+    fate_levels = [
+        {"A": FATE_CHAMPION, "B": FATE_LOST_FINALS, "C": FATE_CHAMPION}
+        for _ in range(n)
+    ] + [
+        {"A": FATE_LOST_FINALS, "B": FATE_CHAMPION, "C": FATE_MISSED} for _ in range(n)
+    ]
+
+    swing = compute_postseason_swing_from_matrix(
+        "f", 7, bracket_outcomes, fate_levels, ("A", "B")
+    )
+    # Identical to test_postseason_swing_four_when_game_decides_both_seasons:
+    # two levels per participant (A, B) carry a floor term at pooled p=0.5;
+    # C is excluded entirely by the participants-only restriction, so its
+    # champion/missed swing appears in neither the raw sum nor the floor.
+    expected_floor = 4 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / n + 1 / n))
+    assert swing == pytest.approx(4.0 - expected_floor, abs=1e-9)
+
+
+def test_postseason_swing_over_real_monte_carlo_output():
+    """Integration test: feeds run_monte_carlo_simulation's REAL
+    bracket_outcomes/fate_levels into compute_postseason_swing_from_matrix,
+    rather than the hand-built dicts every other test in this file uses.
+
+    Every other postseason test constructs bracket_outcomes/fate_levels by
+    hand, so the seam between the simulator's actual per-sim output and this
+    scoring function is otherwise unguarded -- a change to
+    _fate_levels_for_sim, the bracket recorder's game-numbering, or
+    _partition_bracket's key shape could leave every other test in this file
+    green while silently zeroing or maxing out live playoff importance
+    scores. This is the one path with no production track record (the site
+    has never run compute_postseason_swing_from_matrix against a real
+    playoff bracket in prod).
+
+    RNG is seeded for reproducibility; num_simulations is kept low (500) to
+    stay fast. remaining_games is empty and every team has a distinct win
+    total, so seeding is fully deterministic across sims -- the only
+    randomness is in how the bracket itself plays out.
+    """
+    teams = [
+        "New York Liberty",
+        "Las Vegas Aces",
+        "Minnesota Lynx",
+        "Connecticut Sun",
+        "Indiana Fever",
+        "Seattle Storm",
+        "Atlanta Dream",
+        "Phoenix Mercury",
+    ]
+    standings = {
+        name: {"wins": 20 - i, "losses": i, "elo": 1600 - i * 10}
+        for i, name in enumerate(teams)
+    }
+    seeded = resolve_seeding(to_team_standings(standings))
+    assert seeded == teams  # strictly decreasing wins -> deterministic, no ties
+
+    bracket_state = empty_bracket_state(seeded)
+    # qf1 (1 seed vs 8 seed): resume at 1-1, so the next game (game 3) is
+    # win-or-go-home.
+    bracket_state["qf1"].higher_wins = 1
+    bracket_state["qf1"].lower_wins = 1
+    # qf2 (4 seed vs 5 seed): already decided -- the series is over, so
+    # simulate_playoffs plays no more games in this slot and nothing gets
+    # recorded in bracket_outcomes for it in any sim.
+    bracket_state["qf2"].winner = bracket_state["qf2"].higher
+    bracket_state["qf2"].higher_wins = _GAMES_NEEDED_BO3
+
+    random.seed(20260830)
+    _, _, _, bracket_outcomes, _, fate_levels = run_monte_carlo_simulation(
+        standings,
+        [],
+        num_simulations=500,
+        return_matrix=True,
+        bracket_state=bracket_state,
+    )
+
+    win_or_go_home_swing = compute_postseason_swing_from_matrix(
+        "qf1",
+        3,
+        bracket_outcomes,
+        fate_levels,
+        (bracket_state["qf1"].higher, bracket_state["qf1"].lower),
+    )
+    assert normalize_postseason_importance(win_or_go_home_swing) > 90
+
+    decided_swing = compute_postseason_swing_from_matrix(
+        "qf2",
+        3,
+        bracket_outcomes,
+        fate_levels,
+        (bracket_state["qf2"].higher, bracket_state["qf2"].lower),
+    )
+    assert normalize_postseason_importance(decided_swing) < 10
 
 
 def test_find_bracket_slot_matches_pair():
     """Returns (slot_id, next_game_num) when teams match an in-progress slot."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -204,7 +335,7 @@ def test_find_bracket_slot_game_number_includes_pre_played():
 
 def test_find_bracket_slot_no_match_returns_none():
     """Teams not in the bracket → None."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -218,7 +349,7 @@ def test_find_bracket_slot_no_match_returns_none():
 
 def test_find_bracket_slot_skips_decided_series():
     """A slot whose winner is set is treated as not matching (series is over)."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -263,7 +394,7 @@ def test_importance_for_game_postseason_fallback_when_no_bracket_state():
 
 def test_importance_for_game_postseason_fallback_when_teams_not_in_bracket():
     """season_type=3 + bracket_state without these teams → fallback 100.0."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {"qf1": SeriesState(higher="X", lower="Y", games_needed=_GAMES_NEEDED_BO3)}
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
@@ -319,7 +450,7 @@ def test_importance_for_game_postseason_derives_from_swing():
 def test_importance_for_game_postseason_partial_swing():
     """Partial fate spread for the advancing team -> partial swing; proves
     the derivation path actually executes with a non-trivial split."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -483,7 +614,6 @@ def test_find_bracket_slot_matches_opening_round_game_one():
     """Game 1 of an opening-round QF is matchable via the empty bracket
     state. Without this, _importance_for_game falls back to flat 100."""
     from scripts.daily_update import _find_bracket_slot
-    from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
         "Las Vegas Aces",
@@ -507,7 +637,6 @@ def test_assign_postseason_slot_lookup_distinct_game_nums_in_same_series():
     not all to game_num 1. Regression for the 'all upcoming games in a
     series get scored as the next game' Codex finding."""
     from scripts.daily_update import _assign_postseason_slot_lookup
-    from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
         "Las Vegas Aces",
@@ -557,8 +686,6 @@ def test_assign_postseason_slot_lookup_respects_completed_games_in_slot():
     from scripts.daily_update import _assign_postseason_slot_lookup
     from src.scoring.playoffs import (
         SeriesState,
-        _GAMES_NEEDED_BO3,
-        empty_bracket_state,
     )
 
     seeded = [
@@ -602,7 +729,6 @@ def test_assign_postseason_slot_lookup_respects_completed_games_in_slot():
 def test_assign_postseason_slot_lookup_handles_multiple_slots_independently():
     """Games across different slots are numbered independently within each."""
     from scripts.daily_update import _assign_postseason_slot_lookup
-    from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
         "Las Vegas Aces",
@@ -650,7 +776,6 @@ def test_assign_postseason_slot_lookup_skips_unmatchable_games():
     """Postseason rows for teams not in any slot are omitted, not
     silently slotted somewhere."""
     from scripts.daily_update import _assign_postseason_slot_lookup
-    from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
         "Las Vegas Aces",
@@ -681,7 +806,6 @@ def test_assign_postseason_slot_lookup_ignores_regular_season_rows():
     """season_type != 3 games are ignored even if their team pair happens
     to match a bracket slot."""
     from scripts.daily_update import _assign_postseason_slot_lookup
-    from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
         "Las Vegas Aces",
@@ -711,7 +835,7 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
     """Same upcoming game, called twice with lookup pointing at different
     game numbers, must produce different importance — proves the ordinal
     actually flows into compute_postseason_swing_from_matrix."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -774,7 +898,7 @@ def test_importance_for_game_lookup_miss_falls_back_to_max():
     game's event_id, return 100 (unmatched). Don't silently fall through
     to _find_bracket_slot, which would assign every unlisted upcoming
     game the same 'next game' number."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(

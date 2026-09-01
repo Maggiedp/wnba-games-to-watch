@@ -1013,12 +1013,7 @@ def _importance_for_game(
     if season_type == 1:
         return 0.0
     if season_type == 3:
-        if (
-            bracket_state is None
-            or bracket_outcomes is None
-            or fate_levels is None
-            or team_names is None
-        ):
+        if bracket_state is None or bracket_outcomes is None or fate_levels is None:
             return 100.0
         event_id = game.get("event_id", "")
         if postseason_slot_lookup is not None:
