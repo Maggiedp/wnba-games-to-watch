@@ -341,6 +341,27 @@ def _noise_floor_term(pooled_rate: float, n_a: int, n_b: int) -> float:
     return math.sqrt(2.0 / math.pi * variance)
 
 
+def _fate_counts(
+    indices: list[int], fate_levels: list[dict[str, str]], team: str
+) -> dict[str, int]:
+    """Per-level tally of one team's round-reached fate across a bucket of sims.
+
+    One pass over the bucket, NOT one pass per level: this keeps callers at
+    O(games x teams x sims) rather than five times that, which matters because
+    the daily job runs synchronously against Cloud Run's request timeout.
+
+    Sims where the team has no recorded fate (fewer than 8 teams seeded, so no
+    bracket was played) contribute to no level, exactly as the inline versions
+    this replaces did.
+    """
+    counts = dict.fromkeys(FATE_LEVELS, 0)
+    for s in indices:
+        level = fate_levels[s].get(team)
+        if level is not None:
+            counts[level] += 1
+    return counts
+
+
 def compute_importance_from_matrix(
     outcome_matrix: list[list[bool | None]],
     fate_levels: list[dict[str, str]],
@@ -387,20 +408,8 @@ def compute_importance_from_matrix(
         swing = 0.0
         floor = 0.0
         for team in team_names:
-            # One pass per bucket per team, NOT one per level: this keeps
-            # the function at O(games x teams x sims), the same cost as the
-            # binary-fate version. A nested per-level scan is 5x and can
-            # push the synchronous daily job toward Cloud Run's timeout.
-            counts_a = dict.fromkeys(FATE_LEVELS, 0)
-            counts_b = dict.fromkeys(FATE_LEVELS, 0)
-            for s in a_indices:
-                level = fate_levels[s].get(team)
-                if level is not None:
-                    counts_a[level] += 1
-            for s in b_indices:
-                level = fate_levels[s].get(team)
-                if level is not None:
-                    counts_b[level] += 1
+            counts_a = _fate_counts(a_indices, fate_levels, team)
+            counts_b = _fate_counts(b_indices, fate_levels, team)
 
             for level in FATE_LEVELS:
                 count_a = counts_a[level]
@@ -458,16 +467,8 @@ def compute_directional_movers_from_matrix(
     n_a, n_b = len(a_indices), len(b_indices)
     movers: list[dict] = []
     for team in team_names:
-        counts_a = dict.fromkeys(FATE_LEVELS, 0)
-        counts_b = dict.fromkeys(FATE_LEVELS, 0)
-        for s in a_indices:
-            level = fate_levels[s].get(team)
-            if level is not None:
-                counts_a[level] += 1
-        for s in b_indices:
-            level = fate_levels[s].get(team)
-            if level is not None:
-                counts_b[level] += 1
+        counts_a = _fate_counts(a_indices, fate_levels, team)
+        counts_b = _fate_counts(b_indices, fate_levels, team)
 
         best: dict | None = None
         best_delta = 0.0
