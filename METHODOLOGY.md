@@ -170,6 +170,36 @@ round-reached swing, same games, same simulation draws). The new fate's max/p99 
 actually a tighter fit than the old fate's (1.21), so the pinned ceiling is less of an outlier than
 before, not more.
 
+### The postseason: the same fate, the two teams playing
+
+Once the bracket starts, importance keeps the five-level round-reached fate but
+sums over **only the two teams playing**, normalized by a ceiling of 4.0.
+
+Restricting to the participants is deliberate. In the regular season a team that
+isn't playing has genuine stakes in the result — that's the bubble race, and it's
+why the regular-season sum runs over all teams. In a fixed no-reseed bracket, a
+non-participant's only stake is which opponent it draws next: bookkeeping, not
+fate. Summing over all teams inflated the early rounds, where more teams are
+still alive, to the point of ranking the quarterfinals above the Finals.
+
+The 4.0 ceiling is **structural, not calibrated**. In a win-or-go-home game the
+loser's fate collapses to "lost in this round" with probability 1 while the
+winner's spreads across the deeper levels, so each team moves exactly 2 units of
+probability — one out of its current level, one across wherever it goes next.
+Two teams, 4.0, which is also the hard maximum. Unlike the regular-season
+ceiling, it never needs re-deriving.
+
+Measured against reconstructed bracket states on the 2025 field, every
+win-or-go-home game lands within a noise floor of the maximum — a quarterfinal
+Game 3 (3.947), a semifinal Game 5 (3.957) and a Finals Game 7 (3.968) all score
+~99. That is intended: the fate movement really is the same, since the loser's
+season ends either way. What separates them on the site is the quality score.
+
+One honest consequence: a game that *can* clinch a title but where the series is
+already lopsided — a Finals Game 4 at 3-0 — reads mid, not high, because the
+championship is no longer in much doubt. That is the metric reporting what is
+true rather than what is dramatic, consistent with the rest of this page.
+
 ### "No importance score" means *not simulated*, not *zero stakes*
 
 Games outside the simulation universe (e.g. a row not yet classified as regular/postseason) show an
