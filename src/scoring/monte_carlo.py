@@ -553,20 +553,27 @@ def compute_postseason_movers_from_matrix(
     focal_slot: str,
     focal_game_num: int,
     bracket_outcomes: list[dict[tuple[str, int], bool]],
-    champions: list[str | None],
-    team_names: list[str],
-    top_n: int = 3,
+    fate_levels: list[dict[str, str]],
+    participants: tuple[str, str],
     min_delta: float = 0.03,
 ) -> list[dict]:
-    """Per-team directional championship-odds movers for one bracket game.
+    """Per-participant directional milestone movers for one bracket game.
 
     Partitions sims by who won the focal bracket game (same split as
-    ``compute_postseason_swing_from_matrix``), then computes
-    P(champion | higher won) and P(champion | lower won) for each team.
-    Returns up to ``top_n`` teams by ``|if_higher - if_lower|`` clearing
-    ``min_delta``, sorted descending. Returns ``[]`` if either bucket is empty.
-    Each dict: ``{"team": str, "if_higher": float, "if_lower": float}``; the
-    caller maps higher/lower to the matchup's team_a/team_b for display.
+    ``compute_postseason_swing_from_matrix``), then for each of the two teams
+    playing finds the cumulative milestone (make playoffs / reach semis /
+    reach finals / win title) whose odds moved most — mirroring the regular
+    season's ``compute_directional_movers_from_matrix``, because the swing
+    sums over five *exclusive* levels but "odds of reaching the semis" reads
+    naturally on the panel while "odds of losing in the semifinals" does not.
+
+    Restricted to the participants, matching what the postseason swing
+    measures: a non-participant shown moving on a game scored low would
+    misdescribe the number. No ``top_n`` — there are only ever two teams.
+
+    Returns ``[]`` if either bucket is empty. Each dict:
+    ``{"team": str, "level": str, "if_higher": float, "if_lower": float}``;
+    the caller maps higher/lower onto the matchup's team_a/team_b.
     """
     higher_indices, lower_indices = _partition_bracket(
         bracket_outcomes, focal_slot, focal_game_num
@@ -574,15 +581,30 @@ def compute_postseason_movers_from_matrix(
     if not higher_indices or not lower_indices:
         return []
 
-    def champ_rate(indices: list[int], team: str) -> float:
-        return sum(1 for i in indices if champions[i] == team) / len(indices)
-
+    n_h, n_l = len(higher_indices), len(lower_indices)
     movers: list[dict] = []
-    for team in team_names:
-        rate_h = champ_rate(higher_indices, team)
-        rate_l = champ_rate(lower_indices, team)
-        if abs(rate_h - rate_l) >= min_delta:
-            movers.append({"team": team, "if_higher": rate_h, "if_lower": rate_l})
+    for team in participants:
+        counts_h = _fate_counts(higher_indices, fate_levels, team)
+        counts_l = _fate_counts(lower_indices, fate_levels, team)
+
+        best: dict | None = None
+        best_delta = 0.0
+        for label, members in _MILESTONES:
+            rate_h = sum(counts_h[lv] for lv in members) / n_h
+            rate_l = sum(counts_l[lv] for lv in members) / n_l
+            delta = abs(rate_h - rate_l)
+            # Strict > keeps the first milestone on a tie, so _MILESTONES
+            # order makes the choice deterministic.
+            if delta > best_delta:
+                best_delta = delta
+                best = {
+                    "team": team,
+                    "level": label,
+                    "if_higher": rate_h,
+                    "if_lower": rate_l,
+                }
+        if best is not None and best_delta >= min_delta:
+            movers.append(best)
 
     movers.sort(key=lambda m: abs(m["if_higher"] - m["if_lower"]), reverse=True)
-    return movers[:top_n]
+    return movers

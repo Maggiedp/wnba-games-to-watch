@@ -1056,7 +1056,6 @@ def _importance_detail_for_game(
     remaining_event_index: dict[str, int],
     bracket_state=None,
     bracket_outcomes: list[dict[tuple[str, int], bool]] | None = None,
-    champions: list[str | None] | None = None,
     team_names: list[str] | None = None,
     postseason_slot_lookup: dict[str, tuple[str, int]] | None = None,
     importance: float | None = None,
@@ -1064,8 +1063,9 @@ def _importance_detail_for_game(
     """Build the directional-movers JSON payload for one upcoming game.
 
     Regular season: top playoff-odds movers from the MC outcome matrix.
-    Postseason: top championship-odds movers from bracket outcomes, with the
-    slot's higher/lower seed mapped onto the matchup's team_a/team_b.
+    Postseason: each participant's biggest cumulative milestone move, from
+    bracket outcomes, with the slot's higher/lower seed mapped onto the
+    matchup's team_a/team_b.
     Returns None for preseason, non-simulated games, games that can't be
     located in the sim universe, when no team's odds clear the threshold, or
     when the game's corrected importance is exactly 0 (swing clamped to the
@@ -1084,7 +1084,7 @@ def _importance_detail_for_game(
         if (
             bracket_state is None
             or bracket_outcomes is None
-            or champions is None
+            or fate_levels is None
             or team_names is None
             or postseason_slot_lookup is None
         ):
@@ -1094,7 +1094,7 @@ def _importance_detail_for_game(
             return None
         slot_id, game_num = located
         raw = compute_postseason_movers_from_matrix(
-            slot_id, game_num, bracket_outcomes, champions, team_names
+            slot_id, game_num, bracket_outcomes, fate_levels, (team_a, team_b)
         )
         if not raw:
             return None
@@ -1103,6 +1103,7 @@ def _importance_detail_for_game(
         movers = [
             {
                 "team": m["team"],
+                "level": m["level"],
                 "if_a": m["if_higher"] if a_is_higher else m["if_lower"],
                 "if_b": m["if_lower"] if a_is_higher else m["if_higher"],
             }
@@ -1276,7 +1277,6 @@ def compute_daily_scores(
             remaining_event_index,
             bracket_state=bracket_state,
             bracket_outcomes=bracket_outcomes,
-            champions=champions,
             team_names=team_names,
             postseason_slot_lookup=postseason_slot_lookup,
             importance=importance,

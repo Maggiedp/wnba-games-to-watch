@@ -2,7 +2,12 @@ import json
 from types import SimpleNamespace
 
 from scripts.daily_update import _importance_detail_for_game
-from src.scoring.monte_carlo import FATE_LOST_QF, FATE_MISSED
+from src.scoring.monte_carlo import (
+    FATE_CHAMPION,
+    FATE_LOST_FINALS,
+    FATE_LOST_QF,
+    FATE_MISSED,
+)
 
 
 def _post_inputs():
@@ -15,13 +20,18 @@ def _post_inputs():
         {("f", 1): False},
         {("f", 1): False},
     ]
-    champions = ["Aces", "Aces", "Liberty", "Liberty"]
+    fate_levels = [
+        {"Aces": FATE_CHAMPION, "Liberty": FATE_LOST_FINALS},
+        {"Aces": FATE_CHAMPION, "Liberty": FATE_LOST_FINALS},
+        {"Aces": FATE_LOST_FINALS, "Liberty": FATE_CHAMPION},
+        {"Aces": FATE_LOST_FINALS, "Liberty": FATE_CHAMPION},
+    ]
     team_names = ["Aces", "Liberty"]
     postseason_slot_lookup = {"evtP": ("f", 1)}
     return (
         bracket_state,
         bracket_outcomes,
-        champions,
+        fate_levels,
         team_names,
         postseason_slot_lookup,
     )
@@ -76,16 +86,15 @@ def test_unknown_event_returns_none():
 
 
 def test_postseason_payload_when_team_a_is_higher_seed():
-    bs, bo, champs, names, lookup = _post_inputs()
+    bs, bo, fl, names, lookup = _post_inputs()
     game = {"event_id": "evtP", "team_a": "Aces", "team_b": "Liberty", "season_type": 3}
     raw = _importance_detail_for_game(
         game,
         [],
-        [],
+        fl,
         {},
         bracket_state=bs,
         bracket_outcomes=bo,
-        champions=champs,
         team_names=names,
         postseason_slot_lookup=lookup,
     )
@@ -93,22 +102,22 @@ def test_postseason_payload_when_team_a_is_higher_seed():
     assert data["metric"] == "championship"
     assert data["if_a_team"] == "Aces" and data["if_b_team"] == "Liberty"
     aces = next(m for m in data["movers"] if m["team"] == "Aces")
+    assert aces["level"] == "championship"
     # team_a is the higher seed → if_a is the "higher won" champ rate.
     assert aces["if_a"] == 1.0 and aces["if_b"] == 0.0
 
 
 def test_postseason_orientation_flips_when_team_a_is_lower_seed():
-    bs, bo, champs, names, lookup = _post_inputs()
+    bs, bo, fl, names, lookup = _post_inputs()
     # Same series, but the matchup lists the lower seed (Liberty) as team_a.
     game = {"event_id": "evtP", "team_a": "Liberty", "team_b": "Aces", "season_type": 3}
     raw = _importance_detail_for_game(
         game,
         [],
-        [],
+        fl,
         {},
         bracket_state=bs,
         bracket_outcomes=bo,
-        champions=champs,
         team_names=names,
         postseason_slot_lookup=lookup,
     )
@@ -159,18 +168,17 @@ def test_none_importance_does_not_suppress_movers():
 
 
 def test_postseason_missing_bracket_inputs_returns_none():
-    bs, bo, champs, names, lookup = _post_inputs()
+    bs, bo, fl, names, lookup = _post_inputs()
     game = {"event_id": "evtP", "team_a": "Aces", "team_b": "Liberty", "season_type": 3}
     # postseason_slot_lookup omitted (None) → no payload.
     assert (
         _importance_detail_for_game(
             game,
             [],
-            [],
+            fl,
             {},
             bracket_state=bs,
             bracket_outcomes=bo,
-            champions=champs,
             team_names=names,
         )
         is None
