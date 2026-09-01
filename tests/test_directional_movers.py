@@ -10,7 +10,6 @@ from src.scoring.monte_carlo import (
     compute_directional_movers_from_matrix,
     compute_importance_from_matrix,
     compute_postseason_movers_from_matrix,
-    compute_postseason_swing_from_matrix,
 )
 
 
@@ -237,8 +236,16 @@ def test_postseason_movers_empty_bucket():
 
 
 def test_postseason_sum_matches_existing_swing():
-    # Movers report raw per-team deltas. The swing is floor-corrected.
-    # Verify: directional_sum == corrected_swing + floor (within numerical precision).
+    # Movers report raw per-team deltas. The (still champion-only, Task 3's
+    # scope) swing they'd feed is floor-corrected the same way.
+    # Verify: directional_sum == corrected_swing + floor (within numerical
+    # precision), where corrected_swing/floor are computed inline with the
+    # SAME champion-partition algorithm compute_postseason_movers_from_matrix
+    # uses internally — NOT via compute_postseason_swing_from_matrix, which
+    # postseason-importance's round-reached-fate change (task 2) repurposed
+    # to a different (fate_levels/participants) computation entirely; this
+    # test's job is to check compute_postseason_movers_from_matrix's own
+    # internal consistency, independent of that unrelated function.
     bracket_outcomes = [
         {("sf1", 2): True},
         {("sf1", 2): False},
@@ -251,17 +258,18 @@ def test_postseason_sum_matches_existing_swing():
         "sf1", 2, bracket_outcomes, champions, team_names, top_n=99, min_delta=0.0
     )
     directional_sum = sum(abs(m["if_higher"] - m["if_lower"]) for m in movers)
-    corrected_swing = compute_postseason_swing_from_matrix(
-        "sf1", 2, bracket_outcomes, champions, team_names
-    )
-    # Compute the analytic noise floor using the same logic as compute_postseason_swing_from_matrix
+    # Compute the analytic noise floor using the same logic as the old
+    # compute_postseason_swing_from_matrix (champion-only, all team_names).
     higher_indices = [0, 2]  # sims where higher seed won
     lower_indices = [1, 3]  # sims where lower seed won
     n_h, n_l = len(higher_indices), len(lower_indices)
+    raw_swing = 0.0
     floor = 0.0
     for team in team_names:
         count_h = sum(1 for i in higher_indices if champions[i] == team)
         count_l = sum(1 for i in lower_indices if champions[i] == team)
+        raw_swing += abs(count_h / n_h - count_l / n_l)
         pooled_rate = (count_h + count_l) / (n_h + n_l)
         floor += _noise_floor_term(pooled_rate, n_h, n_l)
+    corrected_swing = max(0.0, raw_swing - floor)
     assert abs(directional_sum - (corrected_swing + floor)) < 1e-9

@@ -497,26 +497,35 @@ def compute_postseason_swing_from_matrix(
     focal_slot: str,
     focal_game_num: int,
     bracket_outcomes: list[dict[tuple[str, int], bool]],
-    champions: list[str | None],
-    team_names: list[str],
+    fate_levels: list[dict[str, str]],
+    participants: tuple[str, str],
 ) -> float:
-    """Compute championship-swing for a specific bracket game.
+    """Round-reached importance swing for one bracket game.
 
-    Partitions the simulation set by who won the focal bracket game, then
-    computes Σ |P(team = champion | higher won) − P(team = champion | lower won)|
-    across all team names, minus the analytic noise floor (same correction as
-    compute_importance_from_matrix), clamped at 0.
+    Partitions the simulation set by who won the focal bracket game, then sums
+    |P(fate = level | higher won) - P(fate = level | lower won)| over the five
+    exclusive round-reached fate levels, for the TWO TEAMS PLAYING only, minus
+    the analytic noise floor (same correction as compute_importance_from_matrix),
+    clamped at 0.
+
+    Participants-only, unlike the regular season's all-teams sum: in the regular
+    season a team not playing has real stakes (the bubble race), but in a fixed
+    no-reseed bracket a non-participant's only stake is which opponent it draws
+    — bookkeeping, not fate. Summing over all teams inflated the early rounds,
+    where more teams are still alive, and ranked the quarterfinals above the
+    Finals.
 
     Args:
         focal_slot: bracket slot id, e.g. "qf1", "sf2", "f".
         focal_game_num: 1-indexed game number within the series.
         bracket_outcomes: per-sim dict of (slot, game_num) -> did_higher_win.
-        champions: per-sim champion name (or None if no bracket played).
-        team_names: all team names to sum |Δ| across.
+        fate_levels: per-sim map of team name -> one of FATE_LEVELS.
+        participants: the two team names contesting this game.
 
     Returns:
-        Corrected swing value (>= 0.0, < 2.0). Normalize with
-        `normalize_postseason_importance`.
+        Corrected swing (>= 0.0, <= 4.0). Normalize with
+        `normalize_postseason_importance`. 4.0 is the structural maximum: a
+        win-or-go-home game moves each participant 2 units of total variation.
         Returns 0.0 if either partition bucket is empty (focal game didn't
         happen in any sim, or all sims agree on the outcome).
     """
@@ -529,11 +538,14 @@ def compute_postseason_swing_from_matrix(
     n_h, n_l = len(higher_indices), len(lower_indices)
     swing = 0.0
     floor = 0.0
-    for team in team_names:
-        count_h = sum(1 for i in higher_indices if champions[i] == team)
-        count_l = sum(1 for i in lower_indices if champions[i] == team)
-        swing += abs(count_h / n_h - count_l / n_l)
-        floor += _noise_floor_term((count_h + count_l) / (n_h + n_l), n_h, n_l)
+    for team in participants:
+        counts_h = _fate_counts(higher_indices, fate_levels, team)
+        counts_l = _fate_counts(lower_indices, fate_levels, team)
+        for level in FATE_LEVELS:
+            count_h = counts_h[level]
+            count_l = counts_l[level]
+            swing += abs(count_h / n_h - count_l / n_l)
+            floor += _noise_floor_term((count_h + count_l) / (n_h + n_l), n_h, n_l)
     return max(0.0, swing - floor)
 
 
