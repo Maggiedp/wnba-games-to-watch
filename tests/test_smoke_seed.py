@@ -55,3 +55,32 @@ def test_seed_populates_walked_surfaces(env, client):
     assert "playoff odds" in detail.text  # "What's at stake" movers block
 
     assert client.get(f"/game/{COMPLETED_DETAIL_ID}").status_code == 200
+
+
+def test_seed_completed_games_land_in_current_season_after_new_year(env, monkeypatch):
+    """The completed window must follow CURRENT_SEASON, not the wall clock.
+
+    Without this the walk's completed state and the 25-game calibration gate
+    both empty out every January -- the queries are season-anchored while the
+    seed was today-anchored. Simulates the rolled-over clock rather than
+    waiting for CI to hit it on 2027-01-01.
+    """
+    from src.constants import CURRENT_SEASON
+    from src.db.schema import Game
+
+    import src.data.espn_api as espn_api
+
+    # seed() imports today_et inside the function, so patch it at the source.
+    monkeypatch.setattr(espn_api, "today_et", lambda: f"{CURRENT_SEASON + 1}-01-01")
+    session = env.get_session()
+    seed(session)
+
+    completed = [g for g in session.query(Game).all() if g.winner_id is not None]
+    assert completed, "seed produced no completed games"
+    stray = sorted(
+        {g.date for g in completed if not g.date.startswith(str(CURRENT_SEASON))}
+    )
+    assert not stray, (
+        f"completed games dated outside CURRENT_SEASON ({CURRENT_SEASON}): {stray} "
+        "— the season-scoped queries will not see them"
+    )

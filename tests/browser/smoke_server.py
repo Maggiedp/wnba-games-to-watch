@@ -51,6 +51,7 @@ def _curve() -> list:
 def seed(session) -> None:
     """Populate every table the walked pages read. Dates are relative to
     today_et() so the walk never goes stale. Commits."""
+    from src.constants import CURRENT_SEASON
     from src.data.espn_api import today_et
     from src.db.queries import (
         upsert_game_shape,
@@ -68,7 +69,11 @@ def seed(session) -> None:
     )
 
     today = date.fromisoformat(today_et())
+    # Clock-derived on purpose: /api/shot-making and the elo-history endpoint
+    # both read int(today_et()[:4]), so these rows must match the clock, NOT
+    # CURRENT_SEASON. The completed window below is the opposite case.
     season = today.year
+    completed_anchor = min(today, date(CURRENT_SEASON, 10, 31))
 
     teams = [Team(name=n, abbreviation=a, logo_url="") for n, a in _TEAMS]
     session.add_all(teams)
@@ -124,15 +129,21 @@ def seed(session) -> None:
             )
         )
 
-    # --- Completed: two games/night for -1..-14 days, floored at Jan 1 so
-    # the window never crosses into the prior year (the completed/calibration
-    # queries are season-year-scoped; without the floor, early-January CI runs
-    # would drop below the 25-game calibration gate). k=0 is the completed
+    # --- Completed: two games/night for -1..-14 days, clamped INTO
+    # CURRENT_SEASON at both ends. Those queries are anchored to the season
+    # constant, not the wall clock, so a window derived from `today` alone
+    # silently empties the completed walk state and drops below the 25-game
+    # calibration gate whenever the calendar year and CURRENT_SEASON differ
+    # -- every January, and any time the annual bump is late. Trailing the
+    # season's end in that case is also what production shows in the
+    # offseason. In season this is identical to trailing today. k=0 is the
+    # completed
     # detail target and reuses pair(0), so the upcoming detail page gets a
     # head-to-head row. First 8 get game_shapes rows (minis + /replay).
     for k in range(28):
         gdate = max(
-            today - timedelta(days=1 + k // 2), date(today.year, 1, 1)
+            completed_anchor - timedelta(days=1 + k // 2),
+            date(CURRENT_SEASON, 1, 1),
         ).isoformat()
         a, b = pair(k)
         espn_id = COMPLETED_DETAIL_ID if k == 0 else f"998{k + 1:04d}"

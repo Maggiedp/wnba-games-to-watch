@@ -1,5 +1,21 @@
 """Constants for WNBA Games to Watch."""
 
+# The season the live site reads and writes. Bump ONCE A YEAR, at season start.
+#
+# This bump was already mandatory before it had a name: fetch_bpi_ratings()
+# builds /seasons/{CURRENT_SEASON}/powerindex, so a stale value silently
+# serves last season's BPI rather than erroring. Everything else that used to
+# re-type the literal now derives from here.
+#
+# Deliberately NOT clock-derived. int(today_et()[:4]) would roll on Jan 1,
+# blanking the completed list, rankings and leaderboard for the ~4 months
+# before games start -- and, because these are default arguments bound at
+# import, would freeze the year for the life of a Cloud Run instance anyway.
+# Failing safe means a forgotten bump keeps showing last season, which is
+# stale but coherent. scripts/daily_update.py logs an error when ESPN starts
+# returning games past this year, so a forgotten bump announces itself.
+CURRENT_SEASON = 2026
+
 
 class Broadcasters:
     """Broadcaster/streaming service names."""
