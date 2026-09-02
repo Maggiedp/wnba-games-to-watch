@@ -59,14 +59,10 @@ def test_postseason_swing_reaches_four_for_win_or_go_home():
     def term(p):
         return math.sqrt(2 / math.pi) * math.sqrt(p * (1 - p) * (1 / n + 1 / n))
 
+    # At n=500 per bucket the floor is ~0.1592, so the corrected swing is
+    # ~3.8408 -- just under the structural maximum of 4.0.
     expected_floor = 2 * (term(0.5) + term(0.275) + term(0.125) + term(0.10))
     assert swing == pytest.approx(4.0 - expected_floor, abs=1e-9)
-    # NB: the brief's original loose bound here was `3.9 < swing < 4.0`, which
-    # contradicts its own expected_floor formula one line above (that formula
-    # evaluates to a floor of ~0.1592, giving swing ~3.8408 -- not >3.9). The
-    # precise pytest.approx assertion above is the real, load-bearing check;
-    # this is just a sanity band around the same true value.
-    assert 3.8 < swing < 4.0
 
 
 def test_postseason_max_swing_is_four():

@@ -362,6 +362,43 @@ def _fate_counts(
     return counts
 
 
+def _corrected_swing(
+    indices_a: list[int],
+    indices_b: list[int],
+    fate_levels: list[dict[str, str]],
+    teams,
+) -> float:
+    """Noise-floor-corrected Sigma|delta| over the five fate levels for `teams`.
+
+    The scoring formula shared by the regular season and the postseason. Both
+    sum |P(fate = level | bucket A) - P(fate = level | bucket B)| across every
+    team in `teams` and all five FATE_LEVELS, subtract the analytic half-normal
+    floor (one term per team per level, at the pooled rate), and clamp at 0.
+
+    They differ only in what produced the two buckets and which teams are
+    summed — `_partition_outcomes` over all teams for a regular-season game,
+    `_partition_bracket` over the two participants for a bracket game — so
+    those stay in the callers and the arithmetic lives here. Keeping this in
+    one place matters: it is the formula the published importance score is
+    built on, and a correction applied to only one copy would silently split
+    the two halves of the season onto different scales.
+
+    Callers must ensure neither bucket is empty.
+    """
+    n_a, n_b = len(indices_a), len(indices_b)
+    swing = 0.0
+    floor = 0.0
+    for team in teams:
+        counts_a = _fate_counts(indices_a, fate_levels, team)
+        counts_b = _fate_counts(indices_b, fate_levels, team)
+        for level in FATE_LEVELS:
+            count_a = counts_a[level]
+            count_b = counts_b[level]
+            swing += abs(count_a / n_a - count_b / n_b)
+            floor += _noise_floor_term((count_a + count_b) / (n_a + n_b), n_a, n_b)
+    return max(0.0, swing - floor)
+
+
 def compute_importance_from_matrix(
     outcome_matrix: list[list[bool | None]],
     fate_levels: list[dict[str, str]],
@@ -404,19 +441,7 @@ def compute_importance_from_matrix(
             swings.append(0.0)
             continue
 
-        n_a, n_b = len(a_indices), len(b_indices)
-        swing = 0.0
-        floor = 0.0
-        for team in team_names:
-            counts_a = _fate_counts(a_indices, fate_levels, team)
-            counts_b = _fate_counts(b_indices, fate_levels, team)
-
-            for level in FATE_LEVELS:
-                count_a = counts_a[level]
-                count_b = counts_b[level]
-                swing += abs(count_a / n_a - count_b / n_b)
-                floor += _noise_floor_term((count_a + count_b) / (n_a + n_b), n_a, n_b)
-        swings.append(max(0.0, swing - floor))
+        swings.append(_corrected_swing(a_indices, b_indices, fate_levels, team_names))
 
     return swings
 
@@ -535,18 +560,7 @@ def compute_postseason_swing_from_matrix(
     if not higher_indices or not lower_indices:
         return 0.0
 
-    n_h, n_l = len(higher_indices), len(lower_indices)
-    swing = 0.0
-    floor = 0.0
-    for team in participants:
-        counts_h = _fate_counts(higher_indices, fate_levels, team)
-        counts_l = _fate_counts(lower_indices, fate_levels, team)
-        for level in FATE_LEVELS:
-            count_h = counts_h[level]
-            count_l = counts_l[level]
-            swing += abs(count_h / n_h - count_l / n_l)
-            floor += _noise_floor_term((count_h + count_l) / (n_h + n_l), n_h, n_l)
-    return max(0.0, swing - floor)
+    return _corrected_swing(higher_indices, lower_indices, fate_levels, participants)
 
 
 def compute_postseason_movers_from_matrix(
