@@ -987,17 +987,18 @@ def _importance_for_game(
     importance_ceiling: float,
     bracket_state=None,
     bracket_outcomes: list[dict[tuple[str, int], bool]] | None = None,
-    champions: list[str | None] | None = None,
+    fate_levels: list[dict[str, str]] | None = None,
     team_names: list[str] | None = None,
     postseason_slot_lookup: dict[str, tuple[str, int]] | None = None,
 ) -> float | None:
     """Compute the importance score for one upcoming game.
 
-    Preseason: 0. Postseason: championship-swing derived from the existing
-    MC run (sims partitioned by who won the focal bracket game), normalized
-    against POSTSEASON_MAX_SWING=2.0. Falls back to 100.0 when the game
-    can't be matched to an in-progress bracket slot (downstream rounds
-    where upstream hasn't resolved, TBD ESPN rows, or no bracket_state).
+    Preseason: 0. Postseason: round-reached swing for the two teams playing,
+    derived from the existing MC run (sims partitioned by who won the focal
+    bracket game), normalized against POSTSEASON_MAX_SWING=4.0. Falls back to
+    100.0 when the game can't be matched to an in-progress bracket slot
+    (downstream rounds where upstream hasn't resolved, TBD ESPN rows, or no
+    bracket_state).
     Regular season: normalized bubble-swing from the MC run, or None if the
     event_id isn't in the sim universe.
 
@@ -1012,12 +1013,7 @@ def _importance_for_game(
     if season_type == 1:
         return 0.0
     if season_type == 3:
-        if (
-            bracket_state is None
-            or bracket_outcomes is None
-            or champions is None
-            or team_names is None
-        ):
+        if bracket_state is None or bracket_outcomes is None or fate_levels is None:
             return 100.0
         event_id = game.get("event_id", "")
         if postseason_slot_lookup is not None:
@@ -1033,7 +1029,11 @@ def _importance_for_game(
         from src.scoring.monte_carlo import compute_postseason_swing_from_matrix  # noqa: PLC0415
 
         swing = compute_postseason_swing_from_matrix(
-            slot_id, game_num, bracket_outcomes, champions, team_names
+            slot_id,
+            game_num,
+            bracket_outcomes,
+            fate_levels,
+            (game["team_a"], game["team_b"]),
         )
         return normalize_postseason_importance(swing)
     game_index = remaining_event_index.get(game.get("event_id", ""))
@@ -1051,7 +1051,6 @@ def _importance_detail_for_game(
     remaining_event_index: dict[str, int],
     bracket_state=None,
     bracket_outcomes: list[dict[tuple[str, int], bool]] | None = None,
-    champions: list[str | None] | None = None,
     team_names: list[str] | None = None,
     postseason_slot_lookup: dict[str, tuple[str, int]] | None = None,
     importance: float | None = None,
@@ -1059,8 +1058,9 @@ def _importance_detail_for_game(
     """Build the directional-movers JSON payload for one upcoming game.
 
     Regular season: top playoff-odds movers from the MC outcome matrix.
-    Postseason: top championship-odds movers from bracket outcomes, with the
-    slot's higher/lower seed mapped onto the matchup's team_a/team_b.
+    Postseason: each participant's biggest cumulative milestone move, from
+    bracket outcomes, with the slot's higher/lower seed mapped onto the
+    matchup's team_a/team_b.
     Returns None for preseason, non-simulated games, games that can't be
     located in the sim universe, when no team's odds clear the threshold, or
     when the game's corrected importance is exactly 0 (swing clamped to the
@@ -1079,7 +1079,7 @@ def _importance_detail_for_game(
         if (
             bracket_state is None
             or bracket_outcomes is None
-            or champions is None
+            or fate_levels is None
             or team_names is None
             or postseason_slot_lookup is None
         ):
@@ -1089,7 +1089,7 @@ def _importance_detail_for_game(
             return None
         slot_id, game_num = located
         raw = compute_postseason_movers_from_matrix(
-            slot_id, game_num, bracket_outcomes, champions, team_names
+            slot_id, game_num, bracket_outcomes, fate_levels, (team_a, team_b)
         )
         if not raw:
             return None
@@ -1098,6 +1098,7 @@ def _importance_detail_for_game(
         movers = [
             {
                 "team": m["team"],
+                "level": m["level"],
                 "if_a": m["if_higher"] if a_is_higher else m["if_lower"],
                 "if_b": m["if_lower"] if a_is_higher else m["if_higher"],
             }
@@ -1260,7 +1261,7 @@ def compute_daily_scores(
             importance_ceiling,
             bracket_state=bracket_state,
             bracket_outcomes=bracket_outcomes,
-            champions=champions,
+            fate_levels=fate_levels,
             team_names=team_names,
             postseason_slot_lookup=postseason_slot_lookup,
         )
@@ -1271,7 +1272,6 @@ def compute_daily_scores(
             remaining_event_index,
             bracket_state=bracket_state,
             bracket_outcomes=bracket_outcomes,
-            champions=champions,
             team_names=team_names,
             postseason_slot_lookup=postseason_slot_lookup,
             importance=importance,

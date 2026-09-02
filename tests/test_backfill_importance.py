@@ -96,8 +96,10 @@ def test_rebuild_date_rewrites_importance_and_overall_consistently(env):
 def test_rebuild_date_leaves_preseason_and_postseason_untouched(env):
     """Only the regular-season bubble-swing metric changed scale — a
     preseason or postseason row's importance/overall must be left exactly
-    as stored, since compute_postseason_swing_from_matrix never consumed
-    fate_levels and preseason is pinned at 0 either way."""
+    as stored, since compute_postseason_swing_from_matrix uses its own
+    fate-levels partition (summed over the two teams playing, normalized
+    by the structural POSTSEASON_MAX_SWING) and preseason is pinned at 0
+    either way."""
     session = env.get_session()
     a_id, b_id = _two_teams(session)
     upsert_game(

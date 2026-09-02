@@ -14,8 +14,9 @@ for every 2026 date that has stored rankings.
 Only regular-season (season_type == 2) rows are touched. Preseason rows
 (season_type == 1) are pinned at importance 0 in production and unaffected.
 Postseason rows (season_type == 3) use `compute_postseason_swing_from_matrix`
-/ POSTSEASON_MAX_SWING — a separate metric that doesn't consume fate_levels
-at all, so it was never on the old scale. Both are left exactly as stored.
+/ POSTSEASON_MAX_SWING — the same five-level fate as the regular season, but
+summed over the two teams playing and normalized by a structural ceiling.
+Both are left exactly as stored.
 
 As-of-date standings: `compute_standings` (daily_update.py) has no as-of-date
 parameter — it reads ALL completed games, so it can't reproduce what

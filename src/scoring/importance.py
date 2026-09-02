@@ -37,15 +37,24 @@ def normalize_importance_score(
     return max(0.0, min(100.0, (clamped / max_swing) * 100))
 
 
-# Theoretical max for postseason championship swing. A single bracket game that
-# cleanly flips the champion between two teams produces |Δ|=1.0 on each side
-# → Σ|Δ| = 2.0 across all teams. Game 7 of a Finals between evenly-matched
-# teams hits roughly that. Fixed ceiling keeps scores comparable across
-# postseasons; per-bracket calibration would distort with the draw.
-POSTSEASON_MAX_SWING = 2.0
+# Structural max for a postseason bracket game's round-reached swing. In a
+# win-or-go-home game the loser's fate collapses to lost_<round> with
+# probability 1 while the winner's fate spreads across the deeper levels
+# summing to 1, so each participant contributes exactly 2 units of |delta| —
+# one moving out of its current level, one distributed across where it goes
+# next. Two participants -> 4.0, which is also the hard analytic bound (no
+# team can move more than 2 units of total variation).
+#
+# UNLIKE REGULAR_SEASON_MAX_SWING this is NOT a season-calibrated constant and
+# must NOT be re-derived each offseason — it follows from the structure of the
+# fate variable, not from any season's observed distribution. Measured against
+# synthetic bracket states on the 2025 field, the three win-or-go-home states
+# score 3.9473 (QF G3) / 3.9565 (SF G5) / 3.9681 (Finals G7); the shortfall is
+# the subtracted noise floor, which is correct.
+POSTSEASON_MAX_SWING = 4.0
 
 
 def normalize_postseason_importance(swing: float) -> float:
-    """Map a championship swing (0.0–2.0) to a 0–100 importance score."""
+    """Map a round-reached bracket swing (0.0–4.0) to a 0–100 importance score."""
     clamped = max(0.0, min(POSTSEASON_MAX_SWING, swing))
     return (clamped / POSTSEASON_MAX_SWING) * 100.0

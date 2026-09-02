@@ -1,12 +1,13 @@
 import math
 
+import pytest
+
 from src.scoring.monte_carlo import (
     FATE_CHAMPION,
     FATE_LOST_FINALS,
     FATE_LOST_QF,
     FATE_LOST_SF,
     FATE_MISSED,
-    _noise_floor_term,
     compute_directional_movers_from_matrix,
     compute_importance_from_matrix,
     compute_postseason_movers_from_matrix,
@@ -206,6 +207,50 @@ def test_directional_sum_is_a_lower_bound_on_the_corrected_swing():
     assert raw_swing - directional_sum > 0.5
 
 
+def test_postseason_movers_report_each_participant_s_biggest_milestone():
+    """A QF game reports each participant's own biggest cumulative milestone —
+    'reach the semis' here, not title odds, because that is what moves most."""
+    n = 400
+    bracket_outcomes = [{("qf1", 3): True} for _ in range(n)] + [
+        {("qf1", 3): False} for _ in range(n)
+    ]
+
+    def advanced(i):
+        return FATE_LOST_SF if i % 10 < 7 else FATE_CHAMPION
+
+    fate_levels = [{"A": advanced(i), "B": FATE_LOST_QF} for i in range(n)]
+    fate_levels += [{"A": FATE_LOST_QF, "B": advanced(i)} for i in range(n)]
+
+    movers = compute_postseason_movers_from_matrix(
+        "qf1", 3, bracket_outcomes, fate_levels, ("A", "B")
+    )
+
+    assert len(movers) == 2
+    by_team = {m["team"]: m for m in movers}
+    assert by_team["A"]["level"] == "semis"
+    assert by_team["A"]["if_higher"] == pytest.approx(1.0)
+    assert by_team["A"]["if_lower"] == pytest.approx(0.0)
+    assert by_team["B"]["level"] == "semis"
+    assert by_team["B"]["if_higher"] == pytest.approx(0.0)
+    assert by_team["B"]["if_lower"] == pytest.approx(1.0)
+
+
+def test_postseason_movers_exclude_non_participants():
+    """A team not playing never appears, however much its odds move."""
+    n = 200
+    bracket_outcomes = [{("qf1", 1): True} for _ in range(n)] + [
+        {("qf1", 1): False} for _ in range(n)
+    ]
+    fate_levels = [
+        {"A": FATE_CHAMPION, "B": FATE_LOST_QF, "C": FATE_LOST_QF} for _ in range(n)
+    ] + [{"A": FATE_LOST_QF, "B": FATE_CHAMPION, "C": FATE_CHAMPION} for _ in range(n)]
+
+    movers = compute_postseason_movers_from_matrix(
+        "qf1", 1, bracket_outcomes, fate_levels, ("A", "B")
+    )
+    assert {m["team"] for m in movers} == {"A", "B"}
+
+
 def test_postseason_movers_basic_split():
     # 4 sims. Focal game ("f", 1): higher won in 0,1; lower won in 2,3.
     bracket_outcomes = [
@@ -214,12 +259,19 @@ def test_postseason_movers_basic_split():
         {("f", 1): False},
         {("f", 1): False},
     ]
-    champions = ["Aces", "Aces", "Liberty", "Liberty"]
+    fate_levels = [
+        {"Aces": FATE_CHAMPION, "Liberty": FATE_LOST_FINALS},
+        {"Aces": FATE_CHAMPION, "Liberty": FATE_LOST_FINALS},
+        {"Aces": FATE_LOST_FINALS, "Liberty": FATE_CHAMPION},
+        {"Aces": FATE_LOST_FINALS, "Liberty": FATE_CHAMPION},
+    ]
     movers = compute_postseason_movers_from_matrix(
-        "f", 1, bracket_outcomes, champions, ["Aces", "Liberty"]
+        "f", 1, bracket_outcomes, fate_levels, ("Aces", "Liberty")
     )
     by_team = {m["team"]: m for m in movers}
+    assert by_team["Aces"]["level"] == "championship"
     assert by_team["Aces"]["if_higher"] == 1.0 and by_team["Aces"]["if_lower"] == 0.0
+    assert by_team["Liberty"]["level"] == "championship"
     assert (
         by_team["Liberty"]["if_higher"] == 0.0 and by_team["Liberty"]["if_lower"] == 1.0
     )
@@ -227,41 +279,40 @@ def test_postseason_movers_basic_split():
 
 def test_postseason_movers_empty_bucket():
     bracket_outcomes = [{("f", 1): True}, {("f", 1): True}]
-    champions = ["Aces", "Aces"]
+    fate_levels = [{"Aces": FATE_CHAMPION, "Liberty": FATE_LOST_FINALS}] * 2
     assert (
         compute_postseason_movers_from_matrix(
-            "f", 1, bracket_outcomes, champions, ["Aces"]
+            "f", 1, bracket_outcomes, fate_levels, ("Aces", "Liberty")
         )
         == []
     )
 
 
-def test_postseason_sum_matches_existing_swing():
-    # Movers report raw per-team deltas. The swing is floor-corrected.
-    # Verify: directional_sum == corrected_swing + floor (within numerical precision).
-    bracket_outcomes = [
-        {("sf1", 2): True},
-        {("sf1", 2): False},
-        {("sf1", 2): True},
-        {("sf1", 2): False},
+def test_postseason_movers_sum_is_a_lower_bound_on_the_swing():
+    """One cumulative milestone per team can't account for all the movement
+    across five exclusive levels, so the panel under-reports the swing."""
+    n = 400
+    bracket_outcomes = [{("qf1", 3): True} for _ in range(n)] + [
+        {("qf1", 3): False} for _ in range(n)
     ]
-    champions = ["Aces", "Liberty", "Aces", None]
-    team_names = ["Aces", "Liberty"]
+
+    def advanced(i):
+        pos = i % 100
+        if pos < 55:
+            return FATE_LOST_SF
+        if pos < 80:
+            return FATE_LOST_FINALS
+        return FATE_CHAMPION
+
+    fate_levels = [{"A": advanced(i), "B": FATE_LOST_QF} for i in range(n)]
+    fate_levels += [{"A": FATE_LOST_QF, "B": advanced(i)} for i in range(n)]
+
     movers = compute_postseason_movers_from_matrix(
-        "sf1", 2, bracket_outcomes, champions, team_names, top_n=99, min_delta=0.0
+        "qf1", 3, bracket_outcomes, fate_levels, ("A", "B"), min_delta=0.0
     )
     directional_sum = sum(abs(m["if_higher"] - m["if_lower"]) for m in movers)
-    corrected_swing = compute_postseason_swing_from_matrix(
-        "sf1", 2, bracket_outcomes, champions, team_names
+    swing = compute_postseason_swing_from_matrix(
+        "qf1", 3, bracket_outcomes, fate_levels, ("A", "B")
     )
-    # Compute the analytic noise floor using the same logic as compute_postseason_swing_from_matrix
-    higher_indices = [0, 2]  # sims where higher seed won
-    lower_indices = [1, 3]  # sims where lower seed won
-    n_h, n_l = len(higher_indices), len(lower_indices)
-    floor = 0.0
-    for team in team_names:
-        count_h = sum(1 for i in higher_indices if champions[i] == team)
-        count_l = sum(1 for i in lower_indices if champions[i] == team)
-        pooled_rate = (count_h + count_l) / (n_h + n_l)
-        floor += _noise_floor_term(pooled_rate, n_h, n_l)
-    assert abs(directional_sum - (corrected_swing + floor)) < 1e-9
+    assert directional_sum == pytest.approx(2.0, abs=1e-9)  # 1.0 per team, "semis"
+    assert swing > directional_sum

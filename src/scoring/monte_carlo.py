@@ -341,6 +341,64 @@ def _noise_floor_term(pooled_rate: float, n_a: int, n_b: int) -> float:
     return math.sqrt(2.0 / math.pi * variance)
 
 
+def _fate_counts(
+    indices: list[int], fate_levels: list[dict[str, str]], team: str
+) -> dict[str, int]:
+    """Per-level tally of one team's round-reached fate across a bucket of sims.
+
+    One pass over the bucket, NOT one pass per level: this keeps callers at
+    O(games x teams x sims) rather than five times that, which matters because
+    the daily job runs synchronously against Cloud Run's request timeout.
+
+    Sims where the team has no recorded fate (fewer than 8 teams seeded, so no
+    bracket was played) contribute to no level, exactly as the inline versions
+    this replaces did.
+    """
+    counts = dict.fromkeys(FATE_LEVELS, 0)
+    for s in indices:
+        level = fate_levels[s].get(team)
+        if level is not None:
+            counts[level] += 1
+    return counts
+
+
+def _corrected_swing(
+    indices_a: list[int],
+    indices_b: list[int],
+    fate_levels: list[dict[str, str]],
+    teams,
+) -> float:
+    """Noise-floor-corrected Sigma|delta| over the five fate levels for `teams`.
+
+    The scoring formula shared by the regular season and the postseason. Both
+    sum |P(fate = level | bucket A) - P(fate = level | bucket B)| across every
+    team in `teams` and all five FATE_LEVELS, subtract the analytic half-normal
+    floor (one term per team per level, at the pooled rate), and clamp at 0.
+
+    They differ only in what produced the two buckets and which teams are
+    summed — `_partition_outcomes` over all teams for a regular-season game,
+    `_partition_bracket` over the two participants for a bracket game — so
+    those stay in the callers and the arithmetic lives here. Keeping this in
+    one place matters: it is the formula the published importance score is
+    built on, and a correction applied to only one copy would silently split
+    the two halves of the season onto different scales.
+
+    Callers must ensure neither bucket is empty.
+    """
+    n_a, n_b = len(indices_a), len(indices_b)
+    swing = 0.0
+    floor = 0.0
+    for team in teams:
+        counts_a = _fate_counts(indices_a, fate_levels, team)
+        counts_b = _fate_counts(indices_b, fate_levels, team)
+        for level in FATE_LEVELS:
+            count_a = counts_a[level]
+            count_b = counts_b[level]
+            swing += abs(count_a / n_a - count_b / n_b)
+            floor += _noise_floor_term((count_a + count_b) / (n_a + n_b), n_a, n_b)
+    return max(0.0, swing - floor)
+
+
 def compute_importance_from_matrix(
     outcome_matrix: list[list[bool | None]],
     fate_levels: list[dict[str, str]],
@@ -383,31 +441,7 @@ def compute_importance_from_matrix(
             swings.append(0.0)
             continue
 
-        n_a, n_b = len(a_indices), len(b_indices)
-        swing = 0.0
-        floor = 0.0
-        for team in team_names:
-            # One pass per bucket per team, NOT one per level: this keeps
-            # the function at O(games x teams x sims), the same cost as the
-            # binary-fate version. A nested per-level scan is 5x and can
-            # push the synchronous daily job toward Cloud Run's timeout.
-            counts_a = dict.fromkeys(FATE_LEVELS, 0)
-            counts_b = dict.fromkeys(FATE_LEVELS, 0)
-            for s in a_indices:
-                level = fate_levels[s].get(team)
-                if level is not None:
-                    counts_a[level] += 1
-            for s in b_indices:
-                level = fate_levels[s].get(team)
-                if level is not None:
-                    counts_b[level] += 1
-
-            for level in FATE_LEVELS:
-                count_a = counts_a[level]
-                count_b = counts_b[level]
-                swing += abs(count_a / n_a - count_b / n_b)
-                floor += _noise_floor_term((count_a + count_b) / (n_a + n_b), n_a, n_b)
-        swings.append(max(0.0, swing - floor))
+        swings.append(_corrected_swing(a_indices, b_indices, fate_levels, team_names))
 
     return swings
 
@@ -458,16 +492,8 @@ def compute_directional_movers_from_matrix(
     n_a, n_b = len(a_indices), len(b_indices)
     movers: list[dict] = []
     for team in team_names:
-        counts_a = dict.fromkeys(FATE_LEVELS, 0)
-        counts_b = dict.fromkeys(FATE_LEVELS, 0)
-        for s in a_indices:
-            level = fate_levels[s].get(team)
-            if level is not None:
-                counts_a[level] += 1
-        for s in b_indices:
-            level = fate_levels[s].get(team)
-            if level is not None:
-                counts_b[level] += 1
+        counts_a = _fate_counts(a_indices, fate_levels, team)
+        counts_b = _fate_counts(b_indices, fate_levels, team)
 
         best: dict | None = None
         best_delta = 0.0
@@ -496,26 +522,35 @@ def compute_postseason_swing_from_matrix(
     focal_slot: str,
     focal_game_num: int,
     bracket_outcomes: list[dict[tuple[str, int], bool]],
-    champions: list[str | None],
-    team_names: list[str],
+    fate_levels: list[dict[str, str]],
+    participants: tuple[str, str],
 ) -> float:
-    """Compute championship-swing for a specific bracket game.
+    """Round-reached importance swing for one bracket game.
 
-    Partitions the simulation set by who won the focal bracket game, then
-    computes Σ |P(team = champion | higher won) − P(team = champion | lower won)|
-    across all team names, minus the analytic noise floor (same correction as
-    compute_importance_from_matrix), clamped at 0.
+    Partitions the simulation set by who won the focal bracket game, then sums
+    |P(fate = level | higher won) - P(fate = level | lower won)| over the five
+    exclusive round-reached fate levels, for the TWO TEAMS PLAYING only, minus
+    the analytic noise floor (same correction as compute_importance_from_matrix),
+    clamped at 0.
+
+    Participants-only, unlike the regular season's all-teams sum: in the regular
+    season a team not playing has real stakes (the bubble race), but in a fixed
+    no-reseed bracket a non-participant's only stake is which opponent it draws
+    — bookkeeping, not fate. Summing over all teams inflated the early rounds,
+    where more teams are still alive, and ranked the quarterfinals above the
+    Finals.
 
     Args:
         focal_slot: bracket slot id, e.g. "qf1", "sf2", "f".
         focal_game_num: 1-indexed game number within the series.
         bracket_outcomes: per-sim dict of (slot, game_num) -> did_higher_win.
-        champions: per-sim champion name (or None if no bracket played).
-        team_names: all team names to sum |Δ| across.
+        fate_levels: per-sim map of team name -> one of FATE_LEVELS.
+        participants: the two team names contesting this game.
 
     Returns:
-        Corrected swing value (>= 0.0, < 2.0). Normalize with
-        `normalize_postseason_importance`.
+        Corrected swing (>= 0.0, <= 4.0). Normalize with
+        `normalize_postseason_importance`. 4.0 is the structural maximum: a
+        win-or-go-home game moves each participant 2 units of total variation.
         Returns 0.0 if either partition bucket is empty (focal game didn't
         happen in any sim, or all sims agree on the outcome).
     """
@@ -525,35 +560,34 @@ def compute_postseason_swing_from_matrix(
     if not higher_indices or not lower_indices:
         return 0.0
 
-    n_h, n_l = len(higher_indices), len(lower_indices)
-    swing = 0.0
-    floor = 0.0
-    for team in team_names:
-        count_h = sum(1 for i in higher_indices if champions[i] == team)
-        count_l = sum(1 for i in lower_indices if champions[i] == team)
-        swing += abs(count_h / n_h - count_l / n_l)
-        floor += _noise_floor_term((count_h + count_l) / (n_h + n_l), n_h, n_l)
-    return max(0.0, swing - floor)
+    return _corrected_swing(higher_indices, lower_indices, fate_levels, participants)
 
 
 def compute_postseason_movers_from_matrix(
     focal_slot: str,
     focal_game_num: int,
     bracket_outcomes: list[dict[tuple[str, int], bool]],
-    champions: list[str | None],
-    team_names: list[str],
-    top_n: int = 3,
+    fate_levels: list[dict[str, str]],
+    participants: tuple[str, str],
     min_delta: float = 0.03,
 ) -> list[dict]:
-    """Per-team directional championship-odds movers for one bracket game.
+    """Per-participant directional milestone movers for one bracket game.
 
     Partitions sims by who won the focal bracket game (same split as
-    ``compute_postseason_swing_from_matrix``), then computes
-    P(champion | higher won) and P(champion | lower won) for each team.
-    Returns up to ``top_n`` teams by ``|if_higher - if_lower|`` clearing
-    ``min_delta``, sorted descending. Returns ``[]`` if either bucket is empty.
-    Each dict: ``{"team": str, "if_higher": float, "if_lower": float}``; the
-    caller maps higher/lower to the matchup's team_a/team_b for display.
+    ``compute_postseason_swing_from_matrix``), then for each of the two teams
+    playing finds the cumulative milestone (make playoffs / reach semis /
+    reach finals / win title) whose odds moved most — mirroring the regular
+    season's ``compute_directional_movers_from_matrix``, because the swing
+    sums over five *exclusive* levels but "odds of reaching the semis" reads
+    naturally on the panel while "odds of losing in the semifinals" does not.
+
+    Restricted to the participants, matching what the postseason swing
+    measures: a non-participant shown moving on a game scored low would
+    misdescribe the number. No ``top_n`` — there are only ever two teams.
+
+    Returns ``[]`` if either bucket is empty. Each dict:
+    ``{"team": str, "level": str, "if_higher": float, "if_lower": float}``;
+    the caller maps higher/lower onto the matchup's team_a/team_b.
     """
     higher_indices, lower_indices = _partition_bracket(
         bracket_outcomes, focal_slot, focal_game_num
@@ -561,15 +595,30 @@ def compute_postseason_movers_from_matrix(
     if not higher_indices or not lower_indices:
         return []
 
-    def champ_rate(indices: list[int], team: str) -> float:
-        return sum(1 for i in indices if champions[i] == team) / len(indices)
-
+    n_h, n_l = len(higher_indices), len(lower_indices)
     movers: list[dict] = []
-    for team in team_names:
-        rate_h = champ_rate(higher_indices, team)
-        rate_l = champ_rate(lower_indices, team)
-        if abs(rate_h - rate_l) >= min_delta:
-            movers.append({"team": team, "if_higher": rate_h, "if_lower": rate_l})
+    for team in participants:
+        counts_h = _fate_counts(higher_indices, fate_levels, team)
+        counts_l = _fate_counts(lower_indices, fate_levels, team)
+
+        best: dict | None = None
+        best_delta = 0.0
+        for label, members in _MILESTONES:
+            rate_h = sum(counts_h[lv] for lv in members) / n_h
+            rate_l = sum(counts_l[lv] for lv in members) / n_l
+            delta = abs(rate_h - rate_l)
+            # Strict > keeps the first milestone on a tie, so _MILESTONES
+            # order makes the choice deterministic.
+            if delta > best_delta:
+                best_delta = delta
+                best = {
+                    "team": team,
+                    "level": label,
+                    "if_higher": rate_h,
+                    "if_lower": rate_l,
+                }
+        if best is not None and best_delta >= min_delta:
+            movers.append(best)
 
     movers.sort(key=lambda m: abs(m["if_higher"] - m["if_lower"]), reverse=True)
-    return movers[:top_n]
+    return movers

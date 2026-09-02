@@ -1,6 +1,7 @@
 """Tests for per-game postseason importance derivation."""
 
 import math
+import random
 
 import pytest
 
@@ -9,12 +10,64 @@ from src.scoring.importance import (
     POSTSEASON_MAX_SWING,
     normalize_postseason_importance,
 )
-from src.scoring.monte_carlo import compute_postseason_swing_from_matrix
+from src.scoring.monte_carlo import (
+    FATE_CHAMPION,
+    FATE_LOST_FINALS,
+    FATE_LOST_QF,
+    FATE_LOST_SF,
+    FATE_MISSED,
+    compute_postseason_swing_from_matrix,
+    run_monte_carlo_simulation,
+    to_team_standings,
+)
+from src.scoring.playoffs import _GAMES_NEEDED_BO3, empty_bracket_state
+from src.scoring.tiebreakers import resolve_seeding
 
 
-def test_postseason_max_swing_is_two():
-    """Ceiling = 2.0 (theoretical max: Σ|ΔP(champ)| when one game cleanly flips two teams)."""
-    assert POSTSEASON_MAX_SWING == 2.0
+def test_postseason_swing_reaches_four_for_win_or_go_home():
+    """A win-or-go-home game moves each participant exactly 2 units of total
+    variation — 1 out of its current level, 1 across the deeper levels it may
+    reach — so the pair sums to the structural maximum of 4.0.
+
+    The advancing team's fate is spread 55/25/20 across the deeper levels on
+    purpose: a uniform split would still sum to 2.0 per team even if the
+    implementation collapsed levels, so it could not detect that bug.
+    """
+    n = 500
+    bracket_outcomes = [{("qf1", 3): True} for _ in range(n)] + [
+        {("qf1", 3): False} for _ in range(n)
+    ]
+
+    def advanced(i):
+        pos = i % 100
+        if pos < 55:
+            return FATE_LOST_SF
+        if pos < 80:
+            return FATE_LOST_FINALS
+        return FATE_CHAMPION
+
+    fate_levels = [{"A": advanced(i), "B": FATE_LOST_QF} for i in range(n)]
+    fate_levels += [{"A": FATE_LOST_QF, "B": advanced(i)} for i in range(n)]
+
+    swing = compute_postseason_swing_from_matrix(
+        "qf1", 3, bracket_outcomes, fate_levels, ("A", "B")
+    )
+
+    # Raw = 4.0. Floor: per participant, one half-normal term per level at the
+    # pooled rate. Pooled rates per team: lost_qf 0.5, lost_sf 0.275,
+    # lost_finals 0.125, champion 0.10, missed 0 (contributes nothing).
+    def term(p):
+        return math.sqrt(2 / math.pi) * math.sqrt(p * (1 - p) * (1 / n + 1 / n))
+
+    # At n=500 per bucket the floor is ~0.1592, so the corrected swing is
+    # ~3.8408 -- just under the structural maximum of 4.0.
+    expected_floor = 2 * (term(0.5) + term(0.275) + term(0.125) + term(0.10))
+    assert swing == pytest.approx(4.0 - expected_floor, abs=1e-9)
+
+
+def test_postseason_max_swing_is_four():
+    """Structural ceiling: 2 units of total variation per participant x 2."""
+    assert POSTSEASON_MAX_SWING == 4.0
 
 
 def test_normalize_postseason_importance_zero_swing():
@@ -22,14 +75,14 @@ def test_normalize_postseason_importance_zero_swing():
 
 
 def test_normalize_postseason_importance_midpoint():
-    # swing of 1.0 (half the max) → 50.0
-    assert normalize_postseason_importance(1.0) == 50.0
+    # swing of 2.0 (half the max) → 50.0
+    assert normalize_postseason_importance(2.0) == 50.0
 
 
 def test_normalize_postseason_importance_caps_at_hundred():
-    # swing of 2.0 → 100.0; anything beyond also caps at 100.0
-    assert normalize_postseason_importance(2.0) == 100.0
-    assert normalize_postseason_importance(3.5) == 100.0
+    # swing of 4.0 → 100.0; anything beyond also caps at 100.0
+    assert normalize_postseason_importance(4.0) == 100.0
+    assert normalize_postseason_importance(5.5) == 100.0
 
 
 def test_normalize_postseason_importance_floor_at_zero():
@@ -40,103 +93,210 @@ def test_normalize_postseason_importance_floor_at_zero():
 def test_postseason_swing_zero_when_higher_bucket_empty():
     """All sims have lower winning the focal game → swing = 0."""
     bracket_outcomes = [{("qf1", 1): False} for _ in range(100)]
-    champions = ["T2"] * 100
-    team_names = ["T1", "T2"]
+    fate_levels = [{"T1": FATE_LOST_QF, "T2": FATE_CHAMPION} for _ in range(100)]
     swing = compute_postseason_swing_from_matrix(
-        "qf1", 1, bracket_outcomes, champions, team_names
+        "qf1", 1, bracket_outcomes, fate_levels, ("T1", "T2")
     )
     assert swing == 0.0
 
 
 def test_postseason_swing_zero_when_lower_bucket_empty():
     bracket_outcomes = [{("qf1", 1): True} for _ in range(100)]
-    champions = ["T1"] * 100
-    team_names = ["T1", "T2"]
+    fate_levels = [{"T1": FATE_CHAMPION, "T2": FATE_LOST_QF} for _ in range(100)]
     swing = compute_postseason_swing_from_matrix(
-        "qf1", 1, bracket_outcomes, champions, team_names
+        "qf1", 1, bracket_outcomes, fate_levels, ("T1", "T2")
     )
     assert swing == 0.0
 
 
 def test_postseason_swing_skips_sims_missing_focal_game():
     """Sims where the focal game wasn't played are excluded from both buckets."""
+    n = 50
     bracket_outcomes = [
-        # 50 sims where higher won game 1 and is champion
-        *({("qf1", 1): True} for _ in range(50)),
-        # 50 sims where lower won game 1 and is champion
-        *({("qf1", 1): False} for _ in range(50)),
-        # 50 sims where this game wasn't reached (no entry) → excluded
-        *({} for _ in range(50)),
+        *({("qf1", 1): True} for _ in range(n)),
+        *({("qf1", 1): False} for _ in range(n)),
+        *({} for _ in range(n)),
     ]
-    champions = (
-        ["T1"] * 50  # higher always champ when higher wins
-        + ["T2"] * 50  # lower always champ when lower wins
-        + ["T3"] * 50  # ignored
+    fate_levels = (
+        [{"T1": FATE_CHAMPION, "T2": FATE_LOST_QF} for _ in range(n)]
+        + [{"T1": FATE_LOST_QF, "T2": FATE_CHAMPION} for _ in range(n)]
+        + [{"T1": FATE_LOST_SF, "T2": FATE_LOST_SF} for _ in range(n)]
     )
-    team_names = ["T1", "T2", "T3"]
     swing = compute_postseason_swing_from_matrix(
-        "qf1", 1, bracket_outcomes, champions, team_names
+        "qf1", 1, bracket_outcomes, fate_levels, ("T1", "T2")
     )
-    # Higher bucket: T1 champ 100%, T2/T3 0%. Lower bucket: T2 champ 100%, T1/T3 0%.
-    # Raw Σ|Δ| = |1-0| + |0-1| + |0-0| = 2.0; T1 and T2 each carry a noise-floor
-    # term at pooled p=0.5 with n=50 per bucket, T3's pooled rate is 0 (no term).
-    expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 50 + 1 / 50))
-    assert swing == pytest.approx(2.0 - expected_floor, abs=1e-9)
+    # Each participant moves fully between two levels -> 2 units each -> raw 4.0.
+    # Two levels per participant carry a floor term at pooled p=0.5; the other
+    # three have pooled rate 0 and contribute nothing. Excluded sims never enter.
+    expected_floor = 4 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / n + 1 / n))
+    assert swing == pytest.approx(4.0 - expected_floor, abs=1e-9)
 
 
-def test_postseason_swing_two_when_game_cleanly_flips_champion():
-    """A focal game that determines the champion outright produces swing ≈ 2.0 minus the small noise floor."""
+def test_postseason_swing_four_when_game_decides_both_seasons():
+    """Finals Game 7: the winner is champion, the loser is a finals loser.
+    Each team moves 1 unit on each of two levels -> raw 4.0."""
+    n = 500
     bracket_outcomes = [
-        *({("f", 7): True} for _ in range(500)),
-        *({("f", 7): False} for _ in range(500)),
+        *({("f", 7): True} for _ in range(n)),
+        *({("f", 7): False} for _ in range(n)),
     ]
-    champions = ["A"] * 500 + ["B"] * 500
-    team_names = ["A", "B", "C"]
+    fate_levels = [{"A": FATE_CHAMPION, "B": FATE_LOST_FINALS} for _ in range(n)]
+    fate_levels += [{"A": FATE_LOST_FINALS, "B": FATE_CHAMPION} for _ in range(n)]
+
     swing = compute_postseason_swing_from_matrix(
-        "f", 7, bracket_outcomes, champions, team_names
+        "f", 7, bracket_outcomes, fate_levels, ("A", "B")
     )
-    # A and B each carry a floor term at pooled p=0.5; C is never champion in
-    # either bucket (pooled rate 0 -> no term), hence 2 terms, not 3.
-    expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 500 + 1 / 500))
-    assert swing == pytest.approx(2.0 - expected_floor, abs=1e-9)
+    # Two levels per team carry a floor term at pooled p=0.5; the other three
+    # have pooled rate 0 and contribute nothing. 2 teams x 2 levels = 4 terms.
+    expected_floor = 4 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / n + 1 / n))
+    assert swing == pytest.approx(4.0 - expected_floor, abs=1e-9)
 
 
-def test_postseason_swing_low_when_focal_game_barely_moves_champion():
-    """If both buckets have similar champion distributions, swing is small."""
-    # 1000 sims, focal game outcome is independent of champion
-    bracket_outcomes = []
-    champions = []
-    for i in range(1000):
-        higher_won = i % 2 == 0
-        bracket_outcomes.append({("qf1", 1): higher_won})
-        # Champion is always T3 regardless of qf1 outcome.
-        champions.append("T3")
-    team_names = ["T1", "T2", "T3"]
+def test_postseason_swing_ignores_sims_with_no_bracket():
+    """Sims where fewer than 8 teams seeded have no fate entry -> no contribution."""
+    bracket_outcomes = [{("qf1", 1): True}, {("qf1", 1): False}, {("qf1", 1): True}]
+    fate_levels = [
+        {"A": FATE_CHAMPION, "B": FATE_LOST_QF},
+        {"A": FATE_LOST_QF, "B": FATE_CHAMPION},
+        {},  # no bracket played: neither team has a fate
+    ]
     swing = compute_postseason_swing_from_matrix(
-        "qf1", 1, bracket_outcomes, champions, team_names
+        "qf1", 1, bracket_outcomes, fate_levels, ("A", "B")
     )
-    # T3 has 100% in both buckets; T1, T2 have 0% in both → Σ|Δ| = 0.
-    assert swing == pytest.approx(0.0, abs=1e-9)
+
+    # Higher bucket has 2 sims but only 1 carries fates, so rates are halved
+    # against n_h=2: A's champion rate is 0.5 (n_h) vs 0.0 (n_l=1) -> |0.5-0|;
+    # A's lost_qf rate is 0.0 vs 1.0 -> |0-1|; same shape for B with champion
+    # and lost_qf swapped. Raw = 3.0 (0.5+1.0 for each of A and B). Floor:
+    # only lost_qf's pooled rate is nonzero across both participants (A's
+    # champion pools with B's champion at rate 1/3 too) -- pooled rate is
+    # 1/3 for both the lost_qf level and the champion level, n_a=2, n_b=1,
+    # 4 such terms (2 participants x 2 nonzero levels).
+    def term(p, n_a, n_b):
+        variance = p * (1 - p) * (1 / n_a + 1 / n_b)
+        return math.sqrt(2 / math.pi * variance)
+
+    expected = 3.0 - 4 * term(1 / 3, 2, 1)
+    assert swing == pytest.approx(expected, abs=1e-9)
 
 
-def test_postseason_swing_ignores_none_champion_sims():
-    """Sims where no champion was crowned (fewer than 8 seeded) don't crash."""
-    bracket_outcomes = [{("qf1", 1): True}, {("qf1", 1): False}, {}]
-    champions = ["T1", "T2", None]
-    team_names = ["T1", "T2"]
+def test_postseason_swing_ignores_non_participant_teams():
+    """A team not in `participants` must not contribute to the swing, even
+    when its fate correlates perfectly with the focal game's outcome --
+    that's bracket bookkeeping (which opponent a non-participant draws
+    next), not fate, per compute_postseason_swing_from_matrix's docstring
+    ("Participants-only, unlike the regular season's all-teams sum").
+
+    Same shape as test_postseason_swing_four_when_game_decides_both_seasons
+    (Finals Game 7, A/B), with a third team C added whose fate is CHAMPION
+    whenever A wins and MISSED whenever A loses -- a stronger correlation
+    with the focal outcome than either participant's own fate swing. If the
+    function summed over every team in `fate_levels` instead of only
+    `participants`, C's perfectly-correlated champion/missed swing would
+    inflate this above the exact two-participant value asserted below.
+    """
+    n = 500
+    bracket_outcomes = [
+        *({("f", 7): True} for _ in range(n)),
+        *({("f", 7): False} for _ in range(n)),
+    ]
+    fate_levels = [
+        {"A": FATE_CHAMPION, "B": FATE_LOST_FINALS, "C": FATE_CHAMPION}
+        for _ in range(n)
+    ] + [
+        {"A": FATE_LOST_FINALS, "B": FATE_CHAMPION, "C": FATE_MISSED} for _ in range(n)
+    ]
+
     swing = compute_postseason_swing_from_matrix(
-        "qf1", 1, bracket_outcomes, champions, team_names
+        "f", 7, bracket_outcomes, fate_levels, ("A", "B")
     )
-    # Higher bucket: 1 sim, T1 champ 100%. Lower bucket: 1 sim, T2 champ 100%.
-    # Raw Σ|Δ| = |1-0| + |0-1| = 2.0. Third sim excluded by missing key.
-    # T1 and T2 each carry a noise-floor term at pooled p=0.5 with n=1 per bucket.
-    expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 1 + 1 / 1))
-    assert swing == pytest.approx(2.0 - expected_floor, abs=1e-9)
+    # Identical to test_postseason_swing_four_when_game_decides_both_seasons:
+    # two levels per participant (A, B) carry a floor term at pooled p=0.5;
+    # C is excluded entirely by the participants-only restriction, so its
+    # champion/missed swing appears in neither the raw sum nor the floor.
+    expected_floor = 4 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / n + 1 / n))
+    assert swing == pytest.approx(4.0 - expected_floor, abs=1e-9)
+
+
+def test_postseason_swing_over_real_monte_carlo_output():
+    """Integration test: feeds run_monte_carlo_simulation's REAL
+    bracket_outcomes/fate_levels into compute_postseason_swing_from_matrix,
+    rather than the hand-built dicts every other test in this file uses.
+
+    Every other postseason test constructs bracket_outcomes/fate_levels by
+    hand, so the seam between the simulator's actual per-sim output and this
+    scoring function is otherwise unguarded -- a change to
+    _fate_levels_for_sim, the bracket recorder's game-numbering, or
+    _partition_bracket's key shape could leave every other test in this file
+    green while silently zeroing or maxing out live playoff importance
+    scores. This is the one path with no production track record (the site
+    has never run compute_postseason_swing_from_matrix against a real
+    playoff bracket in prod).
+
+    RNG is seeded for reproducibility; num_simulations is kept low (500) to
+    stay fast. remaining_games is empty and every team has a distinct win
+    total, so seeding is fully deterministic across sims -- the only
+    randomness is in how the bracket itself plays out.
+    """
+    teams = [
+        "New York Liberty",
+        "Las Vegas Aces",
+        "Minnesota Lynx",
+        "Connecticut Sun",
+        "Indiana Fever",
+        "Seattle Storm",
+        "Atlanta Dream",
+        "Phoenix Mercury",
+    ]
+    standings = {
+        name: {"wins": 20 - i, "losses": i, "elo": 1600 - i * 10}
+        for i, name in enumerate(teams)
+    }
+    seeded = resolve_seeding(to_team_standings(standings))
+    assert seeded == teams  # strictly decreasing wins -> deterministic, no ties
+
+    bracket_state = empty_bracket_state(seeded)
+    # qf1 (1 seed vs 8 seed): resume at 1-1, so the next game (game 3) is
+    # win-or-go-home.
+    bracket_state["qf1"].higher_wins = 1
+    bracket_state["qf1"].lower_wins = 1
+    # qf2 (4 seed vs 5 seed): already decided -- the series is over, so
+    # simulate_playoffs plays no more games in this slot and nothing gets
+    # recorded in bracket_outcomes for it in any sim.
+    bracket_state["qf2"].winner = bracket_state["qf2"].higher
+    bracket_state["qf2"].higher_wins = _GAMES_NEEDED_BO3
+
+    random.seed(20260830)
+    _, _, _, bracket_outcomes, _, fate_levels = run_monte_carlo_simulation(
+        standings,
+        [],
+        num_simulations=500,
+        return_matrix=True,
+        bracket_state=bracket_state,
+    )
+
+    win_or_go_home_swing = compute_postseason_swing_from_matrix(
+        "qf1",
+        3,
+        bracket_outcomes,
+        fate_levels,
+        (bracket_state["qf1"].higher, bracket_state["qf1"].lower),
+    )
+    assert normalize_postseason_importance(win_or_go_home_swing) > 90
+
+    decided_swing = compute_postseason_swing_from_matrix(
+        "qf2",
+        3,
+        bracket_outcomes,
+        fate_levels,
+        (bracket_state["qf2"].higher, bracket_state["qf2"].lower),
+    )
+    assert normalize_postseason_importance(decided_swing) < 10
 
 
 def test_find_bracket_slot_matches_pair():
     """Returns (slot_id, next_game_num) when teams match an in-progress slot."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -171,7 +331,7 @@ def test_find_bracket_slot_game_number_includes_pre_played():
 
 def test_find_bracket_slot_no_match_returns_none():
     """Teams not in the bracket → None."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -185,7 +345,7 @@ def test_find_bracket_slot_no_match_returns_none():
 
 def test_find_bracket_slot_skips_decided_series():
     """A slot whose winner is set is treated as not matching (series is over)."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -221,7 +381,7 @@ def test_importance_for_game_postseason_fallback_when_no_bracket_state():
             importance_ceiling=0.75,
             bracket_state=None,
             bracket_outcomes=None,
-            champions=None,
+            fate_levels=None,
             team_names=None,
         )
         == 100.0
@@ -230,7 +390,7 @@ def test_importance_for_game_postseason_fallback_when_no_bracket_state():
 
 def test_importance_for_game_postseason_fallback_when_teams_not_in_bracket():
     """season_type=3 + bracket_state without these teams → fallback 100.0."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {"qf1": SeriesState(higher="X", lower="Y", games_needed=_GAMES_NEEDED_BO3)}
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
@@ -241,7 +401,7 @@ def test_importance_for_game_postseason_fallback_when_teams_not_in_bracket():
         importance_ceiling=0.75,
         bracket_state=state,
         bracket_outcomes=[],
-        champions=[],
+        fate_levels=[],
         team_names=["A", "B"],
     )
     assert result == 100.0
@@ -260,9 +420,11 @@ def test_importance_for_game_postseason_derives_from_swing():
             games_needed=_GAMES_NEEDED_BO7,
         ),
     }
-    # Construct synthetic sims where Finals Game 7 cleanly flips the champion.
-    bracket_outcomes = [{("f", 7): True}] * 500 + [{("f", 7): False}] * 500
-    champions = ["A"] * 500 + ["B"] * 500
+    # Construct synthetic sims where Finals Game 7 cleanly decides both fates.
+    n = 500
+    bracket_outcomes = [{("f", 7): True}] * n + [{("f", 7): False}] * n
+    fate_levels = [{"A": FATE_CHAMPION, "B": FATE_LOST_FINALS} for _ in range(n)]
+    fate_levels += [{"A": FATE_LOST_FINALS, "B": FATE_CHAMPION} for _ in range(n)]
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
     result = _importance_for_game(
         game,
@@ -271,19 +433,20 @@ def test_importance_for_game_postseason_derives_from_swing():
         importance_ceiling=0.75,
         bracket_state=state,
         bracket_outcomes=bracket_outcomes,
-        champions=champions,
+        fate_levels=fate_levels,
         team_names=["A", "B", "C"],
     )
-    # Swing = 2.0 - floor → normalized ≈ 97.5.
-    expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 500 + 1 / 500))
-    expected_swing = 2.0 - expected_floor
-    expected_importance = expected_swing / 2.0 * 100.0
+    # Two levels per team carry a floor term at pooled p=0.5; raw swing 4.0.
+    expected_floor = 4 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / n + 1 / n))
+    expected_swing = 4.0 - expected_floor
+    expected_importance = expected_swing / 4.0 * 100.0
     assert result == pytest.approx(expected_importance, abs=1e-6)
 
 
 def test_importance_for_game_postseason_partial_swing():
-    """Swing of ~1.0 → normalized ~50.0; proves derivation path actually executes."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    """Partial fate spread for the advancing team -> partial swing; proves
+    the derivation path actually executes with a non-trivial split."""
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -294,25 +457,28 @@ def test_importance_for_game_postseason_partial_swing():
             games_needed=_GAMES_NEEDED_BO3,
         ),
     }
-    # 500 sims higher won qf1 game 1 → A champ in 250, B in 0, C in 250
-    # 500 sims lower won  qf1 game 1 → A champ in 0,   B in 250, C in 250
-    # Higher bucket rates: A=0.5, B=0.0, C=0.5
-    # Lower bucket rates:  A=0.0, B=0.5, C=0.5
-    # Raw Σ|Δ| = 0.5 + 0.5 + 0.0 = 1.0, minus floor → expected ≈ 46.55
+    # 500 sims higher (A) won qf1 game 1: A's fate splits lost_sf/champion 50/50,
+    # B is lost_qf.
+    # 500 sims lower (B) won qf1 game 1: B's fate splits lost_sf/champion 50/50,
+    # A is lost_qf.
     bracket_outcomes = []
-    champions = []
-    for _ in range(250):
+    fate_levels = []
+    for i in range(500):
         bracket_outcomes.append({("qf1", 1): True})
-        champions.append("A")
-    for _ in range(250):
-        bracket_outcomes.append({("qf1", 1): True})
-        champions.append("C")
-    for _ in range(250):
+        fate_levels.append(
+            {
+                "A": FATE_LOST_SF if i % 2 == 0 else FATE_CHAMPION,
+                "B": FATE_LOST_QF,
+            }
+        )
+    for i in range(500):
         bracket_outcomes.append({("qf1", 1): False})
-        champions.append("B")
-    for _ in range(250):
-        bracket_outcomes.append({("qf1", 1): False})
-        champions.append("C")
+        fate_levels.append(
+            {
+                "A": FATE_LOST_QF,
+                "B": FATE_LOST_SF if i % 2 == 0 else FATE_CHAMPION,
+            }
+        )
 
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "evt-1"}
     result = _importance_for_game(
@@ -322,20 +488,21 @@ def test_importance_for_game_postseason_partial_swing():
         importance_ceiling=0.75,
         bracket_state=state,
         bracket_outcomes=bracket_outcomes,
-        champions=champions,
+        fate_levels=fate_levels,
         team_names=["A", "B", "C"],
     )
-    # A: count_h=250, count_l=0, pooled=0.25 (B mirrors A: count_h=0, count_l=250)
-    # C: count_h=250, count_l=250, pooled=0.5
-    # Floors computed from pooled rates and n=500 for each bucket.
-    expected_floor_ab = math.sqrt(2 / math.pi) * math.sqrt(
-        0.25 * (1 - 0.25) * (1 / 500 + 1 / 500)
-    )
-    expected_floor_c = math.sqrt(2 / math.pi) * math.sqrt(
-        0.5 * (1 - 0.5) * (1 / 500 + 1 / 500)
-    )
-    expected_swing = 1.0 - (2 * expected_floor_ab + expected_floor_c)
-    expected_importance = expected_swing / 2.0 * 100.0
+    # Per team: lost_qf pooled p=0.5 (500 vs 0 in one bucket / 0 vs 500 in the
+    # other -> wait, pooled over both buckets = 500/1000=0.5), lost_sf pooled
+    # p=0.25, champion pooled p=0.25. Raw swing per team = |1-0| (lost_qf) +
+    # |0-0.5| (lost_sf) + |0-0.5| (champion) = 2.0; two teams -> raw 4.0.
+    n = 500
+
+    def term(p):
+        return math.sqrt(2 / math.pi) * math.sqrt(p * (1 - p) * (1 / n + 1 / n))
+
+    expected_floor = 2 * (term(0.5) + term(0.25) + term(0.25))
+    expected_swing = 4.0 - expected_floor
+    expected_importance = expected_swing / 4.0 * 100.0
     assert result == pytest.approx(expected_importance, abs=1e-6)
 
 
@@ -443,7 +610,6 @@ def test_find_bracket_slot_matches_opening_round_game_one():
     """Game 1 of an opening-round QF is matchable via the empty bracket
     state. Without this, _importance_for_game falls back to flat 100."""
     from scripts.daily_update import _find_bracket_slot
-    from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
         "Las Vegas Aces",
@@ -467,7 +633,6 @@ def test_assign_postseason_slot_lookup_distinct_game_nums_in_same_series():
     not all to game_num 1. Regression for the 'all upcoming games in a
     series get scored as the next game' Codex finding."""
     from scripts.daily_update import _assign_postseason_slot_lookup
-    from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
         "Las Vegas Aces",
@@ -517,8 +682,6 @@ def test_assign_postseason_slot_lookup_respects_completed_games_in_slot():
     from scripts.daily_update import _assign_postseason_slot_lookup
     from src.scoring.playoffs import (
         SeriesState,
-        _GAMES_NEEDED_BO3,
-        empty_bracket_state,
     )
 
     seeded = [
@@ -562,7 +725,6 @@ def test_assign_postseason_slot_lookup_respects_completed_games_in_slot():
 def test_assign_postseason_slot_lookup_handles_multiple_slots_independently():
     """Games across different slots are numbered independently within each."""
     from scripts.daily_update import _assign_postseason_slot_lookup
-    from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
         "Las Vegas Aces",
@@ -610,7 +772,6 @@ def test_assign_postseason_slot_lookup_skips_unmatchable_games():
     """Postseason rows for teams not in any slot are omitted, not
     silently slotted somewhere."""
     from scripts.daily_update import _assign_postseason_slot_lookup
-    from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
         "Las Vegas Aces",
@@ -641,7 +802,6 @@ def test_assign_postseason_slot_lookup_ignores_regular_season_rows():
     """season_type != 3 games are ignored even if their team pair happens
     to match a bracket slot."""
     from scripts.daily_update import _assign_postseason_slot_lookup
-    from src.scoring.playoffs import empty_bracket_state
 
     seeded = [
         "Las Vegas Aces",
@@ -671,7 +831,7 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
     """Same upcoming game, called twice with lookup pointing at different
     game numbers, must produce different importance — proves the ordinal
     actually flows into compute_postseason_swing_from_matrix."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -682,22 +842,19 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
             games_needed=_GAMES_NEEDED_BO3,
         ),
     }
-    # Sim universe: Game 1 cleanly flips champion (swing ≈ 1.95 → ~97.5
-    # after noise-floor correction).
-    # Game 2 has no effect on champion (swing=0 → 0).
+    # Sim universe: Game 1 cleanly decides both fates; Game 2 has no effect.
     bracket_outcomes = []
-    champions = []
+    fate_levels = []
     for _ in range(500):
         bracket_outcomes.append({("qf1", 1): True, ("qf1", 2): True})
-        champions.append("A")
+        fate_levels.append({"A": FATE_CHAMPION, "B": FATE_LOST_QF})
     for _ in range(500):
         bracket_outcomes.append({("qf1", 1): False, ("qf1", 2): True})
-        champions.append("B")
+        fate_levels.append({"A": FATE_LOST_QF, "B": FATE_CHAMPION})
 
     game = {"season_type": 3, "team_a": "A", "team_b": "B", "event_id": "g1"}
 
-    # Lookup says this is Game 1 of qf1 → swing ≈ 1.95 → importance ≈ 97.5
-    # (noise-floor correction applied).
+    # Lookup says this is Game 1 of qf1 → decides both fates.
     result_game1 = _importance_for_game(
         game,
         raw_swings=[],
@@ -705,13 +862,15 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
         importance_ceiling=0.75,
         bracket_state=state,
         bracket_outcomes=bracket_outcomes,
-        champions=champions,
+        fate_levels=fate_levels,
         team_names=["A", "B"],
         postseason_slot_lookup={"g1": ("qf1", 1)},
     )
-    expected_floor = 2 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 500 + 1 / 500))
-    expected_swing = 2.0 - expected_floor
-    expected_importance = expected_swing / 2.0 * 100.0
+    # Each team moves 1 unit on each of two levels -> raw 4.0, with 4 floor
+    # terms at pooled p=0.5. Normalized against POSTSEASON_MAX_SWING=4.0.
+    expected_floor = 4 * math.sqrt(2 / math.pi) * math.sqrt(0.25 * (1 / 500 + 1 / 500))
+    expected_swing = 4.0 - expected_floor
+    expected_importance = expected_swing / 4.0 * 100.0
     assert result_game1 == pytest.approx(expected_importance, abs=1e-6)
 
     # Same game dict, lookup overrides to Game 2 → all sims have Game 2 = True,
@@ -723,7 +882,7 @@ def test_importance_for_game_uses_postseason_slot_lookup_when_provided():
         importance_ceiling=0.75,
         bracket_state=state,
         bracket_outcomes=bracket_outcomes,
-        champions=champions,
+        fate_levels=fate_levels,
         team_names=["A", "B"],
         postseason_slot_lookup={"g1": ("qf1", 2)},
     )
@@ -735,7 +894,7 @@ def test_importance_for_game_lookup_miss_falls_back_to_max():
     game's event_id, return 100 (unmatched). Don't silently fall through
     to _find_bracket_slot, which would assign every unlisted upcoming
     game the same 'next game' number."""
-    from src.scoring.playoffs import SeriesState, _GAMES_NEEDED_BO3
+    from src.scoring.playoffs import SeriesState
 
     state = {
         "qf1": SeriesState(
@@ -754,7 +913,7 @@ def test_importance_for_game_lookup_miss_falls_back_to_max():
         importance_ceiling=0.75,
         bracket_state=state,
         bracket_outcomes=[{("qf1", 1): True}],
-        champions=["A"],
+        fate_levels=[{"A": FATE_CHAMPION, "B": FATE_LOST_QF}],
         team_names=["A", "B"],
         postseason_slot_lookup={"g1": ("qf1", 1)},
     )
@@ -762,12 +921,18 @@ def test_importance_for_game_lookup_miss_falls_back_to_max():
 
 
 def test_postseason_swing_clamps_at_zero_for_no_signal_game():
-    """Champion distribution identical in both buckets -> corrected swing exactly 0."""
+    """Identical fate distributions in both buckets -> corrected swing exactly 0."""
     bracket_outcomes = [{("qf1", 1): i % 2 == 0} for i in range(100)]
-    # A is champion in 50% of each bucket, B in the other 50% -> raw swing 0;
-    # subtracting the positive floor must clamp at 0, not go negative.
-    champions = ["A" if i % 4 in (0, 1) else "B" for i in range(100)]
+    # Each participant's fate is independent of the focal game's outcome:
+    # raw swing 0, so subtracting the positive floor must clamp at 0.
+    fate_levels = [
+        {
+            "A": FATE_CHAMPION if i % 4 in (0, 1) else FATE_LOST_QF,
+            "B": FATE_LOST_QF if i % 4 in (0, 1) else FATE_CHAMPION,
+        }
+        for i in range(100)
+    ]
     swing = compute_postseason_swing_from_matrix(
-        "qf1", 1, bracket_outcomes, champions, ["A", "B"]
+        "qf1", 1, bracket_outcomes, fate_levels, ("A", "B")
     )
     assert swing == 0.0
