@@ -1,5 +1,26 @@
 """Constants for WNBA Games to Watch."""
 
+# The season the live site reads and writes. Bump ONCE A YEAR, at season start.
+#
+# This bump was already mandatory before it had a name: fetch_bpi_ratings()
+# builds /seasons/{CURRENT_SEASON}/powerindex, so a stale value silently serves
+# last season's BPI rather than erroring.
+#
+# Deliberately NOT clock-derived. int(today_et()[:4]) would roll on Jan 1,
+# blanking the completed list and rankings for the ~4 months before games
+# start -- and, because these are default arguments bound at import, would
+# freeze the year for the life of a Cloud Run instance anyway. Failing safe
+# means a forgotten bump keeps showing last season, which is stale but
+# coherent, so daily_update logs an error once the CALENDAR YEAR passes this
+# one (it checks the clock, not the schedule -- see the detector's docstring).
+#
+# NOT the only season idiom in the repo, and deliberately so: /api/shot-making,
+# /api/calibration, /api/elo-history and /api/player-shots read the clock, and
+# /api/replay reads the newest populated season. Unifying those is a separate
+# queued decision about offseason UX -- do not assume this constant answers
+# "which season" everywhere.
+CURRENT_SEASON = 2026
+
 
 class Broadcasters:
     """Broadcaster/streaming service names."""

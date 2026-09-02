@@ -22,7 +22,10 @@ from src.api.routes import (
     format_games_response,
     is_live_status,
 )
-from src.constants import Broadcasters  # noqa: F401 — used in get_broadcasters endpoint
+from src.constants import (  # noqa: F401 — Broadcasters used in get_broadcasters endpoint
+    CURRENT_SEASON,
+    Broadcasters,
+)
 from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
@@ -377,10 +380,10 @@ def get_live_game_statuses():
 
 @app.get("/api/games/completed", response_model=list[GameResponse])
 async def get_completed_games_endpoint():
-    """Return all completed 2026 games sorted by excitement desc."""
+    """Return all completed current-season games sorted by excitement desc."""
     session = get_session()
     try:
-        rankings = get_completed_rankings(session, season_year=2026)
+        rankings = get_completed_rankings(session, season_year=CURRENT_SEASON)
         # include_shapes attaches a thinned (~28pt) fever-line curve per game. The
         # completed payload is fetched on every homepage load (to populate the
         # toggle count) even though the section is collapsed by default, so this is

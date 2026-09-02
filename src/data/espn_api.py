@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from src.constants import CURRENT_SEASON
 from src.scoring.excitement import elapsed_seconds
 
 logger = logging.getLogger(__name__)
@@ -33,9 +34,9 @@ STATS_API = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/wnba
 ET = ZoneInfo("America/New_York")
 # Schedule fetch horizon. Must extend through the Finals — WNBA playoffs run
 # from late September into late October (Bo7 Finals can finish ~Oct 20-25).
-# `_SEASON_END.year` is also used as the season identifier; keep it in the
-# regular-season calendar year.
-_SEASON_END = date(2026, 10, 31)
+# The YEAR comes from CURRENT_SEASON (src/constants.py) -- bump it there, not
+# here. Only the Oct 31 month/day is this constant's own business.
+_SEASON_END = date(CURRENT_SEASON, 10, 31)
 
 
 def today_et() -> str:
@@ -129,7 +130,7 @@ def fetch_team_details() -> dict[str, dict]:
 def fetch_bpi_ratings() -> dict[str, float]:
     """Return {team_display_name: bpi_value} for the current season."""
     team_names = fetch_team_id_map()
-    season = _SEASON_END.year
+    season = CURRENT_SEASON
     data = _get(f"{CORE_API}/seasons/{season}/powerindex", limit=50)
     ratings = {}
     for item in data.get("items", []):

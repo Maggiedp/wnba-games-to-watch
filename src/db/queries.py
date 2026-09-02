@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.constants import CURRENT_SEASON
 from src.db.schema import (
     DailyRanking,
     EloHistory,
@@ -378,7 +379,9 @@ def get_upcoming_games(session: Session, start_date: str) -> list[Game]:
     )
 
 
-def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]:
+def get_completed_games(
+    session: Session, season_year: int = CURRENT_SEASON
+) -> list[Game]:
     """Completed regular-season + postseason games for a season.
 
     Filter is conditional on backfill state:
@@ -413,7 +416,7 @@ def get_completed_games(session: Session, season_year: int = 2026) -> list[Game]
 
 
 def get_team_records(
-    session: Session, season_year: int = 2026
+    session: Session, season_year: int = CURRENT_SEASON
 ) -> dict[int, tuple[int, int]]:
     """Regular-season W-L record per team for a season, from completed games.
 
@@ -452,7 +455,7 @@ def get_team_records(
 
 
 def get_completed_postseason_games(
-    session: Session, season_year: int = 2026
+    session: Session, season_year: int = CURRENT_SEASON
 ) -> list[Game]:
     """Completed postseason games for a season (season_type=3 only).
 
@@ -472,7 +475,7 @@ def get_completed_postseason_games(
 
 
 def get_head_to_head(
-    session: Session, team_a_id: int, team_b_id: int, season_year: int = 2026
+    session: Session, team_a_id: int, team_b_id: int, season_year: int = CURRENT_SEASON
 ) -> list[Game]:
     """Completed regular-season + postseason games this season between exactly
     these two teams, chronological. Order-agnostic: matches both home/away
@@ -500,7 +503,7 @@ def get_head_to_head(
 
 
 def get_completed_games_missing_excitement(
-    session: Session, season_year: int = 2026, limit: int | None = None
+    session: Session, season_year: int = CURRENT_SEASON, limit: int | None = None
 ) -> list[Game]:
     """Completed games for `season_year` that still need excitement_index computed.
 
@@ -541,7 +544,7 @@ def get_completed_games_missing_excitement(
 def get_games_for_excitement_refresh(
     session: Session,
     cutoff: datetime | None,
-    season_year: int = 2026,
+    season_year: int = CURRENT_SEASON,
     limit: int | None = None,
 ) -> list[Game]:
     """Games whose excitement_index was computed recently enough that ESPN
@@ -663,7 +666,7 @@ def get_upcoming_rankings(session: Session, start_date: str) -> list[DailyRankin
 
 def get_completed_rankings(
     session: Session,
-    season_year: int = 2026,
+    season_year: int = CURRENT_SEASON,
     broadcaster: str | None = None,
 ) -> list[DailyRanking]:
     """DailyRanking rows for completed games in `season_year`, sorted by
@@ -731,7 +734,7 @@ def get_completed_rankings(
 
 
 def get_calibration_pairs(
-    session: Session, season_year: int = 2026
+    session: Session, season_year: int = CURRENT_SEASON
 ) -> list[tuple[float, bool]]:
     """(predicted win_prob_a, team_a_won) for completed regular/post-season
     games that have a frozen DailyRanking.win_prob_a. Rows without a stored
@@ -770,12 +773,12 @@ def get_rankings_by_broadcaster(
     """Rankings filtered by broadcaster.
 
     mode="upcoming" (default): date >= start_date, sorted by date asc.
-    mode="completed": 2026 completed games sorted by excitement desc.
+    mode="completed": current-season completed games sorted by excitement desc.
                       `start_date` is ignored.
     """
     if mode == "completed":
         return get_completed_rankings(
-            session, season_year=2026, broadcaster=broadcaster
+            session, season_year=CURRENT_SEASON, broadcaster=broadcaster
         )
     return (
         session.query(DailyRanking)
@@ -1105,7 +1108,7 @@ def get_team_abbrev_map(session: Session) -> dict[str, str]:
 
 
 def get_completed_games_missing_shape(
-    session: Session, season_year: int = 2026, limit: int | None = None
+    session: Session, season_year: int = CURRENT_SEASON, limit: int | None = None
 ) -> list[Game]:
     """Completed `season_year` games (in the games table) with an espn_id but no
     game_shapes row yet - the daily-update candidate set.
@@ -1354,7 +1357,7 @@ def shot_row_to_dict(row: Shot) -> dict:
 
 
 def get_completed_games_missing_shots(
-    session: Session, season_year: int = 2026, limit: int | None = None
+    session: Session, season_year: int = CURRENT_SEASON, limit: int | None = None
 ) -> list[Game]:
     """Completed `season_year` games with an espn_id but no shots rows yet — the
     daily-update candidate set. Ordered newest-first."""

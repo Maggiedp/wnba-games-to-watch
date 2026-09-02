@@ -8,7 +8,7 @@ import random
 import sys
 from datetime import date, datetime, timedelta
 
-from src.constants import UN_FINALIZE_STATUSES, GameStatus
+from src.constants import CURRENT_SEASON, UN_FINALIZE_STATUSES, GameStatus
 from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
@@ -112,7 +112,7 @@ def _make_team_id_resolver(session):
 
 # How far back to pull games for Elo warm-up. Two prior seasons gives enough
 # updates that ratings have separated from the 1500 seed by opening day.
-_ELO_HISTORY_START = date(2024, 5, 1)
+_ELO_HISTORY_START = date(2024, 5, 1)  # season-pin-ok: Elo replay origin
 
 
 def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
@@ -227,6 +227,28 @@ def populate_team_style(session, season: int) -> int:
         return 0
 
 
+def _warn_if_season_anchor_is_stale() -> None:
+    """Announce a forgotten CURRENT_SEASON bump.
+
+    CURRENT_SEASON fails safe: stale means the site quietly keeps serving
+    last season, which is coherent enough that nobody notices. So the
+    calendar entering a year we are not serving is the signal.
+
+    Deliberately checks the CLOCK, not the fetched schedule: the schedule
+    window ends at _SEASON_END, which is itself derived from CURRENT_SEASON,
+    so a game past the anchor can never appear in that list. A detector
+    reading the fetch results could never fire.
+    """
+    current_year = int(today_et()[:4])
+    if current_year > CURRENT_SEASON:
+        logger.error(
+            "It is %d but CURRENT_SEASON is %d — bump it in src/constants.py; "
+            "until then the site (and the BPI fetch) stays on the prior season.",
+            current_year,
+            CURRENT_SEASON,
+        )
+
+
 def fetch_and_store_games(session) -> list[dict]:
     logger.info("Fetching schedule and results from ESPN...")
     games = fetch_schedule_and_results()
@@ -301,7 +323,7 @@ def backfill_missing_season_types(session) -> None:
     # mode (NULL-tolerant). Both flips together once the legacy set drains.
     null_count = (
         session.query(Game)
-        .filter(Game.date.like("2026-%"))
+        .filter(Game.date.like(f"{CURRENT_SEASON}-%"))
         .filter(Game.season_type.is_(None))
         .filter(Game.espn_id.isnot(None))
         .count()
@@ -313,7 +335,7 @@ def backfill_missing_season_types(session) -> None:
     # canonical horizon (extends through October Finals). Capping at Sept 30
     # would leave October postseason rows unclassified and let their wins
     # leak into regular-season standings.
-    parsed = fetch_games_for_range(date(2026, 4, 1), _SEASON_END)
+    parsed = fetch_games_for_range(date(CURRENT_SEASON, 4, 1), _SEASON_END)
     by_espn_id = {
         g["event_id"]: g.get("season_type")
         for g in parsed
@@ -322,7 +344,7 @@ def backfill_missing_season_types(session) -> None:
     updated = 0
     for game in (
         session.query(Game)
-        .filter(Game.date.like("2026-%"))
+        .filter(Game.date.like(f"{CURRENT_SEASON}-%"))
         .filter(Game.season_type.is_(None))
         .filter(Game.espn_id.isnot(None))
         .all()
@@ -348,7 +370,7 @@ def populate_excitement_for_recent_completions(
     limit: int | None = DAILY_EXCITEMENT_RETRY_CAP,
     timeout: int = BACKFILL_ESPN_TIMEOUT_S,
 ) -> None:
-    """For 2026 games that completed but have no excitement_index, fetch
+    """For current-season games that completed but have no excitement_index, fetch
     play-by-play from ESPN and compute and store the final excitement score.
 
     Transient failures (ESPN unreachable, missing PBP, parse error) leave the
@@ -364,7 +386,7 @@ def populate_excitement_for_recent_completions(
     panel default since one slow game shouldn't hold up the daily run.
     """
     games = get_completed_games_missing_excitement(
-        session, season_year=2026, limit=limit
+        session, season_year=CURRENT_SEASON, limit=limit
     )
     if not games:
         logger.info("No completed games need excitement backfill")
@@ -486,7 +508,7 @@ def populate_game_shapes_for_recent_completions(
     limit: int | None = DAILY_EXCITEMENT_RETRY_CAP,
     timeout: int = BACKFILL_ESPN_TIMEOUT_S,
 ) -> None:
-    """For completed 2026 games with no game_shapes row, fetch PBP and store the
+    """For completed current-season games with no game_shapes row, fetch PBP and store the
     shape. Mirrors populate_excitement_for_recent_completions; transient failures
     leave the row absent for next-run retry.
 
@@ -502,7 +524,9 @@ def populate_game_shapes_for_recent_completions(
     WARNING per run). ESPN occasionally firms up pbp days late, historical
     rate is ~1 game per 768, and the alternative is a schema column — not
     worth it; expect the recurring warning for a truly degenerate feed."""
-    games = get_completed_games_missing_shape(session, season_year=2026, limit=limit)
+    games = get_completed_games_missing_shape(
+        session, season_year=CURRENT_SEASON, limit=limit
+    )
     if not games:
         logger.info("No completed games need game-shape backfill")
         return
@@ -567,6 +591,11 @@ def populate_shots_for_recent_completions(
     which would also want upsert_shots to update mutable fields, not skip. Decided
     against for v1 (Codex adversarial R2–R4): impact is a handful of shots in rare
     ESPN-defect cases; mirrors game_shapes' accepted-partial posture."""
+    # Clock-derived, NOT CURRENT_SEASON, and deliberately left that way: this
+    # feeds /api/shot-making, which reads int(today_et()[:4]) too, so writer and
+    # reader agree. Its CURRENT_SEASON siblings above (excitement, shapes) feed
+    # season-anchored readers instead. Unifying the two is queued -- until then
+    # this file genuinely holds both answers, and they are not interchangeable.
     season = int(today_et()[:4])
     games = get_completed_games_missing_shots(session, season_year=season, limit=limit)
     if not games:
@@ -677,7 +706,7 @@ def refresh_recent_excitement_scores(
     even if ESPN later adds/fixes plays. After `window_days` past compute
     time the value is treated as locked.
 
-    `window_days=None` drops the window entirely — every completed 2026 game
+    `window_days=None` drops the window entirely — every completed current-season game
     with a stored excitement_index qualifies (pass limit=None to actually
     reach them all), including legacy rows whose excitement_computed_at is
     NULL — the batch-recompute path (`backfill_excitement.py --recompute`);
@@ -693,7 +722,7 @@ def refresh_recent_excitement_scores(
         None if window_days is None else datetime.now() - timedelta(days=window_days)
     )
     games = get_games_for_excitement_refresh(
-        session, cutoff=cutoff, season_year=2026, limit=limit
+        session, cutoff=cutoff, season_year=CURRENT_SEASON, limit=limit
     )
     failed: list[str] = []
     if not games:
@@ -788,7 +817,7 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
         }
         for t in all_teams
     }
-    completed = get_completed_games(session, season_year=2026)
+    completed = get_completed_games(session, season_year=CURRENT_SEASON)
     null_skipped = 0
     for game in completed:
         # Postseason wins/losses don't count toward regular-season seeding.
@@ -1416,6 +1445,9 @@ def store_elo_history(session, replay: EloReplay, season_year: int) -> None:
 
 def main() -> int:
     logger.info("=== Starting daily update job ===")
+    # Before any season-scoped work: fetch_and_store_bpi_ratings below builds
+    # its URL from CURRENT_SEASON, so it is the first victim of a stale anchor.
+    _warn_if_season_anchor_is_stale()
     try:
         init_db()
         session = get_session()
