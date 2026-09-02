@@ -52,7 +52,7 @@ def seed(session) -> None:
     """Populate every table the walked pages read. Dates are relative to
     today_et() so the walk never goes stale. Commits."""
     from src.constants import CURRENT_SEASON
-    from src.data.espn_api import today_et
+    from src.data.espn_api import _SEASON_END, today_et
     from src.db.queries import (
         upsert_game_shape,
         upsert_playoff_probability,
@@ -73,7 +73,6 @@ def seed(session) -> None:
     # both read int(today_et()[:4]), so these rows must match the clock, NOT
     # CURRENT_SEASON. The completed window below is the opposite case.
     season = today.year
-    completed_anchor = min(today, date(CURRENT_SEASON, 10, 31))
 
     teams = [Team(name=n, abbreviation=a, logo_url="") for n, a in _TEAMS]
     session.add_all(teams)
@@ -129,21 +128,19 @@ def seed(session) -> None:
             )
         )
 
-    # --- Completed: two games/night for -1..-14 days, clamped INTO
-    # CURRENT_SEASON at both ends. Those queries are anchored to the season
-    # constant, not the wall clock, so a window derived from `today` alone
-    # silently empties the completed walk state and drops below the 25-game
-    # calibration gate whenever the calendar year and CURRENT_SEASON differ
-    # -- every January, and any time the annual bump is late. Trailing the
-    # season's end in that case is also what production shows in the
-    # offseason. In season this is identical to trailing today. k=0 is the
-    # completed
-    # detail target and reuses pair(0), so the upcoming detail page gets a
-    # head-to-head row. First 8 get game_shapes rows (minis + /replay).
+    # --- Completed: two games/night, clamped INTO CURRENT_SEASON at both ends.
+    # These queries are season-anchored, not clock-anchored, so a window
+    # derived from `today` alone empties the completed walk state and drops
+    # below the 25-game calibration gate whenever the calendar year and
+    # CURRENT_SEASON differ -- every January, and any time the bump is late.
+    # k=0 is the completed detail target and reuses pair(0), so the upcoming
+    # detail page gets a head-to-head row. First 8 get game_shapes rows
+    # (minis + /replay). _SEASON_END is the canonical last date of a season --
+    # don't re-derive Oct 31 here.
+    last_completed = min(today - timedelta(days=1), _SEASON_END)
     for k in range(28):
         gdate = max(
-            completed_anchor - timedelta(days=1 + k // 2),
-            date(CURRENT_SEASON, 1, 1),
+            last_completed - timedelta(days=k // 2), date(CURRENT_SEASON, 1, 1)
         ).isoformat()
         a, b = pair(k)
         espn_id = COMPLETED_DETAIL_ID if k == 0 else f"998{k + 1:04d}"

@@ -112,7 +112,7 @@ def _make_team_id_resolver(session):
 
 # How far back to pull games for Elo warm-up. Two prior seasons gives enough
 # updates that ratings have separated from the 1500 seed by opening day.
-_ELO_HISTORY_START = date(2024, 5, 1)
+_ELO_HISTORY_START = date(2024, 5, 1)  # season-pin-ok: Elo replay origin
 
 
 def fetch_and_store_bpi_ratings(session) -> dict[str, float]:
@@ -242,18 +242,14 @@ def _warn_if_season_anchor_is_stale() -> None:
     current_year = int(today_et()[:4])
     if current_year > CURRENT_SEASON:
         logger.error(
-            "It is %d but CURRENT_SEASON is %d — bump CURRENT_SEASON in "
-            "src/constants.py. Until then the site serves the %d season and "
-            "BPI fetches the %d power index.",
+            "It is %d but CURRENT_SEASON is %d — bump it in src/constants.py; "
+            "until then the site (and the BPI fetch) stays on the prior season.",
             current_year,
-            CURRENT_SEASON,
-            CURRENT_SEASON,
             CURRENT_SEASON,
         )
 
 
 def fetch_and_store_games(session) -> list[dict]:
-    _warn_if_season_anchor_is_stale()
     logger.info("Fetching schedule and results from ESPN...")
     games = fetch_schedule_and_results()
     if not games:
@@ -595,6 +591,11 @@ def populate_shots_for_recent_completions(
     which would also want upsert_shots to update mutable fields, not skip. Decided
     against for v1 (Codex adversarial R2–R4): impact is a handful of shots in rare
     ESPN-defect cases; mirrors game_shapes' accepted-partial posture."""
+    # Clock-derived, NOT CURRENT_SEASON, and deliberately left that way: this
+    # feeds /api/shot-making, which reads int(today_et()[:4]) too, so writer and
+    # reader agree. Its CURRENT_SEASON siblings above (excitement, shapes) feed
+    # season-anchored readers instead. Unifying the two is queued -- until then
+    # this file genuinely holds both answers, and they are not interchangeable.
     season = int(today_et()[:4])
     games = get_completed_games_missing_shots(session, season_year=season, limit=limit)
     if not games:
@@ -1444,6 +1445,9 @@ def store_elo_history(session, replay: EloReplay, season_year: int) -> None:
 
 def main() -> int:
     logger.info("=== Starting daily update job ===")
+    # Before any season-scoped work: fetch_and_store_bpi_ratings below builds
+    # its URL from CURRENT_SEASON, so it is the first victim of a stale anchor.
+    _warn_if_season_anchor_is_stale()
     try:
         init_db()
         session = get_session()

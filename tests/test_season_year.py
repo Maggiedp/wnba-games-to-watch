@@ -1,10 +1,11 @@
 """The current season is one constant, and the live paths derive from it.
 
 Context: ~17 sites re-typed the literal 2026 instead of deriving from the
-anchor that `fetch_bpi_ratings` already depends on. A forgotten annual bump
-used to break BPI; a re-typed literal broke everything else independently.
+anchor. See src/constants.py for why the anchor is pinned rather than
+clock-derived, and for the idioms that deliberately do NOT use it.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -24,99 +25,120 @@ _LIVE_PATH_FILES = [
     "scripts/daily_update.py",
 ]
 
+# Matches ANY four-digit year in a season position, never the derived forms
+# (f"{CURRENT_SEASON}-" / date(CURRENT_SEASON,). Pinning this to 2026 would
+# make the guard self-disable the year the constant moves — precisely the
+# event it exists to police.
+# A deliberate historical pin (an Elo replay start, a legacy backfill bound)
+# opts out by saying so on the line. Better than narrowing the pattern: the
+# guard stays broad, and every intentional pin is self-documenting.
+_PIN_OK = "season-pin-ok"
+
+_BARE_SEASON_LITERAL = re.compile(
+    r"season_year\s*[:=]\s*(?:int\s*=\s*)?\d{4}\b"
+    r'|like\(\s*f?["\']\d{4}-'
+    r"|\bdate\(\s*\d{4}\s*,"
+)
+
 
 def test_season_end_derives_from_current_season():
-    """One source of truth. These drifted apart is exactly the 2027 bug."""
+    """One source of truth. These drifting apart is the 2027 bug."""
     from src.data.espn_api import _SEASON_END
 
     assert _SEASON_END.year == CURRENT_SEASON
 
 
-def test_bpi_fetch_uses_the_shared_anchor():
-    """fetch_bpi_ratings builds /seasons/{year}/powerindex — a stale year
-    here silently returns last season's ratings rather than erroring."""
-    src = (_REPO / "src/data/espn_api.py").read_text()
-    assert "CURRENT_SEASON" in src, "espn_api must derive from the anchor"
+def test_bpi_fetch_requests_the_anchored_season(monkeypatch):
+    """The motivating failure: a stale year here silently returns last
+    season's ratings rather than erroring.
+
+    Moves the anchor before asserting. Two weaker versions pass on a
+    re-hardcoded `season = 2026`: a module-wide "CURRENT_SEASON in source"
+    substring (true as soon as _SEASON_END uses it), and a URL check against
+    CURRENT_SEASON while the constant still equals the old literal.
+
+    Patches espn_api's module global rather than reloading the module --
+    fetch_bpi_ratings resolves CURRENT_SEASON at call time, and reloading
+    espn_api rebinds its exception classes, which breaks `except
+    ESPNAPIError` identity for every other test in the session.
+    """
+    import src.data.espn_api as espn_api
+
+    seen = {}
+
+    def fake_get(url, **kw):
+        seen["url"] = url
+        return {"items": []}
+
+    monkeypatch.setattr(espn_api, "CURRENT_SEASON", 2027)
+    monkeypatch.setattr(espn_api, "fetch_team_id_map", lambda: {})
+    monkeypatch.setattr(espn_api, "_get", fake_get)
+    espn_api.fetch_bpi_ratings()
+
+    assert "/seasons/2027/powerindex" in seen["url"], seen["url"]
 
 
 @pytest.mark.parametrize("relpath", _LIVE_PATH_FILES)
 def test_live_paths_carry_no_bare_season_literal(relpath):
-    """A bare `2026` in a season position is the bug this file exists for.
-
-    Scoped to live paths so the deliberately-pinned backfills don't trip it.
-    Dates inside comments/docstrings are fine — we match season arguments
-    and date filters, not prose.
-    """
+    """A hand-typed year in a season position is the bug this file exists for."""
     src = (_REPO / relpath).read_text()
-    offenders = []
-    for i, line in enumerate(src.splitlines(), 1):
-        code = line.split("#", 1)[0]
-        if re.search(r"season_year\s*[:=]\s*(?:int\s*=\s*)?2026\b", code):
-            offenders.append(f"{relpath}:{i}: {line.strip()}")
-        # Game.date.like("2026-%") / date(2026, 4, 1) style season filters
-        if re.search(r'like\(\s*f?["\']2026-', code) or re.search(
-            r"\bdate\(\s*2026\s*,", code
-        ):
-            offenders.append(f"{relpath}:{i}: {line.strip()}")
+    offenders = [
+        f"{relpath}:{i}: {line.strip()}"
+        for i, line in enumerate(src.splitlines(), 1)
+        if _BARE_SEASON_LITERAL.search(line) and _PIN_OK not in line
+    ]
     assert not offenders, "bare season literal(s) on a live path:\n" + "\n".join(
         offenders
     )
 
 
-# Every live query whose default season must track the anchor.
-_SEASON_DEFAULTED = [
-    "get_completed_games",
-    "get_team_records",
-    "get_completed_postseason_games",
-    "get_head_to_head",
-    "get_completed_games_missing_excitement",
-    "get_games_for_excitement_refresh",
-    "get_completed_rankings",
-    "get_calibration_pairs",
-    "get_completed_games_missing_shape",
-    "get_completed_games_missing_shots",
-]
+def _season_year_defaults(relpath):
+    """(function name, default AST node) for every season_year default."""
+    tree = ast.parse((_REPO / relpath).read_text())
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        args = node.args
+        posonly = args.posonlyargs + args.args
+        for arg, default in zip(
+            posonly[len(posonly) - len(args.defaults) :], args.defaults
+        ):
+            if arg.arg == "season_year":
+                out.append((node.name, default))
+        for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+            if arg.arg == "season_year" and default is not None:
+                out.append((node.name, default))
+    return out
 
 
-@pytest.fixture
-def queries_at_2027(monkeypatch):
-    """Re-import the query module with the anchor moved to 2027.
+def test_every_season_default_is_the_anchor_by_name():
+    """The teeth, checked statically.
 
-    Necessary because default arguments bind at IMPORT time: monkeypatching
-    the constant alone changes nothing already bound, so a test that only
-    compares `default == CURRENT_SEASON` passes on a hardcoded 2026 too --
-    it is vacuous while the anchor happens to equal the old literal.
-    Reloading is what makes the assertion able to fail.
+    Asserts each default IS the name CURRENT_SEASON, not merely that it
+    equals it -- comparing values is vacuous while the constant still equals
+    the literal it replaced, which is how the first draft of this test passed
+    on a hardcoded 2026.
+
+    Static on purpose. The earlier version reloaded src.db.queries under a
+    patched constant to defeat import-time default binding; that reload
+    rebinds the module's objects and broke 25 unrelated tests in
+    tests/test_routes.py whenever this file ran first. The suite was green
+    only because test_season_year sorts alphabetically after test_routes.
     """
-    import importlib
-
-    import src.constants
-    from src.db import queries
-
-    monkeypatch.setattr(src.constants, "CURRENT_SEASON", 2027)
-    reloaded = importlib.reload(queries)
-    yield reloaded
-    monkeypatch.undo()
-    importlib.reload(queries)
-
-
-@pytest.mark.parametrize("fname", _SEASON_DEFAULTED)
-def test_season_default_follows_the_anchor_when_it_moves(fname, queries_at_2027):
-    """The teeth: with the anchor at 2027, a leftover literal reads 2026.
-
-    A rename that failed to wire through still passes the source-literal
-    scan (no bare 2026 left to find) and fails here.
-    """
-    import inspect
-
-    default = (
-        inspect.signature(getattr(queries_at_2027, fname))
-        .parameters["season_year"]
-        .default
+    found = _season_year_defaults("src/db/queries.py")
+    offenders = [
+        f"{name}: {ast.unparse(default)}"
+        for name, default in found
+        if not (isinstance(default, ast.Name) and default.id == "CURRENT_SEASON")
+    ]
+    assert not offenders, (
+        "season_year default(s) not derived from CURRENT_SEASON: "
+        + ", ".join(offenders)
     )
-    assert default == 2027, (
-        f"{fname}'s season_year default stayed {default!r} after the anchor "
-        f"moved to 2027 -- it is not derived from CURRENT_SEASON"
+    assert len(found) >= 10, (
+        f"expected the season-scoped queries, found {len(found)} — the sweep "
+        "may have stopped matching, which would pass vacuously"
     )
 
 
@@ -156,9 +178,9 @@ def test_stale_anchor_detector_fires_once_the_calendar_passes_it(caplog, monkeyp
     import scripts.daily_update as du
 
     monkeypatch.setattr(du, "today_et", lambda: f"{CURRENT_SEASON + 1}-01-01")
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.ERROR, logger="scripts.daily_update"):
         du._warn_if_season_anchor_is_stale()
-    assert "bump CURRENT_SEASON" in caplog.text
+    assert "bump it in src/constants.py" in caplog.text
     assert str(CURRENT_SEASON + 1) in caplog.text
 
 
@@ -169,20 +191,6 @@ def test_stale_anchor_detector_quiet_during_the_current_season(caplog, monkeypat
     import scripts.daily_update as du
 
     monkeypatch.setattr(du, "today_et", lambda: f"{CURRENT_SEASON}-09-01")
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.ERROR, logger="scripts.daily_update"):
         du._warn_if_season_anchor_is_stale()
     assert caplog.text == ""
-
-
-def test_stale_anchor_detector_cannot_read_the_schedule_fetch():
-    """Regression: the first version of this detector inspected the fetched
-    games and was DEAD CODE -- fetch_schedule_and_results caps its window at
-    _SEASON_END, which derives from CURRENT_SEASON, so a game past the anchor
-    can never appear there. Keep it reading the clock.
-    """
-    import inspect
-
-    import scripts.daily_update as du
-
-    src = inspect.getsource(du._warn_if_season_anchor_is_stale)
-    assert "today_et" in src, "detector must read the clock, not the fetch"
