@@ -34,7 +34,12 @@
 
   <section>
     <h2>Elo ratings over time</h2>
-    <p class="desc">Each team's Elo rating entering every game this season.
+    <!-- The season is NAMED, not assumed. /api/elo-history defaults to the
+         newest POPULATED season, so through the offseason this chart shows the
+         season that just finished; "this season" would be a lie every January.
+         The static fallback below is the pre-fetch state only. -->
+    <p class="desc">Each team's Elo rating entering every game of the
+       <span id="elo-season">current</span> season.
        Replayed from results — higher is stronger.</p>
     <div id="elo-chart" class="chart"><p class="empty">Loading…</p></div>
     <div id="elo-legend" class="legend"></div>
@@ -51,6 +56,8 @@ async function loadElo() {
     const res = await fetch('/api/elo-history');
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    const seasonEl = document.getElementById('elo-season');
+    if (seasonEl && data.season) seasonEl.textContent = data.season;
     // Shared renderer keys on `value`; elo-history returns `rating`.
     const teams = {};
     for (const [name, pts] of Object.entries(data.teams || {})) {

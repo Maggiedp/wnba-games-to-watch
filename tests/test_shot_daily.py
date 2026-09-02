@@ -211,10 +211,13 @@ def test_recompute_removes_stale_players(session):
 
 
 def test_populate_shots_derives_current_season(session, monkeypatch):
-    # Season comes from today(), not a hard-coded 2026 — a 2027 game ingests and
-    # its shots are tagged season=2027, staying consistent with recompute's
-    # int(today[:4]) (Codex R1 rollover).
-    monkeypatch.setattr(du, "today_et", lambda: "2027-06-15")
+    # Season comes from the clock, not a hard-coded 2026 — a 2027 game ingests
+    # and its shots are tagged season=2027, staying consistent with recompute's
+    # clock_season() (Codex R1 rollover). Patch espn_api.today_et, the ONE name
+    # the season now resolves through.
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-06-15")
     session.add_all([Team(id=1, name="A"), Team(id=2, name="B")])
     session.add(
         Game(

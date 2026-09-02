@@ -764,6 +764,52 @@ def get_calibration_pairs(
     ]
 
 
+def get_latest_calibration_season(session: Session, max_season: int) -> int | None:
+    """Newest season not after `max_season` that yields calibration pairs.
+
+    Lets /api/calibration default to the newest POPULATED season instead of the
+    calendar year, so the /transparency reliability panel keeps showing the last
+    completed season through the offseason rather than going blank every January.
+
+    Filters on the same join as get_calibration_pairs rather than on games
+    alone: a season can hold completed games while no DailyRanking froze a
+    win_prob_a for them (a mid-season deploy, a repaired backfill), and calling
+    that season "populated" would hand the endpoint a season whose pair list is
+    empty -- swapping a blank chart for a differently-blank chart.
+
+    Returns the year of the newest qualifying game rather than scanning distinct
+    seasons: the caller wants one season, and MAX is a single indexed row.
+
+    `max_season` bounds the search rather than the result, for the reason spelled
+    out in get_latest_elo_history_season: clamping afterwards can land on an
+    empty season.
+
+    Deliberately NOT a completeness threshold. A sparse season here is the
+    CURRENT one ramping up, and the honest answer on opening night is the new
+    season with two games in it -- which is what the clock-derived code served,
+    and what /transparency's MIN_CAL_GAMES branch renders. The /api/team-style
+    sparse-season guard does NOT transfer: team_style holds one row per team, so
+    its count means "are all 15 teams here yet", while this join and elo_history
+    ACCUMULATE rows all season (2026: 287 graded games, 602 elo points). A count
+    comparison would keep serving a FINISHED season through most of a live one.
+    """
+    newest = (
+        session.query(func.max(Game.date))
+        .join(
+            DailyRanking,
+            (Game.date == DailyRanking.date)
+            & (Game.team_a_id == DailyRanking.team_a_id)
+            & (Game.team_b_id == DailyRanking.team_b_id),
+        )
+        .filter(Game.date < f"{max_season + 1}-")
+        .filter(Game.winner_id.isnot(None))
+        .filter(_NOT_PRESEASON)
+        .filter(DailyRanking.win_prob_a.isnot(None))
+        .scalar()
+    )
+    return int(newest[:4]) if newest else None
+
+
 def get_rankings_by_broadcaster(
     session: Session,
     start_date: str,
@@ -888,6 +934,36 @@ def get_elo_history(session: Session, season_year: int) -> list[EloHistory]:
         .order_by(EloHistory.date, EloHistory.team_id)
         .all()
     )
+
+
+def get_latest_elo_history_season(session: Session, max_season: int) -> int | None:
+    """Newest elo_history season NOT AFTER `max_season`, or None if there is none.
+
+    Lets /api/elo-history default to the newest POPULATED season, so the
+    /rankings chart shows the last completed trajectory through the offseason
+    instead of an empty grid every January.
+
+    elo_history has no season column -- it keys off a YYYY-MM-DD date string --
+    so the season is the newest date's year prefix, and the bound is a string
+    comparison (dates are zero-padded, so lexical order IS chronological order).
+    MAX over one column beats a DISTINCT scan when the caller only wants one.
+
+    `max_season` is a REQUIRED argument, and the bound belongs here rather than
+    on the result: clamping a too-new answer down to the caller's ceiling picks
+    a season that may hold nothing, which in the offseason is the blank page
+    this lookup exists to prevent. Filtering first returns the newest season
+    that actually has rows AND is not in the future. The caller passes
+    clock_season(); it is not defaulted, because a lookup that silently spans
+    all of time is exactly the bug (Codex adversarial review round 2).
+
+    Deliberately NOT a completeness threshold -- see the note in
+    get_latest_calibration_season."""
+    newest = (
+        session.query(func.max(EloHistory.date))
+        .filter(EloHistory.date < f"{max_season + 1}-")
+        .scalar()
+    )
+    return int(newest[:4]) if newest else None
 
 
 @dataclass

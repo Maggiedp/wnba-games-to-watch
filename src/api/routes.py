@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from src.api import blurbs
-from src.data.espn_api import today_et
+from src.data.espn_api import clock_season, today_et
 from src.db.queries import (
     get_game_fields,
     get_head_to_head,
@@ -1511,7 +1511,7 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
     athlete has no shots this season (→ 404). `get_baseline(season)` is injected
     (the app-layer _get_shot_baseline cache) so this module doesn't import app.py
     and the full-season baseline only builds for a real player."""
-    season = int(today_et()[:4])
+    season = clock_season()
     rows = get_shots_for_player(session, season, athlete_id)
     if not rows:
         return None
