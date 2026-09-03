@@ -742,6 +742,66 @@ async function assertBreakNoticeExplainsTheMove(page, label) {
   );
 }
 
+// Two invariants that only exist once the page has re-anchored, both found by
+// adversarial review. Neither is a layout property, so this runs at ONE width
+// rather than the full sweep — the geometry is already covered by the
+// league-on-break state above.
+//
+// 1. A SCOPE filter (team/network) must not release the window anchor. Scope
+//    filters do not move the window, and releasing on them leaves the date
+//    inputs still holding the moved range while the notice and hero vanish —
+//    an unexplained custom window, the same "full table, no hero" state the
+//    anchor exists to prevent.
+// 2. The empty state explains from the range being shown, not from today. A
+//    reader who picks a window after the last game must not be told "the next
+//    games are <date>" for a date BEFORE the range they asked about.
+async function assertFiltersRespectTheAnchoredWindow(page, label) {
+  const team = await page.evaluate(() => {
+    const sel = document.getElementById('team-filter');
+    // Any seeded team: prepare() moves the whole slate, so all of them play
+    // inside the anchored window.
+    const opt = [...sel.options].find((o) => o.value && o.value !== 'all');
+    sel.value = opt.value;
+    sel.dispatchEvent(new Event('change'));
+    return opt.value;
+  });
+  const scoped = await page.evaluate(() => ({
+    notice: document.getElementById('slate-notice').innerText.trim(),
+    hasHero: !!document.querySelector('#featured-container .featured'),
+    rows: document.querySelectorAll('.games-table tbody tr').length,
+  }));
+  assert.ok(
+    scoped.rows > 0 && scoped.hasHero && scoped.notice.length > 0,
+    `${label}: filtering to "${team}" dropped the notice or hero while the `
+      + 'window stayed moved, leaving an unexplained custom range '
+      + `(rows=${scoped.rows}, hero=${scoped.hasHero}, notice="${scoped.notice}")`,
+  );
+
+  // Now a window that starts after every game: nothing to show, and nothing
+  // earlier to advertise.
+  const empty = await page.evaluate(() => {
+    const sel = document.getElementById('team-filter');
+    sel.value = 'all';
+    sel.dispatchEvent(new Event('change'));
+    const iso = (n) => {
+      const d = new Date();
+      d.setDate(d.getDate() + n);
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+        + '-' + String(d.getDate()).padStart(2, '0');
+    };
+    const from = document.getElementById('from-date');
+    const to = document.getElementById('to-date');
+    from.value = iso(40); from.dispatchEvent(new Event('change'));
+    to.value = iso(50); to.dispatchEvent(new Event('change'));
+    return (document.querySelector('.empty-state') || {}).innerText || '';
+  });
+  assert.doesNotMatch(
+    empty, /next games are/i,
+    `${label}: an empty future range was answered with a game date that lies `
+      + `BEFORE it, pointing the reader out of their own window (got "${empty}")`,
+  );
+}
+
 const HOMEPAGE_STATES = [
   { name: 'default', extraAssert: assertGamesTablesFit },
   {
@@ -773,6 +833,13 @@ const HOMEPAGE_STATES = [
     // The completed table is the wider of the two (extra score columns), so it
     // is the one that constrains the 960px breakpoint.
     extraAssert: assertGamesTablesFit,
+  },
+  {
+    name: 'league-on-break-filtered',
+    prepare: shiftUpcomingPastTheDefaultWindow,
+    widths: [961],
+    readySelector: '#games-container .games-table, #games-container .empty-state',
+    extraAssert: assertFiltersRespectTheAnchoredWindow,
   },
   {
     name: 'league-on-break',

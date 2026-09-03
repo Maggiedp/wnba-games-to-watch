@@ -348,6 +348,23 @@ test('emptyStateFor explains with the next date when games exist later', () => {
   assert.equal(state.date, '2026-09-17');
 });
 
+test('emptyStateFor explains from the floor being shown, not from today', () => {
+  // A reader who picks an October window after the season ends must not be told
+  // "the next games are Sep 17" — a date BEFORE the range they asked about.
+  // The floor is the caller's lowerBound (fromDate || today), so searching from
+  // inside their window correctly finds nothing and falls back to the generic
+  // "expand the window" message.
+  const games = [g('2026-09-17'), g('2026-09-24')];
+  const inRange = emptyStateFor(games, games, '2026-09-10');
+  assert.equal(inRange.date, '2026-09-17', 'a floor before the slate still names it');
+  const afterSeason = emptyStateFor(games, games, '2026-10-01');
+  assert.equal(afterSeason.mode, 'explain');
+  assert.equal(
+    afterSeason.date, null,
+    'a floor past every game must not point backwards out of the range',
+  );
+});
+
 test('emptyStateFor does not call a filtered-out team the offseason', () => {
   // A team filter that matches no remaining games is a narrow filter, not an
   // empty league: the archive branch would tell the reader the season is over.

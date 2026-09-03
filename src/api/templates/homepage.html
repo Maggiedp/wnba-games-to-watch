@@ -1496,12 +1496,15 @@
                     return true;
                 });
 
-                renderSlateNotice();
+                renderSlateNotice(games.length > 0);
 
                 if (games.length === 0) {
+                    // lowerBound, not today: searching from today can advertise
+                    // "the next games are Sep 17" to a reader who asked about
+                    // October, pointing them BACKWARDS out of their own range.
                     const scoped = allGames.filter(
                         g => inScope(g) && !isFinalStatus(g.game_status));
-                    renderEmpty(emptyStateFor(allGames, scoped, today));
+                    renderEmpty(emptyStateFor(allGames, scoped, lowerBound));
                     if (isCompletedExpanded()) renderCompleted();
                     renderedEspnIds = new Set();
                     clearLiveWpPoll();
@@ -1716,11 +1719,13 @@
                 `;
             }
 
-            // The "we moved your window" line. Renders only while slateAnchor is
-            // set, so it can never outlive the window it describes.
-            function renderSlateNotice() {
+            // The "we moved your window" line. Renders only while the page owns
+            // the window AND has rows to show: a scope filter that empties the
+            // table leaves the anchor set (the window is still ours), but
+            // "Showing the next slate" would then be describing an empty table.
+            function renderSlateNotice(hasRows) {
                 const el = document.getElementById('slate-notice');
-                if (!slateAnchor) { el.innerHTML = ''; return; }
+                if (!slateAnchor || !hasRows) { el.innerHTML = ''; return; }
                 el.innerHTML = `
                     <span><strong>No games this week.</strong>
                     Showing the next slate, starting
@@ -2151,12 +2156,18 @@
             document.addEventListener('DOMContentLoaded', () => {
                 setPreset('7');  // Default view: the next 7 days, matching the tagline.
                 loadGames();
-                // Any deliberate filter change hands the window back to the
-                // reader; the notice describes a default we no longer own.
+                // Only the WINDOW controls hand the window back to the reader.
+                // Scope filters (team, network) deliberately do NOT: releasing
+                // on them leaves the date inputs still holding the moved window
+                // while the notice and hero vanish, which is an unexplained
+                // custom range — measured, and it is the same "full table, no
+                // hero" state the anchor exists to prevent. The notice instead
+                // hides itself whenever there are no rows (see
+                // renderSlateNotice), which is what a narrowing filter needs.
                 const releaseSlateAnchor = () => { slateAnchor = null; };
                 document.getElementById('from-date').addEventListener('change', () => { releaseSlateAnchor(); clearActivePreset(); applyFilters(); });
                 document.getElementById('to-date').addEventListener('change', () => { releaseSlateAnchor(); clearActivePreset(); applyFilters(); });
-                document.getElementById('team-filter').addEventListener('change', () => { releaseSlateAnchor(); applyFilters(); });
+                document.getElementById('team-filter').addEventListener('change', applyFilters);
                 document.querySelectorAll('[data-sort]').forEach(b => {
                     b.addEventListener('click', () => setSortBy(b.dataset.sort));
                 });
