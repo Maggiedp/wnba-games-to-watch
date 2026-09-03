@@ -175,3 +175,56 @@ function sortCompleted(games, mode) {
         : (a, b) => byExciteDesc(a, b) || byDateDesc(a, b);
     return games.slice().sort(cmp);
 }
+
+// --- Break / offseason window handling ---------------------------------
+// The league goes dark for multi-week stretches mid-season (international
+// tournaments) and for the ~7-month offseason. In both cases the default
+// "next 7 days" window is empty while /api/games/upcoming still holds a full
+// future slate, so the page must tell "the league isn't playing" apart from
+// "your filter is too narrow" — and must never assert a CAUSE it can't derive
+// from the payload (the resume date is derivable; "World Cup break" is not).
+
+// ISO date `days` after `iso`. Built from calendar components, never from
+// epoch arithmetic: adding 7*86400e3 ms across a DST boundary lands on the
+// previous calendar day, which would silently misdate a slate twice a year.
+function addDaysToISO(iso, days) {
+    const [y, m, d] = iso.split('-').map(Number);
+    const shifted = new Date(y, m - 1, d + days);
+    return shifted.getFullYear() + '-' +
+        String(shifted.getMonth() + 1).padStart(2, '0') + '-' +
+        String(shifted.getDate()).padStart(2, '0');
+}
+
+// Earliest local date among `games` on or after `fromISO`, or null.
+// Local, not the raw ET `date` field, so the advertised date matches the day
+// the reader's own calendar will show the game on (see localDateISO).
+function nextPlayableDate(games, fromISO) {
+    if (!games) return null;
+    let best = null;
+    for (const game of games) {
+        const d = localDateISO(game);
+        if (d < fromISO) continue;
+        if (best === null || d < best) best = d;
+    }
+    return best;
+}
+
+// The date to re-anchor the DEFAULT window to when the next 7 days hold no
+// games, or null when the default window is fine (or nothing is scheduled).
+// The window is [today, today+7] INCLUSIVE, matching setPreset('7') — a game
+// exactly on the 7th day out is already visible and must not trigger a move.
+function nextSlateAnchor(games, todayISO) {
+    const next = nextPlayableDate(games, todayISO);
+    if (next === null) return null;
+    return next <= addDaysToISO(todayISO, 7) ? null : next;
+}
+
+// Which empty state the page owes the reader. `allGames` is the unfiltered
+// payload, `scopedGames` the team-filtered, non-final subset.
+// The distinction matters: a team filter matching no remaining games is a
+// narrow filter, and answering it with "nothing is scheduled" would tell the
+// reader the season is over in the middle of September.
+function emptyStateFor(allGames, scopedGames, todayISO) {
+    if (!allGames || allGames.length === 0) return { mode: 'archive', date: null };
+    return { mode: 'explain', date: nextPlayableDate(scopedGames, todayISO) };
+}

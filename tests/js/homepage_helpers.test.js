@@ -7,6 +7,7 @@ const {
   excitementLabelFor, winProbText, elapsedSeconds,
   excitementScore, computeExcitement, completedEntryFromLiveWp,
   curveFromPlays, sortCompleted, liveExcitementLabel,
+  addDaysToISO, nextPlayableDate, nextSlateAnchor, emptyStateFor,
 } = loadHelpers('shared.js', 'homepage_helpers.js');
 
 // A Q4 dogfight (alternating ~0.05↔0.95 WP swings) that banks Close-level
@@ -245,4 +246,112 @@ test('sortCompleted date mode: missing time_utc sorts last within its day', () =
   const sorted = sortCompleted([tbd, early, late], 'date');
   // Known times win: desc within the day, unknown-time rows sink to its end.
   assert.deepEqual(sorted.map(g => g.espn_id), ['e3', 'e1', 'e2']);
+});
+
+// --- Break / offseason empty state -------------------------------------
+// The league takes multi-week breaks mid-season (international tournaments)
+// and a ~7-month offseason, during which the default "next 7 days" window is
+// empty while the payload still holds a full future slate. These helpers let
+// the page tell "the league isn't playing" apart from "your filter is narrow".
+
+// A game on `date` with no time_utc -> localDateISO falls back to the ET date.
+function g(date, extra) {
+  return Object.assign({ date, espn_id: 'x' + date }, extra || {});
+}
+
+test('addDaysToISO adds days to an ISO date', () => {
+  assert.equal(addDaysToISO('2026-09-02', 7), '2026-09-09');
+  assert.equal(addDaysToISO('2026-09-17', 0), '2026-09-17');
+});
+
+test('addDaysToISO rolls over months and years', () => {
+  assert.equal(addDaysToISO('2026-09-28', 7), '2026-10-05');
+  assert.equal(addDaysToISO('2026-12-30', 7), '2027-01-06');
+  // 2028 is a leap year: Feb 29 exists.
+  assert.equal(addDaysToISO('2028-02-27', 2), '2028-02-29');
+});
+
+test('addDaysToISO keeps the calendar day across a DST boundary', () => {
+  // US DST starts 2026-03-08. A naive +7*86400e3 on a local Date would land
+  // on 2026-03-13T23:00 and format as the 13th.
+  assert.equal(addDaysToISO('2026-03-07', 7), '2026-03-14');
+  // ...and ends 2026-11-01.
+  assert.equal(addDaysToISO('2026-10-28', 7), '2026-11-04');
+});
+
+test('nextPlayableDate returns the earliest date on or after the floor', () => {
+  const games = [g('2026-09-24'), g('2026-09-17'), g('2026-09-18')];
+  assert.equal(nextPlayableDate(games, '2026-09-02'), '2026-09-17');
+});
+
+test('nextPlayableDate ignores dates before the floor, and includes the floor itself', () => {
+  const games = [g('2026-08-30'), g('2026-09-17')];
+  assert.equal(nextPlayableDate(games, '2026-09-17'), '2026-09-17');
+  assert.equal(nextPlayableDate(games, '2026-09-18'), null);
+});
+
+test('nextPlayableDate returns null for no games', () => {
+  assert.equal(nextPlayableDate([], '2026-09-02'), null);
+  assert.equal(nextPlayableDate(null, '2026-09-02'), null);
+});
+
+test('nextPlayableDate uses the local date, not the raw ET date field', () => {
+  // 2026-09-18T00:30Z tips 2026-09-17 8:30pm ET. A west-coast viewer sees the
+  // 17th too; the row must not be advertised as the 18th.
+  const games = [{ date: '2026-09-18', time_utc: '2026-09-18T00:30:00Z' }];
+  const expected = localDateISOFor(games[0]);
+  assert.equal(nextPlayableDate(games, '2026-09-02'), expected);
+});
+
+// Mirrors the helper's own localDateISO so the assertion above is tz-independent.
+function localDateISOFor(game) {
+  const d = new Date(game.time_utc);
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+
+test('nextSlateAnchor returns null when the default week already has games', () => {
+  const games = [g('2026-09-04'), g('2026-09-17')];
+  assert.equal(nextSlateAnchor(games, '2026-09-02'), null);
+});
+
+test('nextSlateAnchor treats the 7th day out as inside the window', () => {
+  // Boundary: the default window is [today, today+7] inclusive, matching
+  // setPreset('7'). A game exactly on the edge must not trigger an advance.
+  assert.equal(nextSlateAnchor([g('2026-09-09')], '2026-09-02'), null);
+  assert.equal(nextSlateAnchor([g('2026-09-10')], '2026-09-02'), '2026-09-10');
+});
+
+test('nextSlateAnchor returns the next slate date across a real break', () => {
+  // The 2026 mid-September break: last game 08-30, next 09-17.
+  const games = [g('2026-09-17'), g('2026-09-18'), g('2026-09-24')];
+  assert.equal(nextSlateAnchor(games, '2026-09-02'), '2026-09-17');
+});
+
+test('nextSlateAnchor returns null when nothing is scheduled at all', () => {
+  assert.equal(nextSlateAnchor([], '2026-09-02'), null);
+});
+
+// Field-wise, not deepEqual: the result object is built in the vm realm, so
+// its prototype fails deepStrictEqual's realm check (see curveFromPlays above).
+test('emptyStateFor reports the archive branch only when nothing is scheduled', () => {
+  const state = emptyStateFor([], [], '2026-09-02');
+  assert.equal(state.mode, 'archive');
+  assert.equal(state.date, null);
+});
+
+test('emptyStateFor explains with the next date when games exist later', () => {
+  const games = [g('2026-09-17')];
+  const state = emptyStateFor(games, games, '2026-09-02');
+  assert.equal(state.mode, 'explain');
+  assert.equal(state.date, '2026-09-17');
+});
+
+test('emptyStateFor does not call a filtered-out team the offseason', () => {
+  // A team filter that matches no remaining games is a narrow filter, not an
+  // empty league: the archive branch would tell the reader the season is over.
+  const state = emptyStateFor([g('2026-09-17')], [], '2026-09-02');
+  assert.equal(state.mode, 'explain');
+  assert.equal(state.date, null);
 });
