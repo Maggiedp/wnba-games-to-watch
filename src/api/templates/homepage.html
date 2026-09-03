@@ -594,6 +594,34 @@
             }
             .skeleton-row:last-child { border-bottom: none; }
 
+            /* ---------- Break notice ---------- */
+            /* Shown when the default window held no games and the page
+               re-anchored itself to the next slate. Names the move, so the
+               date inputs below never disagree with the table above. */
+            .slate-notice {
+                display: flex;
+                align-items: baseline;
+                gap: 8px;
+                flex-wrap: wrap;
+                padding: 12px 16px;
+                margin-bottom: 20px;
+                background: var(--surface);
+                border: 1px solid var(--line);
+                border-left: 3px solid var(--orange);
+                color: var(--text-muted);
+                font-size: 0.92rem;
+            }
+            .slate-notice:empty { display: none; }
+            .slate-notice strong {
+                color: var(--navy);
+                font-weight: 600;
+            }
+            .empty-state-links {
+                margin-top: 14px;
+                font-size: 0.92rem;
+            }
+            .empty-state-links a { color: var(--orange); }
+
             /* ---------- Empty state ---------- */
             .empty-state {
                 text-align: center;
@@ -1050,6 +1078,7 @@
         </div>
 
         <main class="content">
+            <div id="slate-notice" class="slate-notice"></div>
             <div id="featured-container"></div>
             <div id="games-container"></div>
             <section id="completed-section" aria-labelledby="completed-heading">
@@ -1200,12 +1229,33 @@
                 document.getElementById('games-container').innerHTML = `<div class="skeleton-table">${rows}</div>`;
             }
 
+            // Set when the DEFAULT window held no games and the page re-anchored
+            // itself to the next slate; null the rest of the time. Drives the
+            // notice, and moves the "Top pick" window with the table so the hero
+            // isn't suppressed for being outside a window we just vacated.
+            // Cleared the moment the reader touches a filter: from then on the
+            // window is theirs and the notice would be describing our choice.
+            let slateAnchor = null;
+
+            // The league goes dark for multi-week stretches mid-season and for
+            // the offseason. "Next 7 days" is OUR default, not the reader's, so
+            // an empty one is ours to move — see nextSlateAnchor.
+            function anchorToNextSlate() {
+                const upcoming = allGames.filter(g => !isFinalStatus(g.game_status));
+                slateAnchor = nextSlateAnchor(upcoming, addDaysISO(0));
+                if (!slateAnchor) return;
+                document.getElementById('from-date').value = slateAnchor;
+                document.getElementById('to-date').value = addDaysToISO(slateAnchor, 7);
+                clearActivePreset();
+            }
+
             async function loadGames() {
                 renderLoadingSkeleton();
                 try {
                     const response = await fetch('/api/games/upcoming');
                     allGames = await response.json();
                     populateFilters();
+                    anchorToNextSlate();
                     applyFilters();
                     loadCompleted();
                     // Decoupled from the main payload: a slow ESPN scoreboard
@@ -1393,19 +1443,26 @@
                 const inScope = (g) => matchesScope(g, team);
                 updateFilterBadge();
 
-                // Top pick is computed against the next 7 days regardless of the
-                // user's date range, but suppressed below when it falls outside
-                // the active filter window (otherwise a "Top pick · Next 7 days"
-                // hero card can promote a game the table doesn't list).
+                // Top pick is computed against a week from the anchor regardless
+                // of the user's date range, but suppressed below when it falls
+                // outside the active filter window (otherwise a "Top pick ·
+                // Next 7 days" hero card can promote a game the table doesn't
+                // list). The anchor is today normally, and the re-anchored slate
+                // date during a break — computing it from today either way would
+                // leave this window empty by construction after a re-anchor, and
+                // the suppression check would then blank the hero on a page
+                // whose table is full. The eyebrow reads "Next slate" while
+                // anchored, so the label never claims a window we aren't showing.
                 const today = addDaysISO(0);
-                const weekOut = addDaysISO(7);
+                const anchor = slateAnchor || today;
+                const weekOut = addDaysToISO(anchor, 7);
                 const featuredCandidates = allGames.filter(g => {
                     if (!inScope(g)) return false;
                     // A game that finished mid-session must not be promoted to the
                     // "Top pick" hero (it has left the forward-looking list).
                     if (isFinalStatus(g.game_status)) return false;
                     const d = localDateISO(g);
-                    return d >= today && d <= weekOut;
+                    return d >= anchor && d <= weekOut;
                 });
                 // Backend widens by one ET day for late-ET crossover viewers
                 // (see /api/games/upcoming). Floor the list at today-local so
@@ -1439,8 +1496,15 @@
                     return true;
                 });
 
+                renderSlateNotice(games.length > 0);
+
                 if (games.length === 0) {
-                    renderEmpty();
+                    // lowerBound, not today: searching from today can advertise
+                    // "the next games are Sep 17" to a reader who asked about
+                    // October, pointing them BACKWARDS out of their own range.
+                    const scoped = allGames.filter(
+                        g => inScope(g) && !isFinalStatus(g.game_status));
+                    renderEmpty(emptyStateFor(allGames, scoped, lowerBound));
                     if (isCompletedExpanded()) renderCompleted();
                     renderedEspnIds = new Set();
                     clearLiveWpPoll();
@@ -1592,7 +1656,7 @@
                     : '';
 
                 container.innerHTML = `
-                    <div class="featured-eyebrow">Top pick &middot; Next 7 days</div>
+                    <div class="featured-eyebrow">Top pick &middot; ${slateAnchor ? 'Next slate' : 'Next 7 days'}</div>
                     <article class="featured"${game.espn_id ? ` data-espn-id="${escapeHtml(game.espn_id)}" role="link" tabindex="0"` : ''} aria-label="Top pick game">
                         <div>
                             <div class="featured-meta">${livePillHtml(game)}${formatLocalDate(game, { weekday: 'long', month: 'long', day: 'numeric' })} &middot; ${escapeHtml(formatLocalTime(game.time_utc, game.time))}</div>
@@ -1622,12 +1686,50 @@
                 `;
             }
 
-            function renderEmpty() {
+            // `state` comes from emptyStateFor: 'archive' when nothing at all is
+            // scheduled, 'explain' otherwise. Deliberately never names a CAUSE —
+            // the resume date is derivable from the payload, "World Cup break"
+            // is not, and a wrong reason is worse than no reason.
+            function renderEmpty(state) {
+                const mode = state && state.mode;
+                const nextDate = state && state.date;
+                let title, msg, links = '';
+                if (mode === 'archive') {
+                    // An empty payload can't say WHY it's empty, so this stops
+                    // short of "the season is over" and points at what does exist.
+                    title = 'No games scheduled';
+                    msg = 'Nothing on the upcoming slate right now.';
+                    links = `
+                        <div class="empty-state-links">
+                            <a href="/replay">Browse the season archive</a> ·
+                            <a href="/rankings">Power rankings</a>
+                        </div>`;
+                } else {
+                    title = 'No games in this range';
+                    msg = nextDate
+                        ? `The next games are ${escapeHtml(formatDate(nextDate))}.`
+                        : 'Try clearing a filter or expanding the date window.';
+                }
                 document.getElementById('games-container').innerHTML = `
                     <div class="empty-state" role="status">
-                        <div class="empty-state-title">No games in this range</div>
-                        <div class="empty-state-msg">Try clearing a filter or expanding the date window.</div>
+                        <div class="empty-state-title">${title}</div>
+                        <div class="empty-state-msg">${msg}</div>
+                        ${links}
                     </div>
+                `;
+            }
+
+            // The "we moved your window" line. Renders only while the page owns
+            // the window AND has rows to show: a scope filter that empties the
+            // table leaves the anchor set (the window is still ours), but
+            // "Showing the next slate" would then be describing an empty table.
+            function renderSlateNotice(hasRows) {
+                const el = document.getElementById('slate-notice');
+                if (!slateAnchor || !hasRows) { el.innerHTML = ''; return; }
+                el.innerHTML = `
+                    <span><strong>No games this week.</strong>
+                    Showing the next slate, starting
+                    ${escapeHtml(formatDate(slateAnchor))}.</span>
                 `;
             }
 
@@ -2054,8 +2156,17 @@
             document.addEventListener('DOMContentLoaded', () => {
                 setPreset('7');  // Default view: the next 7 days, matching the tagline.
                 loadGames();
-                document.getElementById('from-date').addEventListener('change', () => { clearActivePreset(); applyFilters(); });
-                document.getElementById('to-date').addEventListener('change', () => { clearActivePreset(); applyFilters(); });
+                // Only the WINDOW controls hand the window back to the reader.
+                // Scope filters (team, network) deliberately do NOT: releasing
+                // on them leaves the date inputs still holding the moved window
+                // while the notice and hero vanish, which is an unexplained
+                // custom range — measured, and it is the same "full table, no
+                // hero" state the anchor exists to prevent. The notice instead
+                // hides itself whenever there are no rows (see
+                // renderSlateNotice), which is what a narrowing filter needs.
+                const releaseSlateAnchor = () => { slateAnchor = null; };
+                document.getElementById('from-date').addEventListener('change', () => { releaseSlateAnchor(); clearActivePreset(); applyFilters(); });
+                document.getElementById('to-date').addEventListener('change', () => { releaseSlateAnchor(); clearActivePreset(); applyFilters(); });
                 document.getElementById('team-filter').addEventListener('change', applyFilters);
                 document.querySelectorAll('[data-sort]').forEach(b => {
                     b.addEventListener('click', () => setSortBy(b.dataset.sort));
@@ -2066,7 +2177,10 @@
                 document.getElementById('filter-done').addEventListener('click', () => setFilterPanel(false));
 
                 document.querySelectorAll('.preset-pill').forEach(btn => {
-                    btn.addEventListener('click', () => setPreset(btn.dataset.preset));
+                    btn.addEventListener('click', () => {
+                        releaseSlateAnchor();
+                        setPreset(btn.dataset.preset);
+                    });
                 });
 
                 document.getElementById('how-it-works-btn').addEventListener('click', openModal);

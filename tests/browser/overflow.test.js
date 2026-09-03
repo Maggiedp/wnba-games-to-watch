@@ -301,10 +301,14 @@ async function assertNoOverflow(page, label) {
 
 // One walked subtest: fresh page → load → optional state build → parse-error
 // and overflow asserts → optional scoped extra assert → close.
-async function checkPage(label, width, { path: urlPath, readySelector, apply, extraAssert }) {
+async function checkPage(label, width, { path: urlPath, readySelector, apply, prepare, extraAssert }) {
   const page = await browser.newPage();
   try {
     const syntaxErrors = collectSyntaxErrors(page);
+    // `prepare` runs BEFORE navigation (`apply` runs after): a state that has
+    // to change what the page loads, rather than what it does once loaded,
+    // has nowhere else to hook in.
+    if (prepare) await prepare(page);
     await loadAt(page, urlPath, width, readySelector);
     if (apply) await apply(page);
     assert.deepStrictEqual(syntaxErrors.map(String), []);
@@ -651,6 +655,153 @@ async function assertGamesTablesFit(page, label, width) {
 // Homepage states. Each apply() ASSERTS the toggle took effect (waits on the
 // resulting DOM state) so a renamed id/class fails loudly instead of letting
 // the walk pass vacuously against an untoggled page.
+// The league goes dark for multi-week stretches mid-season (international
+// tournaments) and for the ~7-month offseason, leaving the default "next 7
+// days" window empty while /api/games/upcoming still holds a full future slate.
+// Moves the seeded slate out past that window so the walk renders the state.
+//
+// Patches the payload rather than the seed: this is a client-side behaviour
+// keyed off the payload's dates, and re-seeding would perturb every other walk
+// state and the Python seed tests for one state's benefit.
+async function shiftUpcomingPastTheDefaultWindow(page) {
+  await page.evaluateOnNewDocument(() => {
+    const realFetch = window.fetch;
+    window.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      const response = await realFetch(input, init);
+      if (!url.includes('/api/games/upcoming')) return response;
+      const games = await response.json();
+      const d = new Date();
+      d.setDate(d.getDate() + 21);
+      const iso = d.getFullYear() + '-'
+        + String(d.getMonth() + 1).padStart(2, '0') + '-'
+        + String(d.getDate()).padStart(2, '0');
+      // time_utc must be nulled too: localDateISO prefers it, so leaving the
+      // seeded timestamps would keep every row on its original day and the
+      // state would silently not be the break state at all.
+      const moved = games.map((g) => ({ ...g, date: iso, time_utc: null }));
+      return new Response(JSON.stringify(moved), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    };
+  });
+}
+
+// The break state's contract is that the page moved its OWN default window and
+// said so — never that it quietly showed games from outside the window its
+// controls advertise. Each assert maps to a way that breaks:
+//   - a silent move (notice missing) is the original "No games in this range"
+//     bug wearing a table;
+//   - an unmoved from-date means the controls contradict the rows below them;
+//   - a missing hero is the regression the anchor exists to prevent — the
+//     featured window is computed from the anchor, and computing it from today
+//     leaves it empty by construction here, blanking the hero on a full page;
+//   - a pressed preset pill would claim a window ("Next 7 days") that is not
+//     the one being shown.
+async function assertBreakNoticeExplainsTheMove(page, label) {
+  const state = await page.evaluate(() => {
+    const notice = document.getElementById('slate-notice');
+    const pressed = [...document.querySelectorAll('.preset-pill')]
+      .filter((p) => p.getAttribute('aria-pressed') === 'true');
+    const now = new Date();
+    return {
+      notice: notice.innerText.trim(),
+      noticeVisible: notice.offsetHeight > 0,
+      from: document.getElementById('from-date').value,
+      today: now.getFullYear() + '-'
+        + String(now.getMonth() + 1).padStart(2, '0') + '-'
+        + String(now.getDate()).padStart(2, '0'),
+      hasHero: !!document.querySelector('#featured-container .featured'),
+      rows: document.querySelectorAll('.games-table tbody tr').length,
+      pressedPills: pressed.map((p) => p.textContent.trim()),
+    };
+  });
+  assert.ok(
+    state.noticeVisible && state.notice.length > 0,
+    `${label}: the page re-anchored to the next slate but rendered no notice, `
+      + 'so the reader is shown games from outside the window they can see',
+  );
+  assert.notEqual(
+    state.from, state.today,
+    `${label}: from-date still reads today, so the controls disagree with the `
+      + 'rows below them',
+  );
+  assert.ok(
+    state.rows > 0,
+    `${label}: re-anchored window rendered no rows (got ${state.rows})`,
+  );
+  assert.ok(
+    state.hasHero,
+    `${label}: no featured card — the Top pick window is still being computed `
+      + 'from today rather than the anchor, so it is empty by construction',
+  );
+  assert.deepStrictEqual(
+    state.pressedPills, [],
+    `${label}: a preset pill is pressed while a custom re-anchored window is `
+      + 'showing, so the pill names a window the table is not',
+  );
+}
+
+// Two invariants that only exist once the page has re-anchored, both found by
+// adversarial review. Neither is a layout property, so this runs at ONE width
+// rather than the full sweep — the geometry is already covered by the
+// league-on-break state above.
+//
+// 1. A SCOPE filter (team/network) must not release the window anchor. Scope
+//    filters do not move the window, and releasing on them leaves the date
+//    inputs still holding the moved range while the notice and hero vanish —
+//    an unexplained custom window, the same "full table, no hero" state the
+//    anchor exists to prevent.
+// 2. The empty state explains from the range being shown, not from today. A
+//    reader who picks a window after the last game must not be told "the next
+//    games are <date>" for a date BEFORE the range they asked about.
+async function assertFiltersRespectTheAnchoredWindow(page, label) {
+  const team = await page.evaluate(() => {
+    const sel = document.getElementById('team-filter');
+    // Any seeded team: prepare() moves the whole slate, so all of them play
+    // inside the anchored window.
+    const opt = [...sel.options].find((o) => o.value && o.value !== 'all');
+    sel.value = opt.value;
+    sel.dispatchEvent(new Event('change'));
+    return opt.value;
+  });
+  const scoped = await page.evaluate(() => ({
+    notice: document.getElementById('slate-notice').innerText.trim(),
+    hasHero: !!document.querySelector('#featured-container .featured'),
+    rows: document.querySelectorAll('.games-table tbody tr').length,
+  }));
+  assert.ok(
+    scoped.rows > 0 && scoped.hasHero && scoped.notice.length > 0,
+    `${label}: filtering to "${team}" dropped the notice or hero while the `
+      + 'window stayed moved, leaving an unexplained custom range '
+      + `(rows=${scoped.rows}, hero=${scoped.hasHero}, notice="${scoped.notice}")`,
+  );
+
+  // Now a window that starts after every game: nothing to show, and nothing
+  // earlier to advertise.
+  const empty = await page.evaluate(() => {
+    const sel = document.getElementById('team-filter');
+    sel.value = 'all';
+    sel.dispatchEvent(new Event('change'));
+    const iso = (n) => {
+      const d = new Date();
+      d.setDate(d.getDate() + n);
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+        + '-' + String(d.getDate()).padStart(2, '0');
+    };
+    const from = document.getElementById('from-date');
+    const to = document.getElementById('to-date');
+    from.value = iso(40); from.dispatchEvent(new Event('change'));
+    to.value = iso(50); to.dispatchEvent(new Event('change'));
+    return (document.querySelector('.empty-state') || {}).innerText || '';
+  });
+  assert.doesNotMatch(
+    empty, /next games are/i,
+    `${label}: an empty future range was answered with a game date that lies `
+      + `BEFORE it, pointing the reader out of their own window (got "${empty}")`,
+  );
+}
+
 const HOMEPAGE_STATES = [
   { name: 'default', extraAssert: assertGamesTablesFit },
   {
@@ -683,6 +834,24 @@ const HOMEPAGE_STATES = [
     // is the one that constrains the 960px breakpoint.
     extraAssert: assertGamesTablesFit,
   },
+  {
+    name: 'league-on-break-filtered',
+    prepare: shiftUpcomingPastTheDefaultWindow,
+    widths: [961],
+    readySelector: '#games-container .games-table, #games-container .empty-state',
+    extraAssert: assertFiltersRespectTheAnchoredWindow,
+  },
+  {
+    name: 'league-on-break',
+    prepare: shiftUpcomingPastTheDefaultWindow,
+    // Waits on EITHER terminal render, not the table the other states use.
+    // If the re-anchor regresses, this state renders the empty state instead —
+    // and waiting on the table alone would fail as a 10s selector timeout that
+    // names neither the state nor the cause. Matching both lets the asserts
+    // below produce the diagnosis (measured: 10.6s opaque -> 0.6s explained).
+    readySelector: '#games-container .games-table, #games-container .empty-state',
+    extraAssert: assertBreakNoticeExplainsTheMove,
+  },
 ];
 
 test('inner pages: no horizontal overflow, no inline-script syntax errors', async (t) => {
@@ -700,8 +869,9 @@ test('homepage states: no horizontal overflow, no inline-script syntax errors', 
       const label = `/ [${state.name}] @ ${width}px`;
       await t.test(label, () => checkPage(label, width, {
         path: '/',
-        readySelector: '#games-container table',
+        readySelector: state.readySelector || '#games-container table',
         apply: state.apply,
+        prepare: state.prepare,
         extraAssert: state.extraAssert,
       }));
     }
