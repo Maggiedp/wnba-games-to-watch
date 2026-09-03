@@ -107,8 +107,16 @@ async function openPlayoffSeedsView(page) {
 // widths = optional per-page override, defaulting to WIDTHS.
 const PAGES = [
   { path: '/replay', readySelector: '#replay-grid .shape-card' },
-  { path: '/rankings', readySelector: '#elo-chart svg' },
-  { path: '/transparency', readySelector: '#calibration-chart svg' },
+  {
+    path: '/rankings',
+    readySelector: '#elo-chart svg',
+    extraAssert: assertSeasonIsNamed('#elo-season'),
+  },
+  {
+    path: '/transparency',
+    readySelector: '#calibration-chart svg',
+    extraAssert: assertSeasonIsNamed('#cal-season-head'),
+  },
   { path: '/style', readySelector: '#style-grid svg', widths: WIDTHS_WITH_561 },
   {
     path: '/shot-making',
@@ -305,6 +313,30 @@ async function checkPage(label, width, { path: urlPath, readySelector, apply, ex
   } finally {
     await page.close();
   }
+}
+
+// Both endpoints default to the newest POPULATED season, so through the
+// offseason these pages show the season that just FINISHED. That is only honest
+// because the page names the year it got — the fallback is otherwise
+// indistinguishable from current data, which is exactly the mislabel
+// /api/shot-making stays on the clock to avoid.
+//
+// The static markup ships the pre-fetch placeholder ("current" / "This
+// season"); the loader overwrites it from `data.season`. So a typo in that one
+// line fails silently and restores the mislabel, with the page still rendering,
+// still parsing and still not overflowing — invisible to every other assert
+// here. This one asserts the element ends up holding a four-digit year.
+function assertSeasonIsNamed(selector) {
+  return async (page, label) => {
+    const text = await page.$eval(selector, (el) => el.textContent.trim());
+    assert.match(
+      text,
+      /\b\d{4}\b/,
+      `${label}: ${selector} should name the season it is showing, got "${text}" `
+        + '(the loader failed to fill it from data.season, so a fallback season '
+        + 'would render as if it were the current one)',
+    );
+  };
 }
 
 // Regression (PR #112): the date row's ~337px min-content used to truncate the

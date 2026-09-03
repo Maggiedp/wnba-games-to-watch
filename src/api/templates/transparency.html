@@ -41,7 +41,11 @@
     <h2>Win-probability calibration</h2>
     <p class="desc">How our predicted win probabilities line up with how often teams
        actually win — dots on the dashed line are perfectly calibrated.</p>
-    <h3 class="cal-sub">This season</h3>
+    <!-- Filled from the payload's season: /api/calibration defaults to the
+         newest season with graded predictions, so this heading must name the
+         year rather than claim "this season" — through the offseason it is
+         showing the season that just finished. -->
+    <h3 class="cal-sub" id="cal-season-head">This season</h3>
     <div class="cal-layout">
       <div id="calibration-chart" class="chart"><p class="empty">Loading…</p></div>
       <div id="calibration-summary" class="cal-read"></div>
@@ -114,6 +118,8 @@ async function loadCalibration() {
     const res = await fetch('/api/calibration');
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    const head = document.getElementById('cal-season-head');
+    if (head && data.season) head.textContent = `${data.season} season`;
     if (!data.n) {
       mount.innerHTML = '<p class="empty">No completed games yet.</p>';
       summary.innerHTML = '';
@@ -126,7 +132,7 @@ async function loadCalibration() {
       if (layout) layout.style.display = 'block';
       mount.innerHTML = '';
       summary.innerHTML =
-        `<p class="cal-foot" style="margin:0">This season's calibration appears once about ` +
+        `<p class="cal-foot" style="margin:0">The ${data.season} calibration appears once about ` +
         `<strong>${MIN_CAL_GAMES}</strong> games are completed — <strong>${data.n}</strong> ` +
         `so far. The backtest below shows how the model does over a full history.</p>`;
       return;
@@ -136,7 +142,7 @@ async function loadCalibration() {
       `<p>Each dot groups games we gave a similar win chance; its height is how often those ` +
       `teams actually won. Dots on the dashed line are perfectly calibrated, and a dot's size ` +
       `is how many games it covers.</p>` +
-      `<p class="cal-foot">Across ${data.n} completed games this season.</p>`;
+      `<p class="cal-foot">Across ${data.n} completed ${data.season} games.</p>`;
   } catch (e) {
     mount.innerHTML = '<p class="empty">Could not load calibration.</p>';
   }

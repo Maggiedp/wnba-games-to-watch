@@ -16,7 +16,7 @@ from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.orm import Session
 
-from src.data.espn_api import today_et
+from src.data.espn_api import clock_season
 from src.db.queries import get_shot_making, get_shots_for_player, get_teams_by_ids
 from src.db.schema import DailyRanking, Game
 from src.scoring.shot_making import player_headline
@@ -311,7 +311,7 @@ def render_player_card_png(session: Session, athlete_id: str) -> bytes | None:
     (routes.py) — a deliberate 2-caller duplication of that rank/team logic
     per the repo's extract-on-3rd-caller convention.
     """
-    season = int(today_et()[:4])
+    season = clock_season()
 
     # Check the ranked board first: a qualified player (the common path — the
     # leaderboard only links ≥100-FGA players) carries name/team/stats on the

@@ -61,6 +61,26 @@ def yesterday_et() -> str:
     return (d - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
+def clock_season() -> int:
+    """The calendar year in ET -- the season a *wall-clock* surface is in.
+
+    The codebase has two season concepts and only one of them had a name.
+    CURRENT_SEASON (src/constants.py) is the PINNED anchor: bumped by hand each
+    offseason, it says which season the site is *about* and never rolls on its
+    own. This is the other one: it rolls at midnight on January 1, and it is
+    right for surfaces that must refuse to present a finished season as the
+    live one (the /shot-making board and /player/{id}, which frame their data
+    as "this season"). Read src/constants.py before reaching for either.
+
+    Resolving today_et() here rather than at each call site also collapses a
+    documented test footgun: modules that do `from ... import clock_season`
+    still get a patched clock when espn_api.today_et is monkeypatched, because
+    the lookup happens in THIS module's globals at call time. Patching the one
+    name is now enough -- see the "BOTH bound names" gotcha in CLAUDE.md.
+    """
+    return int(today_et()[:4])
+
+
 class ESPNAPIError(Exception):
     pass
 

@@ -14,11 +14,18 @@
 # coherent, so daily_update logs an error once the CALENDAR YEAR passes this
 # one (it checks the clock, not the schedule -- see the detector's docstring).
 #
-# NOT the only season idiom in the repo, and deliberately so: /api/shot-making,
-# /api/calibration, /api/elo-history and /api/player-shots read the clock, and
-# /api/replay reads the newest populated season. Unifying those is a separate
-# queued decision about offseason UX -- do not assume this constant answers
-# "which season" everywhere.
+# NOT the only season idiom in the repo, and deliberately so. There are three,
+# and which one is right depends on what the surface CLAIMS to be showing:
+#   1. this constant -- the season the site is about; pinned, bumped by hand.
+#   2. clock_season() (src/data/espn_api.py) -- the calendar year. For surfaces
+#      framed as current (/api/shot-making, /api/player-shots, /player/{id}),
+#      where showing a finished season would mislabel it, so an empty offseason
+#      board is the CORRECT state.
+#   3. the newest POPULATED season -- for archives and retrospectives
+#      (/api/replay, /api/team-style, /api/elo-history, /api/calibration),
+#      which name the year they are showing and so can honestly serve last
+#      season through the offseason.
+# Do not assume this constant answers "which season" everywhere.
 CURRENT_SEASON = 2026
 
 

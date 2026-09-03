@@ -13,6 +13,7 @@ from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
     _SEASON_END,
+    clock_season,
     fetch_bpi_ratings,
     fetch_games_for_range,
     fetch_live_win_probability,
@@ -239,7 +240,7 @@ def _warn_if_season_anchor_is_stale() -> None:
     so a game past the anchor can never appear in that list. A detector
     reading the fetch results could never fire.
     """
-    current_year = int(today_et()[:4])
+    current_year = clock_season()
     if current_year > CURRENT_SEASON:
         logger.error(
             "It is %d but CURRENT_SEASON is %d — bump it in src/constants.py; "
@@ -566,7 +567,7 @@ def populate_shots_for_recent_completions(
     Bounded + non-fatal (mirrors populate_game_shapes_for_recent_completions): a
     failing game is skipped and re-tried next run. The season is derived from
     today (not hard-coded) so it rolls over cleanly and stays consistent with
-    recompute_shot_making(int(today[:4])).
+    recompute_shot_making(clock_season()).
 
     Known limitations (accepted, won't-fix) — all facets of "a game's shot slice
     is frozen at first successful ingest, because the retry gate is mere row-
@@ -592,11 +593,11 @@ def populate_shots_for_recent_completions(
     against for v1 (Codex adversarial R2–R4): impact is a handful of shots in rare
     ESPN-defect cases; mirrors game_shapes' accepted-partial posture."""
     # Clock-derived, NOT CURRENT_SEASON, and deliberately left that way: this
-    # feeds /api/shot-making, which reads int(today_et()[:4]) too, so writer and
+    # feeds /api/shot-making, which reads clock_season() too, so writer and
     # reader agree. Its CURRENT_SEASON siblings above (excitement, shapes) feed
     # season-anchored readers instead. Unifying the two is queued -- until then
     # this file genuinely holds both answers, and they are not interchangeable.
-    season = int(today_et()[:4])
+    season = clock_season()
     games = get_completed_games_missing_shots(session, season_year=season, limit=limit)
     if not games:
         logger.info("No completed games need shot ingestion")
@@ -881,7 +882,7 @@ def _build_current_bracket_state(session, standings: dict):
         reconstruct_bracket_state,
     )
 
-    season_year = int(today_et()[:4])
+    season_year = clock_season()
     completed_post_rows = get_completed_postseason_games(session, season_year)
     if not completed_post_rows:
         # Pre-playoffs (or before the first opening-round game finalizes):
@@ -1453,7 +1454,7 @@ def main() -> int:
         session = get_session()
         try:
             fetch_and_store_bpi_ratings(session)
-            populate_team_style(session, int(today_et()[:4]))
+            populate_team_style(session, clock_season())
             games = fetch_and_store_games(session)
             # Recover espn_id for legacy regular-season rows (the 2026 opener
             # through 2026-05-12, ingested before the espn_id column landed).
@@ -1509,7 +1510,7 @@ def main() -> int:
             # Persist the Elo trajectory for the transparency page. Non-fatal:
             # a failure here must not block the user-visible ranking write.
             try:
-                store_elo_history(session, replay, int(today[:4]))
+                store_elo_history(session, replay, clock_season())
             except Exception as e:
                 session.rollback()
                 logger.warning(f"Elo history store failed (non-fatal): {e}")
@@ -1525,7 +1526,7 @@ def main() -> int:
                 logger.warning(f"Game-shape backfill failed (non-fatal): {e}")
             try:
                 populate_shots_for_recent_completions(session)
-                recompute_shot_making(session, int(today[:4]))
+                recompute_shot_making(session, clock_season())
             except Exception as e:
                 # Defensive: recompute_shot_making already rolls back its own
                 # failed transaction, but roll back here too so no pending state

@@ -29,6 +29,7 @@ from src.constants import (  # noqa: F401 — Broadcasters used in get_broadcast
 from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
+    clock_season,
     fetch_live_win_probability,
     fetch_today_game_statuses,
     today_et,
@@ -42,6 +43,8 @@ from src.db.queries import (
     get_elo_history,
     get_game_shapes,
     get_games_by_date,
+    get_latest_calibration_season,
+    get_latest_elo_history_season,
     get_latest_playoff_probability_date,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
@@ -50,7 +53,6 @@ from src.db.queries import (
     get_shot_making,
     get_shots_for_player,
     get_shots_for_season,
-    shot_row_to_dict,
     get_team_abbrev_map,
     get_team_records,
     get_team_style_season_counts,
@@ -60,6 +62,7 @@ from src.db.queries import (
     get_upcoming_rankings,
     has_alerted,
     record_alert,
+    shot_row_to_dict,
 )
 from src.notify.telegram import send_telegram, telegram_configured
 from src.notify.thriller import (
@@ -612,7 +615,7 @@ def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
     reflect that same window skew, but only for a just-ingested player and only by
     mentally summing — accepted daily-window known-limitation. Between daily runs
     the zones tie to the leaderboard exactly (shared build_baseline)."""
-    season = int(today_et()[:4])
+    season = clock_season()
     session = get_session()
     try:
         rows = get_shots_for_player(session, season, athlete_id)
@@ -897,11 +900,24 @@ async def get_playoff_odds(date: str = Query(default=None)):
 
 @app.get("/api/elo-history")
 async def get_elo_history_endpoint(season: int = Query(default=None)):
-    """Per-team Elo trajectory for a season (DB-only; never calls ESPN)."""
-    if season is None:
-        season = int(today_et()[:4])
+    """Per-team Elo trajectory for a season (DB-only; never calls ESPN).
+
+    Defaults to the newest POPULATED season (mirrors /api/replay and
+    /api/team-style), NOT the calendar year: this is a trajectory archive, so
+    through the offseason the honest thing to show is the season that just
+    finished rather than an empty grid from January until tip-off. In season the
+    two agree -- the newest populated season IS the calendar year -- so the
+    fallback only ever fires in that gap. The /rankings page labels whichever
+    season it receives, so a fallback is never passed off as "this season".
+
+    Contrast /api/shot-making, which stays on the clock ON PURPOSE: that page
+    frames its board as current, so serving a finished season there would
+    mislabel it. Same reasoning, opposite answer, because the framing differs."""
     session = get_session()
     try:
+        if season is None:
+            now = clock_season()
+            season = get_latest_elo_history_season(session, now) or now
         rows = get_elo_history(session, season)
         if not rows:
             return {"season": season, "teams": {}}
@@ -932,7 +948,7 @@ async def get_replay_endpoint(season: int = Query(default=None)):
     try:
         seasons = get_shape_seasons(session)
         if season is None:
-            season = seasons[0] if seasons else int(today_et()[:4])
+            season = seasons[0] if seasons else clock_season()
         known_ids = get_all_known_espn_ids(session)
         games = []
         for s in get_game_shapes(session, season):
@@ -980,11 +996,10 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
     W-L is attached only on a today request (current-season-to-date)."""
     session = get_session()
     try:
-        today = today_et()
         seasons = get_team_style_seasons(session)
         if season is None:
             if not seasons:
-                season = int(today[:4])
+                season = clock_season()
             else:
                 season = seasons[0]
                 # Don't default to a sparse newest season (e.g. a bootstrap
@@ -1020,7 +1035,7 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
             )
         view = compute_style_view(rows)
         # Attach logo + W-L (today only) and sort by standings.
-        is_today = season == int(today[:4])
+        is_today = season == clock_season()
         records = get_team_records(session, season) if is_today else None
         for v in view:
             t = teams.get(v["team_id"])
@@ -1049,7 +1064,7 @@ async def get_shot_making_endpoint():
     /playoff-odds convention: never serve stale-season data as current)."""
     session = get_session()
     try:
-        season = int(today_et()[:4])
+        season = clock_season()
         rows = get_shot_making(session, season)
         rows.sort(key=lambda r: r.points_added, reverse=True)
         # All-league anchors, written by the daily recompute. Null until the first
@@ -1097,11 +1112,19 @@ async def get_shot_making_endpoint():
 
 @app.get("/api/calibration")
 async def get_calibration_endpoint(season: int = Query(default=None)):
-    """Win-probability reliability for completed games (DB-only)."""
-    if season is None:
-        season = int(today_et()[:4])
+    """Win-probability reliability for completed games (DB-only).
+
+    Defaults to the newest season that actually yields calibration pairs (see
+    get_latest_calibration_season), not the calendar year. /transparency is the
+    site's honesty surface -- the one falsifiable published claim -- so a panel
+    that goes blank every January is the worst possible offseason state for it.
+    The page labels the season it received, and the static 2017-2025 backtest
+    beside it is retrospective anyway. In season this is the calendar year."""
     session = get_session()
     try:
+        if season is None:
+            now = clock_season()
+            season = get_latest_calibration_season(session, now) or now
         pairs = get_calibration_pairs(session, season)
         result = compute_calibration(pairs)
         return {

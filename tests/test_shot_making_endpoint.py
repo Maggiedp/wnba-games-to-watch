@@ -97,9 +97,11 @@ def test_endpoint_does_not_fall_back_to_prior_season(client, env, monkeypatch):
     # The current season has no rows but a PRIOR season does: the endpoint must
     # return an empty CURRENT-season board, never last season's leaderboard
     # silently mislabeled as "this season" (Codex R3).
-    import src.api.app as app_mod
+    # Patch espn_api.today_et, the ONE name: app.py reads the season through
+    # espn_api.clock_season(), which resolves today_et in espn_api's globals.
+    import src.data.espn_api as espn_api
 
-    monkeypatch.setattr(app_mod, "today_et", lambda: "2099-07-01")
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2099-07-01")
     session = get_session()
     q.upsert_shot_making(
         session,
@@ -173,10 +175,11 @@ def _p(play_id, aid, name, x=25, y=4, made=True, pv=2, dist=3.0, stype="Layup Sh
 
 def test_player_shots_returns_chart_and_zones(client, monkeypatch):
     from src.api import app as app_module
+    from src.data import espn_api as espn_api_mod
     from src.db.queries import upsert_shots
     from src.db.schema import get_session
 
-    monkeypatch.setattr(app_module, "today_et", lambda: "2026-07-28")
+    monkeypatch.setattr(espn_api_mod, "today_et", lambda: "2026-07-28")
     app_module._shot_baseline_cache = None  # clear TTL cache between tests
     session = get_session()
     payload = []
@@ -223,8 +226,9 @@ def test_player_shots_returns_chart_and_zones(client, monkeypatch):
 
 def test_player_shots_unknown_athlete_is_empty_not_500(client, monkeypatch):
     from src.api import app as app_module
+    from src.data import espn_api as espn_api_mod
 
-    monkeypatch.setattr(app_module, "today_et", lambda: "2026-07-28")
+    monkeypatch.setattr(espn_api_mod, "today_et", lambda: "2026-07-28")
     app_module._shot_baseline_cache = None
     r = client.get("/api/player-shots?athlete_id=nobody")
     assert r.status_code == 200
@@ -240,10 +244,11 @@ def test_player_shots_omits_team_and_total_for_traded_player(client, monkeypatch
     the daily `shot_making` leaderboard row during the 6 AM ingest→recompute window.
     Dropping them is the fix (Codex adversarial R2)."""
     from src.api import app as app_module
+    from src.data import espn_api as espn_api_mod
     from src.db.queries import upsert_shots
     from src.db.schema import get_session
 
-    monkeypatch.setattr(app_module, "today_et", lambda: "2026-07-28")
+    monkeypatch.setattr(espn_api_mod, "today_et", lambda: "2026-07-28")
     app_module._shot_baseline_cache = None
     session = get_session()
 
