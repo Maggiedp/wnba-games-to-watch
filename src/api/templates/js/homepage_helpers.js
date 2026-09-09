@@ -139,12 +139,20 @@ function gameLocalDate(g) {
     return isNaN(d) ? null : d;
 }
 
-function localDateISO(g) {
-    const d = gameLocalDate(g);
-    if (!d) return g.date;
+// A Date -> 'YYYY-MM-DD' in the LOCAL zone. Never toISOString(), which
+// converts to UTC first and so reports the wrong day either side of midnight.
+// Three callers (localDateISO, addDaysToISO, and the template's addDaysISO),
+// which is the repo's extract-on-3rd-caller trigger.
+function isoFromDate(d) {
     return d.getFullYear() + '-' +
         String(d.getMonth() + 1).padStart(2, '0') + '-' +
         String(d.getDate()).padStart(2, '0');
+}
+
+function localDateISO(g) {
+    const d = gameLocalDate(g);
+    if (!d) return g.date;
+    return isoFromDate(d);
 }
 
 // Completed-section sort. mode: 'date' | 'excitement'.
@@ -189,10 +197,7 @@ function sortCompleted(games, mode) {
 // previous calendar day, which would silently misdate a slate twice a year.
 function addDaysToISO(iso, days) {
     const [y, m, d] = iso.split('-').map(Number);
-    const shifted = new Date(y, m - 1, d + days);
-    return shifted.getFullYear() + '-' +
-        String(shifted.getMonth() + 1).padStart(2, '0') + '-' +
-        String(shifted.getDate()).padStart(2, '0');
+    return isoFromDate(new Date(y, m - 1, d + days));
 }
 
 // Earliest local date among `games` on or after `fromISO`, or null.
