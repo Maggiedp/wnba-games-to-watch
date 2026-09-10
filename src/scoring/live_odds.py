@@ -13,7 +13,10 @@ number, exactly.
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 # Live win probabilities are rounded to the nearest percentage point before
 # both seeding and simulating. ESPN's home_pct ticks on every play, including
@@ -103,8 +106,26 @@ def build_live_overrides(
             winner = game.get("winner_team")
             if winner is None:
                 continue  # tie or unparsed final — don't invent a result
-            home = remaining_games[index][0]
-            result.overrides[index] = 1.0 if winner == home else 0.0
+            home, away = remaining_games[index]
+            if winner == home:
+                result.overrides[index] = 1.0
+            elif winner == away:
+                result.overrides[index] = 0.0
+            else:
+                # Fail closed. The ESPN winner name matches neither participant
+                # (canonicalization drift, a rename, a stale alias row). Recording
+                # it as an away win would silently invert this game, so fall back
+                # to the Elo probability instead — which is what the daily snapshot
+                # already uses.
+                logger.warning(
+                    "live-odds: winner %r for event %s matches neither participant "
+                    "(%r vs %r) — no override",
+                    winner,
+                    espn_id,
+                    home,
+                    away,
+                )
+                continue
             result.settled_espn_ids.append(espn_id)
             continue
 

@@ -190,3 +190,34 @@ def test_final_with_no_winner_is_skipped():
         [("Home Team", "Away Team")],
     )
     assert result.overrides == {}
+
+
+def test_final_winner_name_matches_neither_participant():
+    """Fail closed when the ESPN winner name matches neither participant.
+    Canonicalization drift (a rename, a stale alias row) could cause the name
+    to mismatch. Recording such a game would silently invert its contribution."""
+    from src.scoring.live_odds import build_live_overrides
+
+    result = build_live_overrides(
+        [_game("1", "STATUS_FINAL", winner="Unknown Team")],
+        {},
+        {"1": 0},
+        [("Home Team", "Away Team")],
+    )
+    assert result.overrides == {}
+    assert result.settled_espn_ids == []
+
+
+def test_postseason_game_with_no_index_is_flagged():
+    """Postseason games not in remaining_index_by_espn_id must still set
+    has_postseason=True, so the caller can disable live mode entirely."""
+    from src.scoring.live_odds import build_live_overrides
+
+    result = build_live_overrides(
+        [_game("1", "STATUS_IN_PROGRESS", season_type=3)],
+        {"1": 0.5},
+        remaining_index_by_espn_id={},
+        remaining_games=[],
+    )
+    assert result.has_postseason is True
+    assert result.overrides == {}
