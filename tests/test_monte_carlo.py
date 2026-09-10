@@ -171,10 +171,6 @@ def test_compute_standings_populates_h2h(monkeypatch):
         "scripts.daily_update.get_completed_games",
         lambda s, season_year=2026: [game_1, game_2, game_3],
     )
-    monkeypatch.setattr(
-        "scripts.daily_update.get_team_by_id",
-        lambda s, tid: {1: team_a, 2: team_b}[tid],
-    )
 
     standings = compute_standings(session=None, elo_ratings={})
 
@@ -207,10 +203,6 @@ def test_compute_standings_ignores_postseason_completions(monkeypatch):
     monkeypatch.setattr(
         "scripts.daily_update.get_completed_games",
         lambda s, season_year=2026: [reg, post],
-    )
-    monkeypatch.setattr(
-        "scripts.daily_update.get_team_by_id",
-        lambda s, tid: {1: team_a, 2: team_b}[tid],
     )
 
     standings = compute_standings(session=None, elo_ratings={})
@@ -248,10 +240,6 @@ def test_compute_standings_skips_null_season_type(monkeypatch):
     monkeypatch.setattr(
         "scripts.daily_update.get_completed_games",
         lambda s, season_year=2026: [null_row],
-    )
-    monkeypatch.setattr(
-        "scripts.daily_update.get_team_by_id",
-        lambda s, tid: {1: team_a, 2: team_b}[tid],
     )
 
     standings = compute_standings(session=None, elo_ratings={})

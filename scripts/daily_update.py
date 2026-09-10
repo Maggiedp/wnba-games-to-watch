@@ -41,7 +41,6 @@ from src.db.queries import (
     get_shots_for_season,
     shot_row_to_dict,
     get_team_abbrev_map,
-    get_team_by_id,
     get_team_by_name,
     get_team_style_season_counts,
     get_teams_by_ids,
@@ -809,6 +808,9 @@ def compute_elo_ratings() -> EloReplay:
 
 def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]:
     all_teams = get_all_teams(session)
+    # Every team is already in memory — a per-game get_team_by_id here was an
+    # N+1 (2.2 queries per completed game, ~650 round-trips over a full season).
+    team_by_id = {t.id: t for t in all_teams}
     standings = {
         t.name: {
             "wins": 0,
@@ -833,8 +835,8 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
         if game.season_type is None:
             null_skipped += 1
             continue
-        team_a = get_team_by_id(session, game.team_a_id)
-        team_b = get_team_by_id(session, game.team_b_id)
+        team_a = team_by_id.get(game.team_a_id)
+        team_b = team_by_id.get(game.team_b_id)
         if not team_a or not team_b:
             continue
         a_won = game.winner_id == team_a.id
