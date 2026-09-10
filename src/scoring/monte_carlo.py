@@ -133,6 +133,7 @@ def run_monte_carlo_simulation(
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     return_matrix: bool = False,
     bracket_state=None,
+    win_prob_overrides: dict[int, float] | None = None,
 ) -> (
     RoundProbabilities
     | tuple[
@@ -157,6 +158,11 @@ def run_monte_carlo_simulation(
         home_advantage: Elo-point bonus for the home team.
         return_matrix: When True, also return the per-sim outcome matrix,
             playoff sets, bracket outcomes, champions, and fate levels.
+        win_prob_overrides: Optional {index into remaining_games: P(team_a wins)}.
+            Where present, this probability replaces the Elo-derived one for that
+            game. Used by the live-odds overlay to condition on an in-progress
+            game's observed win probability, and to fold in a game that has
+            finished but is not yet recorded in the DB (override 1.0 or 0.0).
 
     Returns:
         If return_matrix=False: RoundProbabilities with per-team probs for each round.
@@ -194,7 +200,7 @@ def run_monte_carlo_simulation(
         standings = to_team_standings(current_standings)
 
         game_outcomes: list[bool | None] = []
-        for team_a, team_b in remaining_games:
+        for game_index, (team_a, team_b) in enumerate(remaining_games):
             if team_a not in standings or team_b not in standings:
                 logger.warning(f"Team not in standings: {team_a} or {team_b}")
                 game_outcomes.append(None)
@@ -203,7 +209,16 @@ def run_monte_carlo_simulation(
             elo_a = standings[team_a].elo
             elo_b = standings[team_b].elo
 
-            a_won = simulate_game(elo_a, elo_b, home_advantage=home_advantage)
+            override = (
+                win_prob_overrides.get(game_index) if win_prob_overrides else None
+            )
+            if override is None:
+                a_won = simulate_game(elo_a, elo_b, home_advantage=home_advantage)
+            else:
+                # Draw even for a 1.0/0.0 override so the RNG stream advances
+                # identically regardless of which games are overridden — two
+                # runs differing only in override VALUES stay comparable.
+                a_won = random.random() < override
             game_outcomes.append(a_won)
             if a_won:
                 standings[team_a].wins += 1

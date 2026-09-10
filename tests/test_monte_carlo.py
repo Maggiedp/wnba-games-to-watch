@@ -684,3 +684,94 @@ def test_run_monte_carlo_seed_distribution():
     assert result.seed_distribution[_ALL_TEAMS[0]] == {1: 1.0}
     assert result.seed_distribution[_ALL_TEAMS[7]] == {8: 1.0}
     assert result.seed_distribution[_ALL_TEAMS[8]] == {}
+
+
+# ---------------------------------------------------------------------------
+# win_prob_overrides tests (Task 4)
+# ---------------------------------------------------------------------------
+
+
+def _override_standings():
+    """13-team standings for the override tests. Uses _ALL_TEAMS because
+    run_monte_carlo_simulation asserts every team has a known conference."""
+    return {
+        name: {"wins": 20 - i, "losses": i, "elo": 1600 - i * 20}
+        for i, name in enumerate(_ALL_TEAMS)
+    }
+
+
+def test_win_prob_override_forces_outcome():
+    """An override of 1.0 makes team_a win that game in every sim; 0.0 in none."""
+    home, away = _ALL_TEAMS[0], _ALL_TEAMS[1]
+    remaining = [(home, away)]
+
+    forced_home = run_monte_carlo_simulation(
+        _override_standings(),
+        remaining,
+        num_simulations=200,
+        win_prob_overrides={0: 1.0},
+        return_matrix=True,
+    )
+    forced_away = run_monte_carlo_simulation(
+        _override_standings(),
+        remaining,
+        num_simulations=200,
+        win_prob_overrides={0: 0.0},
+        return_matrix=True,
+    )
+
+    assert all(sim[0] is True for sim in forced_home[1])
+    assert all(sim[0] is False for sim in forced_away[1])
+
+
+def test_win_prob_override_only_applies_to_its_index():
+    """Overriding game 0 must leave game 1 on its Elo-derived probability."""
+    home, away = _ALL_TEAMS[0], _ALL_TEAMS[1]
+    remaining = [(home, away), (away, home)]
+
+    result = run_monte_carlo_simulation(
+        _override_standings(),
+        remaining,
+        num_simulations=300,
+        win_prob_overrides={0: 1.0},
+        return_matrix=True,
+    )
+    matrix = result[1]
+
+    assert all(sim[0] is True for sim in matrix)
+    # Game 1 is untouched: with these Elo ratings both outcomes must occur.
+    assert {sim[1] for sim in matrix} == {True, False}
+
+
+def test_override_branch_consumes_the_same_rng_draws_as_the_elo_branch(monkeypatch):
+    """A certainty override must still draw from random, so two runs differing
+    only in override VALUES stay comparable.
+
+    Uses a 4-team league: fewer than PLAYOFF_TEAMS, so no bracket is played and
+    every draw comes from the regular-season loop, making the counts comparable.
+    """
+    teams = ["Atlanta Dream", "Chicago Sky", "Dallas Wings", "Minnesota Lynx"]
+    standings = {n: {"wins": 5, "losses": 5, "elo": 1500} for n in teams}
+    remaining = [(teams[0], teams[1]), (teams[2], teams[3])]
+
+    def count_draws(**kwargs):
+        calls = {"n": 0}
+        real = random.random
+
+        def counting():
+            calls["n"] += 1
+            return real()
+
+        monkeypatch.setattr(random, "random", counting)
+        try:
+            run_monte_carlo_simulation(
+                standings, remaining, num_simulations=10, **kwargs
+            )
+        finally:
+            monkeypatch.setattr(random, "random", real)
+        return calls["n"]
+
+    without = count_draws()
+    with_overrides = count_draws(win_prob_overrides={0: 1.0, 1: 0.0})
+
+    assert without == with_overrides
