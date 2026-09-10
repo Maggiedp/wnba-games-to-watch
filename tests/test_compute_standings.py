@@ -13,7 +13,7 @@ def test_compute_standings_query_count_is_constant(env):
     not grow with the number of completed games."""
     from sqlalchemy import event
 
-    from scripts.daily_update import compute_standings
+    from src.scoring.sim_inputs import compute_standings
 
     session = env.get_session()
 

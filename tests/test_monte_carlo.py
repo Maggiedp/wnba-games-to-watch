@@ -135,7 +135,7 @@ def test_compute_standings_populates_h2h(monkeypatch):
     """Smoke test: standings dict produced by compute_standings has h2h field
     that's compatible with run_monte_carlo_simulation."""
     from unittest.mock import MagicMock
-    from scripts.daily_update import compute_standings
+    from src.scoring.sim_inputs import compute_standings
 
     # Configure mocks to return string attributes instead of generating new mocks
     team_a = MagicMock()
@@ -165,10 +165,10 @@ def test_compute_standings_populates_h2h(monkeypatch):
 
     # Patch at the module level where functions are imported
     monkeypatch.setattr(
-        "scripts.daily_update.get_all_teams", lambda s: [team_a, team_b]
+        "src.scoring.sim_inputs.get_all_teams", lambda s: [team_a, team_b]
     )
     monkeypatch.setattr(
-        "scripts.daily_update.get_completed_games",
+        "src.scoring.sim_inputs.get_completed_games",
         lambda s, season_year=2026: [game_1, game_2, game_3],
     )
 
@@ -185,7 +185,7 @@ def test_compute_standings_ignores_postseason_completions(monkeypatch):
     """Completed postseason games (season_type=3) must not bump regular-season W/L
     or H2H. Otherwise playoff wins would distort seeding mid-postseason."""
     from unittest.mock import MagicMock
-    from scripts.daily_update import compute_standings
+    from src.scoring.sim_inputs import compute_standings
 
     team_a = MagicMock(id=1, bpi_rating=5.0)
     team_a.name = "New York Liberty"
@@ -198,10 +198,10 @@ def test_compute_standings_ignores_postseason_completions(monkeypatch):
     post = MagicMock(team_a_id=2, team_b_id=1, winner_id=2, season_type=3)
 
     monkeypatch.setattr(
-        "scripts.daily_update.get_all_teams", lambda s: [team_a, team_b]
+        "src.scoring.sim_inputs.get_all_teams", lambda s: [team_a, team_b]
     )
     monkeypatch.setattr(
-        "scripts.daily_update.get_completed_games",
+        "src.scoring.sim_inputs.get_completed_games",
         lambda s, season_year=2026: [reg, post],
     )
 
@@ -221,7 +221,7 @@ def test_compute_standings_skips_null_season_type(monkeypatch):
     win could leak into seeding and distort downstream odds.
     """
     from unittest.mock import MagicMock
-    from scripts.daily_update import compute_standings
+    from src.scoring.sim_inputs import compute_standings
 
     team_a = MagicMock(id=1, bpi_rating=5.0)
     team_a.name = "New York Liberty"
@@ -235,10 +235,10 @@ def test_compute_standings_skips_null_season_type(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "scripts.daily_update.get_all_teams", lambda s: [team_a, team_b]
+        "src.scoring.sim_inputs.get_all_teams", lambda s: [team_a, team_b]
     )
     monkeypatch.setattr(
-        "scripts.daily_update.get_completed_games",
+        "src.scoring.sim_inputs.get_completed_games",
         lambda s, season_year=2026: [null_row],
     )
 

@@ -31,8 +31,6 @@ from src.db.queries import (
     delete_shot_league_avg_season,
     delete_shot_making_season,
     delete_team_style_season,
-    get_all_teams,
-    get_completed_games,
     get_completed_games_missing_excitement,
     get_completed_games_missing_shape,
     get_completed_games_missing_shots,
@@ -84,7 +82,8 @@ from src.scoring.monte_carlo import (
 )
 from src.scoring.quality import compute_quality_score
 from src.scoring.shot_making import compute_leaderboard, compute_league_averages
-from src.scoring.tiebreakers import PLAYOFF_TEAMS, increment_h2h, resolve_seeding
+from src.scoring.sim_inputs import compute_standings
+from src.scoring.tiebreakers import PLAYOFF_TEAMS, resolve_seeding
 
 os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
@@ -804,57 +803,6 @@ def compute_elo_ratings() -> EloReplay:
     logger.info(f"Replaying {len(completed)} completed games through Elo")
     replay = replay_games(completed)
     return replay
-
-
-def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]:
-    all_teams = get_all_teams(session)
-    # Every team is already in memory — a per-game get_team_by_id here was an
-    # N+1 (2.2 queries per completed game, ~650 round-trips over a full season).
-    team_by_id = {t.id: t for t in all_teams}
-    standings = {
-        t.name: {
-            "wins": 0,
-            "losses": 0,
-            "bpi": t.bpi_rating,
-            "elo": elo_ratings.get(t.name, INITIAL_RATING),
-            "h2h": {},
-        }
-        for t in all_teams
-    }
-    completed = get_completed_games(session, season_year=CURRENT_SEASON)
-    null_skipped = 0
-    for game in completed:
-        # Postseason wins/losses don't count toward regular-season seeding.
-        if game.season_type == 3:
-            continue
-        # NULL season_type during the playoff window can mean a postseason
-        # game whose backfill failed. Counting it would corrupt seeding;
-        # the next daily run should re-attempt the backfill and recompute.
-        # Pre-playoffs NULL is also possible (very-early ingest rows from
-        # before season_type tracking) — same conservative skip applies.
-        if game.season_type is None:
-            null_skipped += 1
-            continue
-        team_a = team_by_id.get(game.team_a_id)
-        team_b = team_by_id.get(game.team_b_id)
-        if not team_a or not team_b:
-            continue
-        a_won = game.winner_id == team_a.id
-        if a_won:
-            standings[team_a.name]["wins"] += 1
-            standings[team_b.name]["losses"] += 1
-        else:
-            standings[team_b.name]["wins"] += 1
-            standings[team_a.name]["losses"] += 1
-        increment_h2h(standings[team_a.name]["h2h"], team_b.name, won=a_won)
-        increment_h2h(standings[team_b.name]["h2h"], team_a.name, won=not a_won)
-    if null_skipped:
-        logger.warning(
-            f"compute_standings: skipped {null_skipped} completed game(s) with "
-            f"NULL season_type — backfill should reclassify next run"
-        )
-    logger.info(f"Computed standings for {len(standings)} teams")
-    return standings
 
 
 def _build_current_bracket_state(session, standings: dict):
