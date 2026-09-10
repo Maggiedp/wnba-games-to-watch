@@ -32,6 +32,10 @@ class Team(Base):
     abbreviation = Column(String(16), default="")
     logo_url = Column(String(500), default="")
     bpi_rating = Column(Float, default=0.0)
+    # Current (post-latest-game) Elo, written by each daily run from the same
+    # replay that feeds the Monte Carlo. elo_history stores *pre-game* ratings,
+    # so it cannot serve as current Elo; the live-odds path reads this.
+    elo_rating = Column(Float, nullable=True)
     last_updated = Column(DateTime, default=func.now(), onupdate=func.now())
 
 
@@ -504,6 +508,7 @@ def init_db():
                 "ALTER TABLE playoff_probabilities ADD COLUMN win_championship_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN seed_distribution TEXT",
                 "ALTER TABLE daily_rankings ADD COLUMN importance_detail TEXT",
+                "ALTER TABLE teams ADD COLUMN elo_rating FLOAT",
             ]:
                 try:
                     conn.execute(text(stmt))
@@ -637,6 +642,9 @@ def init_db():
                     "ALTER TABLE daily_rankings ADD COLUMN IF NOT EXISTS "
                     "importance_detail TEXT"
                 )
+            )
+            conn.execute(
+                text("ALTER TABLE teams ADD COLUMN IF NOT EXISTS elo_rating FLOAT")
             )
             _dedupe_games_by_espn_id(conn)
             conn.execute(

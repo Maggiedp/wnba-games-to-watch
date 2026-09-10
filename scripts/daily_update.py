@@ -46,6 +46,7 @@ from src.db.queries import (
     get_team_style_season_counts,
     get_teams_by_ids,
     replace_elo_history,
+    set_team_elo_ratings,
     upsert_daily_ranking,
     upsert_game,
     upsert_game_shape,
@@ -1502,6 +1503,14 @@ def main() -> int:
                 logger.warning(f"Legacy preseason backfill failed (non-fatal): {e}")
             replay = compute_elo_ratings()
             elo_ratings = replay.final_ratings
+            # Persist current Elo so the live-odds path can rebuild sim inputs
+            # from the DB. Non-fatal: a failure must not block the ranking write
+            # (the live overlay degrades to the stored snapshot without it).
+            try:
+                set_team_elo_ratings(session, elo_ratings)
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Team Elo persist failed (non-fatal): {e}")
             standings = compute_standings(session, elo_ratings)
             scored, round_probs = compute_daily_scores(session, games, standings)
             store_daily_rankings(session, scored)

@@ -3802,3 +3802,19 @@ def test_store_playoff_probabilities_persists_seed_distribution(session, team_id
 
     result = get_playoff_probabilities(session, "2026-06-01")
     assert result[a_id].seed_distribution == {1: 0.5, 2: 0.3}
+
+
+def test_set_team_elo_ratings_updates_known_teams_and_ignores_unknown(session):
+    from src.db.queries import set_team_elo_ratings, upsert_team, get_team_by_name
+
+    upsert_team(session, "Minnesota Lynx", bpi_rating=5.0, abbreviation="MIN")
+    upsert_team(session, "Indiana Fever", bpi_rating=3.0, abbreviation="IND")
+
+    updated = set_team_elo_ratings(
+        session,
+        {"Minnesota Lynx": 1611.25, "Indiana Fever": 1544.0, "Nonexistent FC": 1500.0},
+    )
+
+    assert updated == 2
+    assert get_team_by_name(session, "Minnesota Lynx").elo_rating == 1611.25
+    assert get_team_by_name(session, "Indiana Fever").elo_rating == 1544.0

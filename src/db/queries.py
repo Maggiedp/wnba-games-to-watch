@@ -57,6 +57,24 @@ def upsert_team(
     return team
 
 
+def set_team_elo_ratings(session: Session, ratings: dict[str, float]) -> int:
+    """Persist current Elo per team. Returns the number of rows updated.
+
+    Names absent from the teams table are skipped, not created: this is a
+    refresh of existing rows, and team creation belongs to upsert_team where
+    abbreviation/logo come from ESPN.
+    """
+    updated = 0
+    for team in session.query(Team).all():
+        rating = ratings.get(team.name)
+        if rating is None:
+            continue
+        team.elo_rating = rating
+        updated += 1
+    session.commit()
+    return updated
+
+
 def get_team_by_name(session: Session, name: str) -> Team | None:
     """Get a team by name."""
     return session.query(Team).filter(Team.name == name).first()
