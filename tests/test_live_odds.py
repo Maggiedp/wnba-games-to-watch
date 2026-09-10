@@ -53,6 +53,7 @@ def test_seed_changes_with_overrides_and_with_standings():
     assert live_sim_seed(standings, games, {}) != base
     moved = {"A": {"wins": 2, "losses": 2, "elo": 1500.0}}
     assert live_sim_seed(moved, games, {0: 0.61}) != base
+    assert live_sim_seed(standings, [("A", "C")], {0: 0.61}) != base
 
 
 def test_seed_ignores_dict_ordering():
@@ -68,3 +69,124 @@ def test_seed_ignores_dict_ordering():
         "A": {"wins": 1, "losses": 0, "elo": 1500.0},
     }
     assert live_sim_seed(one, games, {0: 0.5}) == live_sim_seed(two, games, {0: 0.5})
+
+
+def _game(event_id, status, winner=None, season_type=2):
+    return {
+        "event_id": event_id,
+        "team_a": "Home Team",
+        "team_b": "Away Team",
+        "winner_team": winner,
+        "status": status,
+        "season_type": season_type,
+    }
+
+
+def test_final_game_absent_from_the_db_becomes_a_certainty_override():
+    """The trap this closes: conditioning on the 9:30pm game while still
+    treating the 7pm game as unplayed publishes a number strictly WORSE than
+    the morning snapshot it replaced."""
+    from src.scoring.live_odds import build_live_overrides
+
+    result = build_live_overrides(
+        today_games=[_game("1", "STATUS_FINAL", winner="Home Team")],
+        live_win_probs={},
+        remaining_index_by_espn_id={"1": 0},
+        remaining_games=[("Home Team", "Away Team")],
+    )
+
+    assert result.overrides == {0: 1.0}
+    assert result.settled_espn_ids == ["1"]
+    assert result.live_espn_ids == []
+
+
+def test_away_winner_becomes_a_zero_override():
+    from src.scoring.live_odds import build_live_overrides
+
+    result = build_live_overrides(
+        [_game("1", "STATUS_FINAL", winner="Away Team")],
+        {},
+        {"1": 0},
+        [("Home Team", "Away Team")],
+    )
+    assert result.overrides == {0: 0.0}
+
+
+def test_live_game_uses_quantized_home_pct():
+    from src.scoring.live_odds import build_live_overrides
+
+    result = build_live_overrides(
+        [_game("1", "STATUS_IN_PROGRESS")],
+        {"1": 0.6137},
+        {"1": 0},
+        [("Home Team", "Away Team")],
+    )
+    assert result.overrides == {0: 0.61}
+    assert result.live_espn_ids == ["1"]
+
+
+def test_unstarted_game_gets_no_override():
+    from src.scoring.live_odds import build_live_overrides
+
+    result = build_live_overrides(
+        [_game("1", "STATUS_SCHEDULED")],
+        {},
+        {"1": 0},
+        [("Home Team", "Away Team")],
+    )
+    assert result.overrides == {}
+
+
+def test_game_already_recorded_in_the_db_contributes_nothing():
+    """A game the daily run has ingested is no longer in remaining_games, so it
+    has no index and must not produce an override."""
+    from src.scoring.live_odds import build_live_overrides
+
+    result = build_live_overrides(
+        [_game("1", "STATUS_FINAL", winner="Home Team")],
+        {},
+        remaining_index_by_espn_id={},
+        remaining_games=[],
+    )
+    assert result.overrides == {}
+    assert result.settled_espn_ids == []
+
+
+def test_postseason_game_on_the_slate_is_flagged():
+    from src.scoring.live_odds import build_live_overrides
+
+    result = build_live_overrides(
+        [_game("1", "STATUS_IN_PROGRESS", season_type=3)],
+        {"1": 0.5},
+        {"1": 0},
+        [("Home Team", "Away Team")],
+    )
+    assert result.has_postseason is True
+
+
+def test_live_game_with_a_failed_wp_fetch_falls_back_to_elo():
+    """_detect_live_shapes drops games whose WP fetch failed. That game keeps
+    its Elo probability rather than being dropped from the sim."""
+    from src.scoring.live_odds import build_live_overrides
+
+    result = build_live_overrides(
+        [_game("1", "STATUS_IN_PROGRESS")],
+        live_win_probs={},
+        remaining_index_by_espn_id={"1": 0},
+        remaining_games=[("Home Team", "Away Team")],
+    )
+    assert result.overrides == {}
+    assert result.live_espn_ids == []
+
+
+def test_final_with_no_winner_is_skipped():
+    """A tie or an unparsed final must not silently become a home win."""
+    from src.scoring.live_odds import build_live_overrides
+
+    result = build_live_overrides(
+        [_game("1", "STATUS_FINAL", winner=None)],
+        {},
+        {"1": 0},
+        [("Home Team", "Away Team")],
+    )
+    assert result.overrides == {}
