@@ -68,13 +68,21 @@ def simulate_game(
     elo_a: float,
     elo_b: float,
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
+    rng=None,
 ) -> bool:
     """Simulate a single game, return True if team A (home) wins.
 
     team_a is assumed to be the home team (matches ESPN `_parse_event`
     convention). Pass home_advantage=0 for neutral-site games.
+
+    `rng` is any object exposing `.random()` — the `random` module itself
+    (the default, and what every seeded-global caller relies on) or a
+    `random.Random` instance. Pass an instance to get a stream that CANNOT be
+    perturbed by another thread seeding or drawing from the global RNG; the
+    live-odds overlay does exactly that, because a manual /internal/daily-update
+    re-trigger runs its own seeded Monte Carlo in this same process.
     """
-    return random.random() < expected_win_prob(
+    return (rng or random).random() < expected_win_prob(
         elo_a, elo_b, home_advantage=home_advantage
     )
 
@@ -134,6 +142,7 @@ def run_monte_carlo_simulation(
     return_matrix: bool = False,
     bracket_state=None,
     win_prob_overrides: dict[int, float] | None = None,
+    rng=None,
 ) -> (
     RoundProbabilities
     | tuple[
@@ -163,6 +172,10 @@ def run_monte_carlo_simulation(
             game. Used by the live-odds overlay to condition on an in-progress
             game's observed win probability, and to fold in a game that has
             finished but is not yet recorded in the DB (override 1.0 or 0.0).
+        rng: Optional source of randomness (the `random` module by default, or
+            a `random.Random` instance). Threaded through simulate_game and
+            simulate_playoffs so a caller can own an isolated stream instead of
+            seeding the process-global RNG. See simulate_game for why.
 
     Returns:
         If return_matrix=False: RoundProbabilities with per-team probs for each round.
@@ -213,12 +226,14 @@ def run_monte_carlo_simulation(
                 win_prob_overrides.get(game_index) if win_prob_overrides else None
             )
             if override is None:
-                a_won = simulate_game(elo_a, elo_b, home_advantage=home_advantage)
+                a_won = simulate_game(
+                    elo_a, elo_b, home_advantage=home_advantage, rng=rng
+                )
             else:
                 # Draw even for a 1.0/0.0 override so the RNG stream advances
                 # identically regardless of which games are overridden — two
                 # runs differing only in override VALUES stay comparable.
-                a_won = random.random() < override
+                a_won = (rng or random).random() < override
             game_outcomes.append(a_won)
             if a_won:
                 standings[team_a].wins += 1
@@ -250,6 +265,7 @@ def run_monte_carlo_simulation(
                 home_advantage=home_advantage,
                 bracket_state=bracket_state,
                 recorder=sim_bracket_outcomes if return_matrix else None,
+                rng=rng,
             )
             for t in bracket["reached_semis"]:
                 semi_counts[t] += 1
