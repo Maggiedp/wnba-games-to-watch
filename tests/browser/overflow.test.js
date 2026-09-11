@@ -102,6 +102,85 @@ async function openPlayoffSeedsView(page) {
   );
 }
 
+// Patches /api/playoff-odds so every row reports the Task 8 live overlay's
+// shape (`live: true`, the given `live_state`) without re-seeding the smoke
+// server — smoke_server.py never sets Team.elo_rating, so seeding it would
+// flip the two EXISTING /playoff-odds page-defs above into live mode (one
+// fewer column, no longer measuring the non-live layout they exist to
+// measure) and make _build_live_playoff_odds's ESPN call reachable from CI.
+// Same precedent as shiftUpcomingPastTheDefaultWindow below: patch the
+// payload in a `prepare` hook, not the seed. Keeps every other seeded field
+// (team, seed_distribution, etc.) untouched so the rest of the table renders
+// exactly as the non-live defs already prove it does.
+function patchPlayoffOddsLive(liveState) {
+  return async (page) => {
+    await page.evaluateOnNewDocument((state) => {
+      const realFetch = window.fetch;
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        const response = await realFetch(input, init);
+        if (!url.includes('/api/playoff-odds')) return response;
+        const odds = await response.json();
+        const live = odds.map((t) => ({ ...t, live: true, live_state: state }));
+        return new Response(JSON.stringify(live), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      };
+    }, liveState);
+  };
+}
+
+// Shared read of #playoff-live-marker for the two live-state extraAsserts
+// below. Fails loudly (not a 10s timeout) if the marker never un-hides —
+// readySelector already waits on this, so a false result here means the
+// marker's `hidden` flag disagrees with what got the page past readySelector,
+// which would itself be a bug worth seeing named.
+async function readPlayoffLiveMarker(page, label) {
+  const marker = await page.evaluate(() => {
+    const el = document.getElementById('playoff-live-marker');
+    return el && {
+      hidden: el.hidden,
+      text: el.textContent,
+      hasDot: !!el.querySelector('.live-dot'),
+    };
+  });
+  assert.ok(
+    marker && !marker.hidden,
+    `${label}: #playoff-live-marker should be visible in live mode`,
+  );
+  return marker;
+}
+
+// live_state: 'live' — the marker reads "Live" and the provably-frozen
+// Playoffs column (measured 2026-09-09: 469pp of seed movement, 0.0pp of
+// make_playoffs movement once the field has clinched) is hidden from the
+// Rounds-view header.
+async function assertLiveMarkerAndNoPlayoffsColumn(page, label) {
+  const marker = await readPlayoffLiveMarker(page, label);
+  assert.match(
+    marker.text, /Live/,
+    `${label}: live marker text should contain "Live", got "${marker.text}"`,
+  );
+  const headers = await page.$$eval(
+    '#playoff-thead th', (ths) => ths.map((th) => th.textContent.trim()),
+  );
+  assert.ok(
+    !headers.includes('Playoffs'),
+    `${label}: Rounds header should have no Playoffs cell in live mode, got [${headers}]`,
+  );
+}
+
+// live_state: 'settled' — today's games are done but the 6 AM run hasn't
+// folded them in yet; the marker says so and shows no pulsing live dot.
+async function assertSettledMarker(page, label) {
+  const marker = await readPlayoffLiveMarker(page, label);
+  assert.match(
+    marker.text, /Updated through/,
+    `${label}: settled marker text should contain "Updated through", got "${marker.text}"`,
+  );
+  assert.ok(!marker.hasDot, `${label}: settled marker should show no live dot`);
+}
+
 // readySelector = client-rendered content that must exist before measuring
 // (`load` fires long before a post-fetch render; see loadAt).
 // widths = optional per-page override, defaulting to WIDTHS.
@@ -176,6 +255,20 @@ const PAGES = [
     readySelector: '#playoff-tbody tr',
     widths: WIDTHS_WITH_561,
     apply: openPlayoffSeedsView,
+  },
+  {
+    path: '/playoff-odds',
+    readySelector: '#playoff-live-marker:not([hidden])',
+    widths: WIDTHS_WITH_561,
+    prepare: patchPlayoffOddsLive('live'),
+    extraAssert: assertLiveMarkerAndNoPlayoffsColumn,
+  },
+  {
+    path: '/playoff-odds',
+    readySelector: '#playoff-live-marker:not([hidden])',
+    widths: WIDTHS_WITH_561,
+    prepare: patchPlayoffOddsLive('settled'),
+    extraAssert: assertSettledMarker,
   },
 ];
 
