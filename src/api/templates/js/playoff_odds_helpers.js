@@ -62,3 +62,22 @@ function seedsViewAvailable(odds) {
     return Array.isArray(odds) && odds.length > 0
         && odds.every(t => t && t.seed_distribution != null);
 }
+
+// /api/playoff-odds response → what the #playoff-live-marker should show.
+// `live`/`live_state` are per-row fields from the Task 7 live overlay, but
+// identical on every row of one response, so odds[0] speaks for the whole
+// snapshot. Pure decision logic — the template's updateLiveMarker does the
+// DOM writing (hidden toggle, innerHTML) and nothing else.
+// Returns { visible, text, showDot }: visible=false means the stored-snapshot
+// path (off-day) and the caller should hide the marker entirely; text is
+// plain text (no HTML) for the caller to escape/render; showDot says whether
+// to prepend the pulsing live-dot span.
+function liveMarkerFor(odds) {
+    const live = Array.isArray(odds) && odds.length > 0 && odds[0].live;
+    if (!live) return { visible: false, text: '', showDot: false };
+    // Two live states: a game is on the floor right now, or today's games
+    // have finished but the 6 AM run hasn't folded them in yet.
+    return odds[0].live_state === 'live'
+        ? { visible: true, text: 'Live · updating as tonight’s games play', showDot: true }
+        : { visible: true, text: 'Updated through tonight’s results', showDot: false };
+}

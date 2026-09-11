@@ -5,6 +5,7 @@ const { loadHelpers } = require('./helpers');
 // Self-contained: buildSeedRow calls seedPctText in the same file; none use shared.js.
 const {
   buildSeedRow, seedsViewAvailable, seedPctText, heatAlpha, champHeatAlpha,
+  liveMarkerFor,
 } = loadHelpers('playoff_odds_helpers.js');
 
 // --- buildSeedRow (Playoff Picture "Seeds" view) ---
@@ -74,4 +75,30 @@ test('seedsViewAvailable: only when every displayed team has non-null seed_distr
   // Nothing to show.
   assert.equal(seedsViewAvailable([]), false);
   assert.equal(seedsViewAvailable(null), false);
+});
+
+// --- liveMarkerFor (the /playoff-odds live marker's decision logic) ---
+
+test('liveMarkerFor: empty odds array is not visible', () => {
+  const state = liveMarkerFor([]);
+  assert.equal(state.visible, false);
+});
+
+test('liveMarkerFor: a non-live array is not visible', () => {
+  const state = liveMarkerFor([{ live: false, live_state: null }]);
+  assert.equal(state.visible, false);
+});
+
+test('liveMarkerFor: live_state "live" is visible with the dot', () => {
+  const state = liveMarkerFor([{ live: true, live_state: 'live' }]);
+  assert.equal(state.visible, true);
+  assert.equal(state.showDot, true);
+  assert.match(state.text, /Live/);
+});
+
+test('liveMarkerFor: live_state "settled" is visible without the dot', () => {
+  const state = liveMarkerFor([{ live: true, live_state: 'settled' }]);
+  assert.equal(state.visible, true);
+  assert.equal(state.showDot, false);
+  assert.match(state.text, /Updated/);
 });
