@@ -335,14 +335,20 @@ function renderPlayoffPicture() {
             </tr>`;
         }).join('');
     } else {
-        // The Playoffs column is provably 0.0pp of live movement once the field
-        // has clinched (measured 2026-09-09: every team at 100% or 0%). Showing
-        // it frozen beside four moving columns reads as a broken live path.
+        // Hide the Playoffs column only when it is BOTH a live overlay and the
+        // column can no longer move — every team mathematically in or out.
+        // Frozen at 100/0 beside four moving columns reads as a broken live
+        // path; but mid-race it is the most informative column on the page, and
+        // gating on `live` alone would hide it for most of a season. The
+        // measurement behind this (2026-09-09: 469pp of seed movement, 0.0pp of
+        // make_playoffs movement) was taken AFTER the 2026 field clinched — a
+        // fact about that date, not a property of live mode.
         const isLive = odds.length > 0 && odds[0].live;
+        const hidePlayoffs = isLive && playoffsColumnIsDead(odds);
         thead.innerHTML = '<tr>'
             + '<th class="team-col">Team</th>'
             + '<th class="record-col">Rec</th>'
-            + (isLive ? '' : '<th>Playoffs</th>')
+            + (hidePlayoffs ? '' : '<th>Playoffs</th>')
             + '<th>Semis</th><th>Finals</th><th>Champ</th>'
             + '</tr>';
         tbody.innerHTML = odds.map(t => {
@@ -384,7 +390,7 @@ function renderPlayoffPicture() {
             <tr${eliminated ? ' class="eliminated"' : ''}>
                 ${teamCell(t)}
                 ${recordCell}
-                ${isLive ? '' : barCell(t.make_playoffs_prob, 'chance to make the playoffs')}
+                ${hidePlayoffs ? '' : barCell(t.make_playoffs_prob, 'chance to make the playoffs')}
                 ${numCell(t.reach_semis_prob, 'chance to reach the semifinals')}
                 ${numCell(t.reach_finals_prob, 'chance to reach the finals')}
                 ${champCell(t.win_championship_prob, 'chance to win the championship')}

@@ -112,21 +112,33 @@ async function openPlayoffSeedsView(page) {
 // payload in a `prepare` hook, not the seed. Keeps every other seeded field
 // (team, seed_distribution, etc.) untouched so the rest of the table renders
 // exactly as the non-live defs already prove it does.
-function patchPlayoffOddsLive(liveState) {
+// `clinched` decides whether make_playoffs still carries information, which is
+// what gates the Playoffs column — NOT `live`. The smoke seed is deliberately
+// mid-race (probabilities 1.0, 0.925, 0.85 ... 0.0), so the default overlay
+// exercises the column STAYING, and clinched:true forces every team to a
+// mathematical 0/1 to exercise it being hidden. Both branches are walked.
+function patchPlayoffOddsLive(liveState, { clinched = false } = {}) {
   return async (page) => {
-    await page.evaluateOnNewDocument((state) => {
+    await page.evaluateOnNewDocument((state, forceClinched) => {
       const realFetch = window.fetch;
       window.fetch = async (input, init) => {
         const url = typeof input === 'string' ? input : input.url;
         const response = await realFetch(input, init);
         if (!url.includes('/api/playoff-odds')) return response;
         const odds = await response.json();
-        const live = odds.map((t) => ({ ...t, live: true, live_state: state }));
+        const live = odds.map((t, i) => ({
+          ...t,
+          live: true,
+          live_state: state,
+          // Top 8 in, rest out — a clinched field, the only state in which
+          // hiding the Playoffs column is honest.
+          ...(forceClinched ? { make_playoffs_prob: i < 8 ? 1 : 0 } : {}),
+        }));
         return new Response(JSON.stringify(live), {
           status: 200, headers: { 'Content-Type': 'application/json' },
         });
       };
-    }, liveState);
+    }, liveState, clinched);
   };
 }
 
@@ -155,6 +167,26 @@ async function readPlayoffLiveMarker(page, label) {
 // Playoffs column (measured 2026-09-09: 469pp of seed movement, 0.0pp of
 // make_playoffs movement once the field has clinched) is hidden from the
 // Rounds-view header.
+// live + MID-RACE: the Playoffs column must SURVIVE. This is the regression
+// Codex's adversarial review caught — the column was gated on `live` alone, so
+// any live game before the field clinched would hide the page's primary
+// probability. The 2026-09-09 measurement behind the original rule (0.0pp of
+// make_playoffs movement) was taken after clinching; it is a fact about that
+// date, not a property of live mode.
+async function assertLivePreservesPlayoffsColumnMidRace(page, label) {
+  const marker = await readPlayoffLiveMarker(page, label);
+  assert.equal(marker.hidden, false, `${label}: live marker should be visible`);
+  const headers = await page.$$eval(
+    '#playoff-thead th', (ths) => ths.map((th) => th.textContent.trim()),
+  );
+  assert.ok(
+    headers.includes('Playoffs'),
+    `${label}: mid-race live mode must KEEP the Playoffs column — teams are `
+    + `still fighting for berths, so it is the most informative column on the `
+    + `page. Got [${headers}]`,
+  );
+}
+
 async function assertLiveMarkerAndNoPlayoffsColumn(page, label) {
   const marker = await readPlayoffLiveMarker(page, label);
   assert.match(
@@ -260,8 +292,15 @@ const PAGES = [
     path: '/playoff-odds',
     readySelector: '#playoff-live-marker:not([hidden])',
     widths: WIDTHS_WITH_561,
-    prepare: patchPlayoffOddsLive('live'),
+    prepare: patchPlayoffOddsLive('live', { clinched: true }),
     extraAssert: assertLiveMarkerAndNoPlayoffsColumn,
+  },
+  {
+    path: '/playoff-odds',
+    readySelector: '#playoff-live-marker:not([hidden])',
+    widths: WIDTHS_WITH_561,
+    prepare: patchPlayoffOddsLive('live'),
+    extraAssert: assertLivePreservesPlayoffsColumnMidRace,
   },
   {
     path: '/playoff-odds',

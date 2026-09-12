@@ -5,7 +5,7 @@ const { loadHelpers } = require('./helpers');
 // Self-contained: buildSeedRow calls seedPctText in the same file; none use shared.js.
 const {
   buildSeedRow, seedsViewAvailable, seedPctText, heatAlpha, champHeatAlpha,
-  liveMarkerFor,
+  liveMarkerFor, playoffsColumnIsDead,
 } = loadHelpers('playoff_odds_helpers.js');
 
 // --- buildSeedRow (Playoff Picture "Seeds" view) ---
@@ -101,4 +101,38 @@ test('liveMarkerFor: live_state "settled" is visible without the dot', () => {
   assert.equal(state.visible, true);
   assert.equal(state.showDot, false);
   assert.match(state.text, /Updated/);
+});
+
+// --- playoffsColumnIsDead (hide the Playoffs column only once it can't move) ---
+
+test('playoffsColumnIsDead: true only when every team is mathematically in or out', () => {
+  const clinched = [
+    { make_playoffs_prob: 1 }, { make_playoffs_prob: 1 },
+    { make_playoffs_prob: 0 }, { make_playoffs_prob: 0 },
+  ];
+  assert.equal(playoffsColumnIsDead(clinched), true);
+});
+
+test('playoffsColumnIsDead: false mid-race — one team still on the bubble', () => {
+  // The regression this guards: gating the column on `live` alone would hide
+  // the page's primary probability in June, when it is the most informative
+  // column on the table.
+  const bubble = [
+    { make_playoffs_prob: 1 }, { make_playoffs_prob: 0.62 },
+    { make_playoffs_prob: 0 },
+  ];
+  assert.equal(playoffsColumnIsDead(bubble), false);
+});
+
+test('playoffsColumnIsDead: false for a near-certain but not certain team', () => {
+  assert.equal(playoffsColumnIsDead([{ make_playoffs_prob: 0.999 }]), false);
+  assert.equal(playoffsColumnIsDead([{ make_playoffs_prob: 0.001 }]), false);
+});
+
+test('playoffsColumnIsDead: false for empty/null/malformed input', () => {
+  assert.equal(playoffsColumnIsDead([]), false);
+  assert.equal(playoffsColumnIsDead(null), false);
+  assert.equal(playoffsColumnIsDead(undefined), false);
+  assert.equal(playoffsColumnIsDead([null]), false);
+  assert.equal(playoffsColumnIsDead([{}]), false);
 });
