@@ -18,7 +18,7 @@ Postseason rows (season_type == 3) use `compute_postseason_swing_from_matrix`
 summed over the two teams playing and normalized by a structural ceiling.
 Both are left exactly as stored.
 
-As-of-date standings: `compute_standings` (daily_update.py) has no as-of-date
+As-of-date standings: `compute_standings` (src.scoring.sim_inputs.py) has no as-of-date
 parameter — it reads ALL completed games, so it can't reproduce what
 standings looked like on an earlier ranked date. This script instead mirrors
 scripts/compute_importance_ceiling.py: for each ranked date, seed every known
@@ -104,7 +104,7 @@ def _standings_as_of(
 ) -> dict[str, dict]:
     """Standings as of the morning of `date_str`: every known team seeded
     0-0, then regular-season results strictly before `date_str` applied on
-    top — mirrors daily_update.compute_standings, minus the as-of-date
+    top — mirrors src.scoring.sim_inputs.compute_standings, minus the as-of-date
     restriction it lacks.
 
     A game counts toward prior standings only when its CURRENT `date` is

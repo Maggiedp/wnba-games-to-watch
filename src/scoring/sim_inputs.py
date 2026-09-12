@@ -106,7 +106,15 @@ def build_sim_inputs(session, today: str) -> SimInputs:
     for game in get_upcoming_games(session, today):
         # Only regular-season games drive seeding — postseason games are played
         # by the bracket sim, and counting them here would double-count playoff
-        # wins into regular-season standings.
+        # wins into regular-season standings. NULL season_type (a DB row whose
+        # backfill hasn't landed) is also skipped: the two code paths read
+        # different sources with different NULL semantics. daily_update reads
+        # ESPN dicts that always set season_type, so its .get(..., 2) is
+        # defensive. Here we read DB rows where NULL is real degradation
+        # ("not yet classified"), and counting it as regular season risks
+        # leaking a postseason result into seeding. Fail closed: skip NULL,
+        # let the next daily run reclassify and recompute (see compute_standings
+        # logging in this module).
         if game.season_type != 2:
             continue
         team_a = team_by_id.get(game.team_a_id)
