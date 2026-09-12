@@ -221,3 +221,47 @@ def test_postseason_game_with_no_index_is_flagged():
     )
     assert result.has_postseason is True
     assert result.overrides == {}
+
+
+# --- settled_record_deltas (keep the Rec column honest during the overlay) ---
+
+
+def test_settled_record_deltas_credits_the_home_winner():
+    from src.scoring.live_odds import LiveOverrides, settled_record_deltas
+
+    live = LiveOverrides(overrides={0: 1.0}, settled_espn_ids=["1"])
+    deltas = settled_record_deltas(live, [("Home Team", "Away Team")], {"1": 0})
+
+    assert deltas == {"Home Team": [1, 0], "Away Team": [0, 1]}
+
+
+def test_settled_record_deltas_credits_the_away_winner():
+    from src.scoring.live_odds import LiveOverrides, settled_record_deltas
+
+    live = LiveOverrides(overrides={0: 0.0}, settled_espn_ids=["1"])
+    deltas = settled_record_deltas(live, [("Home Team", "Away Team")], {"1": 0})
+
+    assert deltas == {"Home Team": [0, 1], "Away Team": [1, 0]}
+
+
+def test_settled_record_deltas_ignores_in_progress_games():
+    """A live game's override is a probability, not a result — it must not move
+    anyone's record, or the table would credit a win that hasn't happened."""
+    from src.scoring.live_odds import LiveOverrides, settled_record_deltas
+
+    live = LiveOverrides(overrides={0: 0.97}, live_espn_ids=["1"])
+    deltas = settled_record_deltas(live, [("Home Team", "Away Team")], {"1": 0})
+
+    assert deltas == {}
+
+
+def test_settled_record_deltas_accumulates_across_a_slate():
+    from src.scoring.live_odds import LiveOverrides, settled_record_deltas
+
+    live = LiveOverrides(overrides={0: 1.0, 1: 0.0}, settled_espn_ids=["1", "2"])
+    games = [("Aces", "Liberty"), ("Liberty", "Sky")]
+    deltas = settled_record_deltas(live, games, {"1": 0, "2": 1})
+
+    # Game 0 override 1.0 -> home (Aces) won, so Liberty lost on the road.
+    # Game 1 override 0.0 -> away (Sky) won, so Liberty lost again at home.
+    assert deltas == {"Aces": [1, 0], "Liberty": [0, 2], "Sky": [1, 0]}

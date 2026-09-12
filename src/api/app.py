@@ -77,7 +77,11 @@ from src.notify.thriller import (
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
 from src.scoring.game_shape import compute_live_shape
-from src.scoring.live_odds import build_live_overrides, live_sim_seed
+from src.scoring.live_odds import (
+    build_live_overrides,
+    live_sim_seed,
+    settled_record_deltas,
+)
 from src.scoring.monte_carlo import run_monte_carlo_simulation
 from src.scoring.shot_making import (
     bridge_scale,
@@ -915,7 +919,10 @@ def _build_live_playoff_odds(session, today: str):
         win_prob_overrides=live.overrides,
         rng=rng,
     )
-    return round_probs, live
+    record_deltas = settled_record_deltas(
+        live, inputs.remaining_games, inputs.remaining_index_by_espn_id
+    )
+    return round_probs, live, record_deltas
 
 
 def _live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
@@ -931,7 +938,7 @@ def _live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
         built = _build_live_playoff_odds(session, today)
         if built is None:
             return []
-        round_probs, live = built
+        round_probs, live, record_deltas = built
         teams_by_name = {t.name: t for t in get_all_teams(session)}
         records = get_team_records(session, int(today[:4]))
         live_state = "live" if live.live_espn_ids else "settled"
@@ -941,6 +948,11 @@ def _live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
             if team is None:
                 continue
             wins, losses = records.get(team.id, (0, 0))
+            # The odds above already fold in tonight's finals; the games table
+            # will not until 6 AM. Move the record with them or the row shows
+            # post-result odds beside a pre-result W-L.
+            w_delta, l_delta = record_deltas.get(team_name, (0, 0))
+            wins, losses = wins + w_delta, losses + l_delta
             rows.append(
                 PlayoffOddsResponse(
                     team=team.name,

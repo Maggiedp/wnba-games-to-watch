@@ -2352,3 +2352,39 @@ def test_live_mode_is_immune_to_the_global_rng(client, seeded_live_slate, monkey
 
     assert all(row["live"] is True for row in first)
     assert first == second
+
+
+def test_settled_game_moves_the_displayed_record_with_the_odds(
+    client, seeded_live_slate
+):
+    """Codex adversarial review: the odds folded tonight's final in as a
+    certainty while the Rec column still read from the games table, which has
+    no intra-day refresh — so the row published post-result odds beside a
+    pre-result W-L. The record must move with the simulation that produced it.
+    """
+    _clear_live_odds_cache()
+    live = {r["team"]: r for r in client.get("/api/playoff-odds").json()}
+
+    _clear_live_odds_cache()
+    # Same slate minus the settled game: the baseline the DB alone would show.
+    monkey_games = [g for g in _todays_espn_games() if g["status"] != "STATUS_FINAL"]
+    import src.api.app as app_module
+
+    original = app_module.fetch_games_for_range
+    app_module.fetch_games_for_range = lambda *a, **k: monkey_games
+    try:
+        without = {r["team"]: r for r in client.get("/api/playoff-odds").json()}
+    finally:
+        app_module.fetch_games_for_range = original
+        _clear_live_odds_cache()
+
+    winner, loser = _SETTLED_AWAY, _SETTLED_HOME
+    assert live[winner]["wins"] == without[winner]["wins"] + 1, (
+        "the settled winner's W must include tonight's result, like the odds do"
+    )
+    assert live[loser]["losses"] == without[loser]["losses"] + 1, (
+        "the settled loser's L must include tonight's result, like the odds do"
+    )
+    # An in-progress game has no result — it must not move anyone's record.
+    assert live[_LIVE_HOME]["wins"] == without[_LIVE_HOME]["wins"]
+    assert live[_LIVE_AWAY]["wins"] == without[_LIVE_AWAY]["wins"]

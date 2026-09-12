@@ -136,3 +136,37 @@ def build_live_overrides(
         result.live_espn_ids.append(espn_id)
 
     return result
+
+
+def settled_record_deltas(
+    live: LiveOverrides,
+    remaining_games: list[tuple[str, str]],
+    remaining_index_by_espn_id: dict[str, int],
+) -> dict[str, list[int]]:
+    """{team: [wins_delta, losses_delta]} for games final at ESPN but not in the DB.
+
+    The odds fold these games in as certainty overrides, but the displayed W-L
+    comes from the games table, which has no intra-day refresh. Without this the
+    table publishes odds that already know tonight's result beside a record that
+    does not — self-contradictory on screen until the 6 AM run.
+
+    Derived from what the override map already decided (1.0 = home won, 0.0 =
+    away won), so it cannot disagree with the simulation it accompanies. Only
+    settled games count: an in-progress game has no result to add, and its
+    override is a live probability, not a certainty.
+    """
+    deltas: dict[str, list[int]] = {}
+
+    def bump(team: str, won: bool) -> None:
+        d = deltas.setdefault(team, [0, 0])
+        d[0 if won else 1] += 1
+
+    for espn_id in live.settled_espn_ids:
+        index = remaining_index_by_espn_id.get(espn_id)
+        if index is None or index not in live.overrides:
+            continue
+        home, away = remaining_games[index]
+        home_won = live.overrides[index] == 1.0
+        bump(home, home_won)
+        bump(away, not home_won)
+    return deltas
