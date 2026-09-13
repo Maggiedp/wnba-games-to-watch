@@ -867,7 +867,14 @@ def _build_live_playoff_odds(session, today: str):
     Read-only: this writes nothing, and must never touch overall_score,
     importance_score, daily_rankings or playoff_probabilities.
     """
-    inputs = build_sim_inputs(session, today)
+    # Widen to yesterday-ET on both inputs: a 10pm-ET tip is still in progress
+    # after midnight, and its Game.date is yesterday. A today-floored window
+    # would leave the live game with no index, so no override would attach and
+    # the endpoint would silently fall back to the stored snapshot during
+    # exactly the late game worth watching. Matches _detect_live_shapes, which
+    # already reports that game as live.
+    since = yesterday_et()
+    inputs = build_sim_inputs(session, since)
     if not inputs.standings or not inputs.remaining_games:
         return None
     # Between this deploy and the first daily run that writes Team.elo_rating,
@@ -879,7 +886,7 @@ def _build_live_playoff_odds(session, today: str):
 
     try:
         today_games = fetch_games_for_range(
-            date_cls.fromisoformat(today), date_cls.fromisoformat(today)
+            date_cls.fromisoformat(since), date_cls.fromisoformat(today)
         )
     except ESPNAPIError as e:
         logger.warning("live-odds: today's slate fetch failed: %s", e)

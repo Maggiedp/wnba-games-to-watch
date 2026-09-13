@@ -2388,3 +2388,41 @@ def test_settled_game_moves_the_displayed_record_with_the_odds(
     # An in-progress game has no result — it must not move anyone's record.
     assert live[_LIVE_HOME]["wins"] == without[_LIVE_HOME]["wins"]
     assert live[_LIVE_AWAY]["wins"] == without[_LIVE_AWAY]["wins"]
+
+
+def test_a_late_game_still_live_after_et_midnight_stays_in_live_mode(
+    client, seeded_live_slate, monkeypatch
+):
+    """Codex adversarial review: a 10pm-ET tip is still in progress after ET
+    midnight, and its Game.date is yesterday. The live path floored its
+    remaining-game window at today, so _detect_live_shapes reported the game
+    live while it had no index to attach an override to — live.overrides came
+    back empty and the endpoint fell back to the stored snapshot during exactly
+    the late game worth watching.
+    """
+    import datetime as _dt
+
+    import src.api.app as app_module
+    import src.data.espn_api as espn_module
+
+    tomorrow = (
+        _dt.date.fromisoformat(today_et()) + _dt.timedelta(days=1)
+    ).isoformat()
+
+    # Roll the clock past ET midnight, so the seeded slate is now YESTERDAY.
+    # Both names on purpose: app.py bound today_et by value (its date string
+    # comes from that binding), while yesterday_et resolves today_et through
+    # espn_api's own globals.
+    monkeypatch.setattr(app_module, "today_et", lambda: tomorrow)
+    monkeypatch.setattr(espn_module, "today_et", lambda: tomorrow)
+
+    _clear_live_odds_cache()
+    body = client.get("/api/playoff-odds").json()
+
+    assert body, "the stored snapshot fallback should still return rows"
+    assert all(row["live"] is True for row in body), (
+        "a game still in progress after ET midnight must keep live mode on — "
+        "flooring the window at today drops it and silently serves the stale "
+        "morning snapshot"
+    )
+    assert any(row["live_state"] == "live" for row in body)

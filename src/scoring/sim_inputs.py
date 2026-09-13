@@ -82,9 +82,17 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
     return standings
 
 
-def build_sim_inputs(session, today: str) -> SimInputs:
+def build_sim_inputs(session, since: str) -> SimInputs:
     """Assemble standings, the remaining regular-season schedule, and bracket
     state from the DB alone.
+
+    `since` is the LOWER BOUND of the remaining-game window, not "today". The
+    live overlay passes yesterday-ET: a 10pm-ET tip is still in progress after
+    ET midnight, and its Game.date is yesterday, so a today-floored window would
+    drop the very game being watched — `_detect_live_shapes` would report it
+    live while it had no index to attach an override to, and the endpoint would
+    fall back to the stored snapshot mid-game. Same widening as
+    `/api/games/upcoming` and `/api/games/live-status`.
 
     `remaining_index_by_espn_id` lets a caller address one scheduled game by its
     ESPN id — the live overlay uses it to attach per-game probability overrides.
@@ -103,7 +111,7 @@ def build_sim_inputs(session, today: str) -> SimInputs:
     team_by_id = {t.id: t for t in teams}
     remaining_games: list[tuple[str, str]] = []
     remaining_index_by_espn_id: dict[str, int] = {}
-    for game in get_upcoming_games(session, today):
+    for game in get_upcoming_games(session, since):
         # Only regular-season games drive seeding — postseason games are played
         # by the bracket sim, and counting them here would double-count playoff
         # wins into regular-season standings. NULL season_type (a DB row whose
