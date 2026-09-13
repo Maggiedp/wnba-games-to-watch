@@ -40,7 +40,6 @@ from src.data.espn_api import (
 )
 from src.db.queries import (
     get_all_known_espn_ids,
-    get_all_teams,
     get_calibration_pairs,
     get_completed_rankings,
     get_daily_rankings,
@@ -943,7 +942,7 @@ def _build_live_playoff_odds(session, today: str):
     record_deltas = settled_record_deltas(
         live, inputs.remaining_games, inputs.remaining_index_by_espn_id
     )
-    return round_probs, live, record_deltas
+    return round_probs, live, record_deltas, inputs
 
 
 def _live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
@@ -959,8 +958,8 @@ def _live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
         built = _build_live_playoff_odds(session, today)
         if built is None:
             return []
-        round_probs, live, record_deltas = built
-        teams_by_name = {t.name: t for t in get_all_teams(session)}
+        round_probs, live, record_deltas, inputs = built
+        teams_by_name = {t.name: t for t in inputs.teams}
         records = get_team_records(session, int(today[:4]))
         live_state = "live" if live.live_espn_ids else "settled"
         rows = []
@@ -1004,6 +1003,31 @@ def _live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
         session.close()
 
 
+def _cached_live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
+    """`_live_playoff_odds_rows` behind the single-flight + TTL cache.
+
+    Same shape as `get_replay_live`: check the cache, then take the build lock
+    and re-check, so concurrent viewers share ONE ~1.2s Monte Carlo rather than
+    each starting their own on a single-instance container. Returns [] when live
+    mode does not apply, which the caller reads as "fall through to the stored
+    snapshot".
+    """
+    global _live_odds_cache
+    with _live_odds_cache_lock:
+        cached = _live_odds_cache
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+    with _live_odds_build_lock:
+        with _live_odds_cache_lock:
+            cached = _live_odds_cache
+            if cached and cached[0] > time.monotonic():
+                return cached[1]  # another request built it while we waited
+        rows = _live_playoff_odds_rows(today)
+        with _live_odds_cache_lock:
+            _live_odds_cache = (time.monotonic() + _LIVE_ODDS_CACHE_TTL_S, rows)
+        return rows
+
+
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])
 def get_playoff_odds(date: str = Query(default=None)):
     """Return per-team round-by-round playoff probabilities.
@@ -1027,25 +1051,7 @@ def get_playoff_odds(date: str = Query(default=None)):
 
     # An explicit ?date= is a historical lookup and must stay exact — including
     # ?date= equal to today, whose stored snapshot is a specific 6 AM artifact.
-    live_rows = None
-    if not explicit_date:
-        with _live_odds_cache_lock:
-            cached = _live_odds_cache
-            if cached and cached[0] > time.monotonic():
-                live_rows = cached[1]
-        if live_rows is None:
-            with _live_odds_build_lock:
-                with _live_odds_cache_lock:
-                    cached = _live_odds_cache
-                    if cached and cached[0] > time.monotonic():
-                        live_rows = cached[1]
-                if live_rows is None:
-                    live_rows = _live_playoff_odds_rows(today)
-                    with _live_odds_cache_lock:
-                        _live_odds_cache = (
-                            time.monotonic() + _LIVE_ODDS_CACHE_TTL_S,
-                            live_rows,
-                        )
+    live_rows = [] if explicit_date else _cached_live_playoff_odds_rows(today)
     if live_rows:
         return live_rows
 

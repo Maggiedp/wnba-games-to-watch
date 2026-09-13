@@ -1,8 +1,15 @@
 """Monte Carlo input assembly from the DB.
 
-Both the daily run and the live-odds overlay build their sim inputs here, so
-the two paths can differ only by the live overrides, never by how standings
-or the remaining schedule were derived.
+`compute_standings` is the genuinely shared piece: the daily run and the live
+overlay both derive standings here, so they cannot disagree about wins/losses.
+
+`build_sim_inputs` is the LIVE OVERLAY's assembly and has one caller. The daily
+run still builds its own `remaining_games` from the ESPN dicts it already has in
+flight (`scripts/daily_update.py`), which is why the two differ on NULL
+`season_type` (see the comment at that filter below). Unifying the remaining
+schedule too would mean having the daily run re-read it from the DB after its
+own upsert — a real change to that path, not a rename, and deliberately not
+done here.
 """
 
 import logging
@@ -23,7 +30,12 @@ class SimInputs:
     standings: dict[str, dict]
     remaining_games: list[tuple[str, str]]
     remaining_index_by_espn_id: dict[str, int]
-    bracket_state: object | None
+    # The loaded team rows, so a caller rendering them doesn't re-query a table
+    # this function already read. Postseason deliberately has NO field here: the
+    # bracket runs through daily_update's own bracket_state, live mode disables
+    # itself on a postseason slate, and an always-None field would read as a
+    # working extension point rather than the dead scaffolding it was.
+    teams: list
     # False when any team is missing Team.elo_rating — i.e. no daily run has
     # written it yet. The live overlay must stand down rather than simulate a
     # league where every team is INITIAL_RATING. The daily run ignores this:
@@ -31,8 +43,15 @@ class SimInputs:
     elo_populated: bool = True
 
 
-def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]:
-    all_teams = get_all_teams(session)
+def compute_standings(
+    session, elo_ratings: dict[str, float], teams: list | None = None
+) -> dict[str, dict]:
+    """Regular-season W/L + h2h per team, with `elo_ratings` attached.
+
+    `teams` lets a caller that has already loaded the table pass it in rather
+    than re-querying; omitted, it loads them itself (the daily run's call).
+    """
+    all_teams = teams if teams is not None else get_all_teams(session)
     # Every team is already in memory — a per-game get_team_by_id here was an
     # N+1 (2.2 queries per completed game, ~650 round-trips over a full season).
     team_by_id = {t.id: t for t in all_teams}
@@ -83,8 +102,7 @@ def compute_standings(session, elo_ratings: dict[str, float]) -> dict[str, dict]
 
 
 def build_sim_inputs(session, since: str) -> SimInputs:
-    """Assemble standings, the remaining regular-season schedule, and bracket
-    state from the DB alone.
+    """Assemble standings and the remaining regular-season schedule from the DB.
 
     `since` is the LOWER BOUND of the remaining-game window, not "today". The
     live overlay passes yesterday-ET: a 10pm-ET tip is still in progress after
@@ -106,7 +124,7 @@ def build_sim_inputs(session, since: str) -> SimInputs:
         t.name: (t.elo_rating if t.elo_rating is not None else INITIAL_RATING)
         for t in teams
     }
-    standings = compute_standings(session, elo_ratings)
+    standings = compute_standings(session, elo_ratings, teams=teams)
 
     team_by_id = {t.id: t for t in teams}
     remaining_games: list[tuple[str, str]] = []
@@ -137,6 +155,6 @@ def build_sim_inputs(session, since: str) -> SimInputs:
         standings=standings,
         remaining_games=remaining_games,
         remaining_index_by_espn_id=remaining_index_by_espn_id,
-        bracket_state=None,
+        teams=teams,
         elo_populated=elo_populated,
     )
