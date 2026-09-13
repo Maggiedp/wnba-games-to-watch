@@ -2,6 +2,10 @@
 
 from pathlib import Path
 
+import pytest
+
+from src.constants import CURRENT_SEASON
+
 
 def test_quantize_rounds_to_the_nearest_percentage_point():
     from src.scoring.live_odds import quantize_win_prob
@@ -265,3 +269,137 @@ def test_settled_record_deltas_accumulates_across_a_slate():
     # Game 0 override 1.0 -> home (Aces) won, so Liberty lost on the road.
     # Game 1 override 0.0 -> away (Sky) won, so Liberty lost again at home.
     assert deltas == {"Aces": [1, 0], "Liberty": [0, 2], "Sky": [1, 0]}
+
+
+# --- settled_elo_updates (a decided game is a fact; replay it like the daily run) ---
+
+
+def _elo_game(event_id, winner, sa, sb, season_type=2):
+    return {
+        "event_id": event_id,
+        "team_a": "Home Team",
+        "team_b": "Away Team",
+        "winner_team": winner,
+        "final_score_a": sa,
+        "final_score_b": sb,
+        "status": "STATUS_FINAL",
+        "season_type": season_type,
+    }
+
+
+def test_settled_elo_update_matches_the_daily_replay_exactly():
+    """The whole point is agreeing with the 6 AM number. Parameters must mirror
+    replay_games: k=DEFAULT_K, home_advantage=0.0 (its default, which
+    daily_update's bare replay_games(completed) call uses), MOV on."""
+    from src.scoring.elo import update_ratings
+    from src.scoring.live_odds import build_live_overrides, settled_elo_updates
+
+    games = [("Home Team", "Away Team")]
+    live = build_live_overrides(
+        [_elo_game("1", "Home Team", 90, 78)], {}, {"1": 0}, games
+    )
+    updated = settled_elo_updates(live, games, {"Home Team": 1500.0, "Away Team": 1600.0})
+
+    expected_home, expected_away = update_ratings(
+        1500.0, 1600.0, team_a_won=True, home_advantage=0.0, mov=12
+    )
+    assert updated["Home Team"] == expected_home
+    assert updated["Away Team"] == expected_away
+    assert updated["Home Team"] > 1500.0  # the upset winner gains
+
+
+def test_settled_elo_update_is_zero_sum():
+    from src.scoring.live_odds import build_live_overrides, settled_elo_updates
+
+    games = [("Home Team", "Away Team")]
+    live = build_live_overrides(
+        [_elo_game("1", "Away Team", 80, 95)], {}, {"1": 0}, games
+    )
+    before = {"Home Team": 1500.0, "Away Team": 1500.0}
+    after = settled_elo_updates(live, games, before)
+
+    moved = after["Home Team"] - before["Home Team"]
+    assert moved < 0  # the home side lost
+    assert after["Away Team"] - before["Away Team"] == pytest.approx(-moved)
+
+
+def test_an_in_progress_game_never_moves_elo():
+    """A live game has no result. Only decided games are facts."""
+    from src.scoring.live_odds import build_live_overrides, settled_elo_updates
+
+    games = [("Home Team", "Away Team")]
+    live = build_live_overrides(
+        [{**_elo_game("1", None, None, None), "status": "STATUS_IN_PROGRESS"}],
+        {"1": 0.97},
+        {"1": 0},
+        games,
+    )
+    before = {"Home Team": 1500.0, "Away Team": 1600.0}
+    assert settled_elo_updates(live, games, before) == before
+
+
+def test_a_final_with_no_usable_scores_still_updates_at_multiplier_one():
+    """MOV unknown must not skip the update — replay_games does the same."""
+    from src.scoring.live_odds import build_live_overrides, settled_elo_updates
+
+    games = [("Home Team", "Away Team")]
+    live = build_live_overrides(
+        [_elo_game("1", "Home Team", None, None)], {}, {"1": 0}, games
+    )
+    updated = settled_elo_updates(live, games, {"Home Team": 1500.0, "Away Team": 1600.0})
+
+    assert updated["Home Team"] > 1500.0
+
+
+def test_two_settled_games_compound_in_slate_order():
+    from src.scoring.live_odds import build_live_overrides, settled_elo_updates
+
+    games = [("Home Team", "Away Team"), ("Home Team", "Third Team")]
+    slate = [
+        _elo_game("1", "Home Team", 90, 80),
+        {**_elo_game("2", "Home Team", 88, 70), "team_b": "Third Team"},
+    ]
+    live = build_live_overrides(slate, {}, {"1": 0, "2": 1}, games)
+    updated = settled_elo_updates(
+        live, games, {"Home Team": 1500.0, "Away Team": 1600.0, "Third Team": 1500.0}
+    )
+
+    # Two wins compound: strictly more than either alone.
+    one_only = build_live_overrides([slate[0]], {}, {"1": 0}, games)
+    after_one = settled_elo_updates(
+        one_only, games, {"Home Team": 1500.0, "Away Team": 1600.0, "Third Team": 1500.0}
+    )
+    assert updated["Home Team"] > after_one["Home Team"] > 1500.0
+
+
+def test_settled_elo_reproduces_the_daily_replay_bit_for_bit():
+    """The parity that matters: the overlay and tomorrow's 6 AM snapshot must
+    agree on a decided game, not merely be close. Pins the parameters against
+    the real replay_games, so a future home_advantage/k drift fails here rather
+    than showing up as a silent live-vs-daily disagreement in production."""
+    from src.scoring.elo import replay_games
+    from src.scoring.live_odds import build_live_overrides, settled_elo_updates
+
+    games = [("Home Team", "Away Team")]
+    slate = [_elo_game("1", "Home Team", 90, 78)]
+    start = {"Home Team": 1500.0, "Away Team": 1600.0}
+
+    live = build_live_overrides(slate, {}, {"1": 0}, games)
+    live_elo = settled_elo_updates(live, games, start)
+
+    daily = replay_games(
+        [
+            {
+                "team_a": "Home Team",
+                "team_b": "Away Team",
+                "winner_team": "Home Team",
+                "final_score_a": 90,
+                "final_score_b": 78,
+                "date": f"{CURRENT_SEASON}-09-20",
+                "event_id": "1",
+            }
+        ],
+        initial_ratings=dict(start),
+    ).final_ratings
+
+    assert live_elo == daily

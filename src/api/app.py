@@ -80,6 +80,7 @@ from src.scoring.game_shape import compute_live_shape
 from src.scoring.live_odds import (
     build_live_overrides,
     live_sim_seed,
+    settled_elo_updates,
     settled_record_deltas,
 )
 from src.scoring.monte_carlo import run_monte_carlo_simulation
@@ -903,6 +904,19 @@ def _build_live_playoff_odds(session, today: str):
     # number built the wrong way.
     if live.has_postseason or not live.overrides:
         return None
+
+    # A settled final is a FACT the 6 AM Elo replay will consume, so consume it
+    # here too — otherwise the overlay publishes odds that know tonight's result
+    # while still rating the teams as they were this morning (measured: up to
+    # ~4pp on a seed cell, 8x the sim's own noise). Applied BEFORE the seed, so
+    # the seed covers the standings the sim actually runs on.
+    updated_elo = settled_elo_updates(
+        live,
+        inputs.remaining_games,
+        {name: row["elo"] for name, row in inputs.standings.items()},
+    )
+    for name, row in inputs.standings.items():
+        row["elo"] = updated_elo[name]
 
     # Seed from the quantized inputs, never hash() (salted per process). A 10k
     # run carries ~±0.5pp of jitter, which is larger than the championship

@@ -14,6 +14,8 @@ number, exactly.
 import hashlib
 import json
 import logging
+
+from src.scoring.elo import update_ratings
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -67,6 +69,9 @@ class LiveOverrides:
     live_espn_ids: list[str] = field(default_factory=list)
     settled_espn_ids: list[str] = field(default_factory=list)
     has_postseason: bool = False
+    # {remaining_games index: |final margin|}, in slate order. Feeds the Elo
+    # replay below; None when ESPN reported a final without usable scores.
+    settled_margins: dict[int, "int | None"] = field(default_factory=dict)
 
 
 def build_live_overrides(
@@ -126,6 +131,10 @@ def build_live_overrides(
                     away,
                 )
                 continue
+            sa, sb = game.get("final_score_a"), game.get("final_score_b")
+            result.settled_margins[index] = (
+                abs(int(sa) - int(sb)) if sa is not None and sb is not None else None
+            )
             result.settled_espn_ids.append(espn_id)
             continue
 
@@ -170,3 +179,50 @@ def settled_record_deltas(
         bump(home, home_won)
         bump(away, not home_won)
     return deltas
+
+
+def settled_elo_updates(
+    live: LiveOverrides,
+    remaining_games: list[tuple[str, str]],
+    elo_by_team: dict[str, float],
+) -> dict[str, float]:
+    """Elo after replaying tonight's settled finals, as the 6 AM run will see it.
+
+    A settled final is a FACT, not a simulated outcome — the daily Elo replay
+    will consume it, so the live overlay must too. Without this the overlay
+    publishes odds that already know tonight's result while still rating the
+    teams as they were this morning; measured at up to ~4pp on a seed cell,
+    which is 8x the Monte Carlo's own sampling noise.
+
+    Simulated games deliberately do NOT move a rating: inside one simulation a
+    future game is a hypothesis, and the sim holds strength fixed across its
+    whole horizon. Only decided games are facts. That asymmetry is the point,
+    not an inconsistency.
+
+    Parameters mirror `replay_games` EXACTLY — k=DEFAULT_K, home_advantage=0.0
+    (its default, and what daily_update's bare `replay_games(completed)` call
+    uses), MOV on when scores are known. A different home_advantage here would
+    reintroduce the very live-vs-daily disagreement this closes.
+    """
+    updated = dict(elo_by_team)
+    # Insertion order is slate order, so a team playing twice compounds correctly.
+    for index, margin in live.settled_margins.items():
+        prob = live.overrides.get(index)
+        if prob is None:
+            continue
+        home, away = remaining_games[index]
+        if home not in updated or away not in updated:
+            logger.warning(
+                "live-odds: settled game %s/%s missing from Elo; not replayed",
+                home,
+                away,
+            )
+            continue
+        updated[home], updated[away] = update_ratings(
+            updated[home],
+            updated[away],
+            team_a_won=prob == 1.0,
+            home_advantage=0.0,
+            mov=margin,
+        )
+    return updated

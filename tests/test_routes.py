@@ -2426,3 +2426,41 @@ def test_a_late_game_still_live_after_et_midnight_stays_in_live_mode(
         "morning snapshot"
     )
     assert any(row["live_state"] == "live" for row in body)
+
+
+def test_a_settled_final_moves_elo_sensitive_odds_before_the_daily_run(
+    client, seeded_live_slate, monkeypatch
+):
+    """Codex adversarial review: a settled final folded its OUTCOME into the
+    overlay but not its Elo effect, so the published numbers used this
+    morning's team strength and disagreed with the next daily snapshot for the
+    same result (measured up to ~4pp on a seed cell, 8x the sim's own noise).
+
+    A decided game is a fact the 6 AM Elo replay will consume, so the overlay
+    must consume it too.
+    """
+    import src.api.app as app_module
+
+    _clear_live_odds_cache()
+    with_elo = {r["team"]: r for r in client.get("/api/playoff-odds").json()}
+
+    # Same request with the settled game's Elo effect suppressed: the pre-fix
+    # behaviour, where only W/L moved.
+    monkeypatch.setattr(
+        app_module, "settled_elo_updates", lambda live, games, elo: dict(elo)
+    )
+    _clear_live_odds_cache()
+    without_elo = {r["team"]: r for r in client.get("/api/playoff-odds").json()}
+    _clear_live_odds_cache()
+
+    assert with_elo and without_elo
+    # The settled winner's rating rose, so its round odds must differ.
+    moved = [
+        t
+        for t in with_elo
+        if with_elo[t]["reach_semis_prob"] != without_elo[t]["reach_semis_prob"]
+    ]
+    assert moved, (
+        "replaying the settled final's Elo must change the published odds — "
+        "otherwise the overlay is still rating teams as of this morning"
+    )
