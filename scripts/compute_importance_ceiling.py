@@ -2,7 +2,7 @@
 
 Walks the target season chronologically. For each date, seeds every season team
 at 0-0 and applies results strictly before that date — mirroring production
-daily_update.compute_standings — then runs one seeded 10k Monte Carlo over the
+src.scoring.sim_inputs.compute_standings — then runs one seeded 10k Monte Carlo over the
 full remaining schedule and reads each same-day game's corrected all-team swing
 from compute_importance_from_matrix, the same method the daily job uses live. A
 game's swing peaks on the day it's played (standings most developed), so
@@ -59,7 +59,7 @@ def main() -> None:
     )
 
     # Full season team set, seeded 0-0 each date exactly like production
-    # daily_update.compute_standings (which initializes every known team before
+    # src.scoring.sim_inputs.compute_standings (which initializes every known team before
     # tallying results) — so the sim's team pool + schedule match the live
     # ranking path, not just the subset that has already played.
     all_season_teams = {

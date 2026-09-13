@@ -719,6 +719,8 @@ def test_playoff_odds_endpoint_shape_and_sort(env, client):
         "wins",
         "losses",
         "seed_distribution",
+        "live",
+        "live_state",
     }
     assert rows[0]["make_playoffs_prob"] == pytest.approx(0.90)
     assert rows[0]["win_championship_prob"] == pytest.approx(0.10)
@@ -1993,3 +1995,472 @@ def test_homepage_has_no_playoff_picture(client):
     assert 'id="playoff-section"' not in html
     assert 'id="playoff-table"' not in html
     assert "Show playoff picture" not in html
+
+
+# --- /api/playoff-odds live mode -------------------------------------------
+#
+# The fixture below is built so that ONE settled game decides the 1 seed.
+# Aces and Liberty are tied at 6 wins with every other team on 0, and they play
+# each other tonight. ESPN reports Liberty already won — but Liberty is the road
+# team and 250 Elo points worse, so the Elo-derived probability points the other
+# way (~85% Aces). That gap is the whole point: it makes the settled-game
+# fold-in *observable* in the published seeding rather than merely present.
+
+_SETTLED_HOME = "Las Vegas Aces"  # tonight's host; the Elo favourite
+_SETTLED_AWAY = "New York Liberty"  # tonight's visitor; ESPN says it already won
+_LIVE_HOME = "Seattle Storm"
+_LIVE_AWAY = "Phoenix Mercury"
+_SETTLED_ESPN_ID = "401900001"
+_LIVE_ESPN_ID = "401900002"
+_LIVE_HOME_PCT = 0.72
+
+
+def _todays_espn_games():
+    """_parse_event-shaped dicts for tonight: one in progress, one already final."""
+    today = today_et()
+    return [
+        {
+            "event_id": _LIVE_ESPN_ID,
+            "team_a": _LIVE_HOME,
+            "team_b": _LIVE_AWAY,
+            "date": today,
+            "status": "STATUS_IN_PROGRESS",
+            "winner_team": None,
+            "season_type": 2,
+        },
+        {
+            "event_id": _SETTLED_ESPN_ID,
+            "team_a": _SETTLED_HOME,
+            "team_b": _SETTLED_AWAY,
+            "date": today,
+            "status": "STATUS_FINAL",
+            "winner_team": _SETTLED_AWAY,
+            "season_type": 2,
+        },
+    ]
+
+
+def _clear_live_odds_cache():
+    import src.api.app as app_module
+
+    with app_module._live_odds_cache_lock:
+        app_module._live_odds_cache = None
+
+
+@pytest.fixture
+def seeded_live_slate(env, monkeypatch):
+    """15 real teams, a two-game slate tonight, and a stored snapshot to fall
+    back to. See the block comment above for why the standings are shaped this
+    way."""
+    import src.api.app as app_module
+    from src.constants import CURRENT_SEASON, TEAM_CONFERENCES
+    from src.db.queries import set_team_elo_ratings
+
+    session = env.get_session()
+    names = list(TEAM_CONFERENCES)
+    for i, name in enumerate(names):
+        upsert_team(
+            session,
+            name=name,
+            abbreviation=f"T{i:02d}",
+            logo_url="",
+            bpi_rating=0.0,
+        )
+    ids = {t.name: t.id for t in session.query(env.Team).all()}
+
+    # Completed history: Aces 6-0, Liberty 6-0, everyone else 0-1 or 0-0.
+    # Seeding sorts on WINS, so no other team can reach the 6/7 win range.
+    others = [n for n in names if n not in (_SETTLED_HOME, _SETTLED_AWAY)]
+    for winner, victims, tag in (
+        (_SETTLED_HOME, others[:6], "A"),
+        (_SETTLED_AWAY, others[6:12], "B"),
+    ):
+        for k, opp in enumerate(victims):
+            upsert_game(
+                session,
+                team_a_id=ids[winner],
+                team_b_id=ids[opp],
+                date=f"{CURRENT_SEASON}-06-{k + 1:02d}",
+                time="7:00 PM ET",
+                broadcaster="ESPN",
+                winner_id=ids[winner],
+                final_score_a=90,
+                final_score_b=80,
+                espn_id=f"hist{tag}{k}",
+                season_type=2,
+            )
+
+    today = today_et()
+    upsert_game(
+        session,
+        team_a_id=ids[_SETTLED_HOME],
+        team_b_id=ids[_SETTLED_AWAY],
+        date=today,
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id=_SETTLED_ESPN_ID,
+        season_type=2,
+    )
+    upsert_game(
+        session,
+        team_a_id=ids[_LIVE_HOME],
+        team_b_id=ids[_LIVE_AWAY],
+        date=today,
+        time="9:00 PM ET",
+        broadcaster="ESPN",
+        espn_id=_LIVE_ESPN_ID,
+        season_type=2,
+    )
+
+    # Distinct Elo per team keeps the tail of the bracket from hanging on the
+    # tiebreaker fixed point; the 250-point Aces/Liberty gap is the one that
+    # matters (see the block comment).
+    ratings = {name: 1300.0 + 5.0 * i for i, name in enumerate(others)}
+    ratings[_SETTLED_HOME] = 1700.0
+    ratings[_SETTLED_AWAY] = 1450.0
+    set_team_elo_ratings(session, ratings)
+
+    # A stored snapshot for today, so "falls back to the stored snapshot" is a
+    # real fallback and not an empty response that would pass either way.
+    for name in names:
+        upsert_playoff_probability(
+            session,
+            date=today,
+            team_id=ids[name],
+            probability=0.5,
+            reach_semis_prob=0.3,
+            reach_finals_prob=0.2,
+            win_championship_prob=0.1,
+            seed_distribution=json.dumps({"1": 0.125}),
+        )
+    session.close()
+
+    monkeypatch.setattr(
+        app_module, "fetch_games_for_range", lambda *a, **k: _todays_espn_games()
+    )
+    monkeypatch.setattr(
+        app_module, "_detect_live_wps", lambda: {_LIVE_ESPN_ID: _LIVE_HOME_PCT}
+    )
+    _clear_live_odds_cache()
+    yield
+    _clear_live_odds_cache()
+
+
+def test_playoff_odds_serves_live_numbers_when_a_game_is_in_progress(
+    client, seeded_live_slate
+):
+    """Live mode replaces the stored snapshot in place."""
+    resp = client.get("/api/playoff-odds")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body, "live mode must still return rows"
+    assert all(row["live"] is True for row in body)
+    assert any(row["live_state"] == "live" for row in body)
+    # Not the stored snapshot's flat 0.5/0.1 placeholder values.
+    assert {row["make_playoffs_prob"] for row in body} != {0.5}
+
+
+def test_explicit_date_never_goes_live(client, seeded_live_slate):
+    """A historical lookup must stay exact — including ?date= equal to today."""
+    resp = client.get(f"/api/playoff-odds?date={today_et()}")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert rows
+    assert all(row["live"] is False for row in rows)
+    assert all(row["live_state"] is None for row in rows)
+    assert all(row["make_playoffs_prob"] == 0.5 for row in rows)
+
+
+def test_postseason_on_the_slate_disables_live_mode(
+    client, seeded_live_slate, monkeypatch
+):
+    """The bracket runs through bracket_state, not remaining_games — out of
+    scope for this overlay, so it must fall back rather than publish a number
+    built on the wrong model."""
+    monkeypatch.setattr(
+        "src.api.app.fetch_games_for_range",
+        lambda *a, **k: [{**g, "season_type": 3} for g in _todays_espn_games()],
+    )
+    rows = client.get("/api/playoff-odds").json()
+    assert rows
+    assert all(row["live"] is False for row in rows)
+
+
+def test_missing_team_elo_disables_live_mode(client, env, seeded_live_slate):
+    """Between deploy and the first daily run Team.elo_rating is NULL and
+    build_sim_inputs falls back to INITIAL_RATING — a coin-flip league. The
+    stored snapshot is strictly better than publishing that."""
+    session = env.get_session()
+    session.query(env.Team).filter_by(name=_LIVE_HOME).one().elo_rating = None
+    session.commit()
+    session.close()
+
+    rows = client.get("/api/playoff-odds").json()
+    assert rows
+    assert all(row["live"] is False for row in rows)
+
+
+def test_scoreboard_failure_degrades_to_the_stored_snapshot(
+    client, seeded_live_slate, monkeypatch
+):
+    """An ESPN outage must not take down a page that has a good number to show."""
+    from src.data.espn_api import ESPNAPIError
+
+    def _boom(*args, **kwargs):
+        raise ESPNAPIError("scoreboard down")
+
+    monkeypatch.setattr("src.api.app.fetch_games_for_range", _boom)
+    resp = client.get("/api/playoff-odds")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert rows
+    assert all(row["live"] is False for row in rows)
+
+
+def test_unexpected_failure_on_the_live_path_degrades_to_the_snapshot(
+    client, seeded_live_slate, monkeypatch
+):
+    """Anything at all going wrong in the overlay falls back with a 200."""
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulation exploded")
+
+    monkeypatch.setattr("src.api.app.run_monte_carlo_simulation", _boom)
+    resp = client.get("/api/playoff-odds")
+    assert resp.status_code == 200
+    assert all(row["live"] is False for row in resp.json())
+
+
+def test_live_result_is_deterministic_across_calls(client, seeded_live_slate):
+    """Same game state must yield byte-identical numbers — the champ column's
+    real movement is smaller than 10k sampling jitter."""
+    first = client.get("/api/playoff-odds").json()
+    _clear_live_odds_cache()  # defeat the response cache
+    second = client.get("/api/playoff-odds").json()
+    assert first == second
+    assert all(row["live"] is True for row in first)
+
+
+def test_live_mode_writes_nothing(client, env, seeded_live_slate):
+    """Read-only: the live overlay must not touch the stored snapshot."""
+    from src.db.queries import get_playoff_probabilities
+
+    client.get("/api/playoff-odds")
+
+    session = env.get_session()
+    recs = get_playoff_probabilities(session, today_et())
+    session.close()
+    assert recs
+    assert all(r.make_playoffs_prob == 0.5 for r in recs.values())
+    assert all(r.win_championship_prob == 0.1 for r in recs.values())
+
+
+def test_settled_game_absent_from_the_db_changes_the_published_seeding(
+    client, seeded_live_slate, monkeypatch
+):
+    """Deliberate-break guard: drop the settled-game fold-in and this must fail.
+
+    Asserts on the seeding OUTCOME, not merely on the responses differing.
+    Removing an override also changes the RNG seed, so a bare `a != b` would
+    pass on sampling jitter alone with the fold-in deleted.
+    """
+    with_fold_in = {r["team"]: r for r in client.get("/api/playoff-odds").json()}
+    monkeypatch.setattr(
+        "src.api.app.fetch_games_for_range",
+        lambda *a, **k: [
+            g for g in _todays_espn_games() if g["status"] != "STATUS_FINAL"
+        ],
+    )
+    _clear_live_odds_cache()
+    without = {r["team"]: r for r in client.get("/api/playoff-odds").json()}
+
+    # Folded in, Liberty's win is certain and it owns the 1 seed outright.
+    assert with_fold_in[_SETTLED_AWAY]["seed_distribution"]["1"] > 0.99
+    # Ignored, the game reverts to Elo — which favours the Aces at home.
+    assert without[_SETTLED_AWAY]["seed_distribution"]["1"] < 0.30
+    assert without[_SETTLED_HOME]["seed_distribution"]["1"] > 0.70
+
+
+def test_detect_live_wps_reads_the_last_curve_sample(monkeypatch):
+    """LiveShape.curve is [[elapsed_seconds, home_pct], ...] — a list of PAIRS,
+    not of dicts. downsample_curve always keeps the last sample."""
+    import src.api.app as app_module
+
+    monkeypatch.setattr(
+        app_module,
+        "_detect_live_shapes",
+        lambda: (
+            [
+                {"espn_id": "1", "curve": [[0.0, 0.5], [600.0, 0.63]]},
+                {"espn_id": "2", "curve": []},
+                {"espn_id": "3", "curve": [[0.0, float("nan")]]},
+                {"espn_id": "4"},
+            ],
+            True,
+        ),
+    )
+    assert app_module._detect_live_wps() == {"1": 0.63}
+
+
+def test_detect_live_wps_never_raises_on_a_scoreboard_outage(monkeypatch):
+    """/api/replay-live 502s because it has nothing else to show; the odds page
+    has a stored snapshot, so an outage must degrade to no overrides."""
+    import src.api.app as app_module
+    from fastapi import HTTPException
+
+    def _boom():
+        raise HTTPException(status_code=502, detail="ESPN scoreboard unreachable")
+
+    monkeypatch.setattr(app_module, "_detect_live_shapes", _boom)
+    assert app_module._detect_live_wps() == {}
+
+
+def test_live_mode_is_immune_to_the_global_rng(client, seeded_live_slate, monkeypatch):
+    """The live path owns a private random.Random and must not read or write
+    process-global RNG state.
+
+    This is not hypothetical: scripts/daily_update seeds the global RNG and runs
+    its own multi-second Monte Carlo in THIS process, on the threadpool, whenever
+    /internal/daily-update is re-triggered — the documented manual fix-it action.
+    Its draws would interleave with a live build.
+
+    Seeding the global *around* the requests would prove nothing: the earlier
+    implementation called random.seed() on entry and simply overwrote it. So the
+    stand-in for that concurrent run steals a varying number of global draws from
+    INSIDE the simulation loop, at a phase that differs between the two builds.
+    """
+    import random as _random
+
+    from src.scoring import monte_carlo
+
+    real_resolve = monte_carlo.resolve_seeding
+    phase = [0]
+
+    def _resolve_stealing_global_draws(standings):
+        phase[0] += 1
+        for _ in range(phase[0] % 3 + 1):
+            _random.random()
+        return real_resolve(standings)
+
+    monkeypatch.setattr(monte_carlo, "resolve_seeding", _resolve_stealing_global_draws)
+
+    _random.seed(1)
+    first = client.get("/api/playoff-odds").json()
+    _clear_live_odds_cache()
+    _random.seed(20260910)
+    second = client.get("/api/playoff-odds").json()
+
+    assert all(row["live"] is True for row in first)
+    assert first == second
+
+
+def test_settled_game_moves_the_displayed_record_with_the_odds(
+    client, seeded_live_slate
+):
+    """Codex adversarial review: the odds folded tonight's final in as a
+    certainty while the Rec column still read from the games table, which has
+    no intra-day refresh — so the row published post-result odds beside a
+    pre-result W-L. The record must move with the simulation that produced it.
+    """
+    _clear_live_odds_cache()
+    live = {r["team"]: r for r in client.get("/api/playoff-odds").json()}
+
+    _clear_live_odds_cache()
+    # Same slate minus the settled game: the baseline the DB alone would show.
+    monkey_games = [g for g in _todays_espn_games() if g["status"] != "STATUS_FINAL"]
+    import src.api.app as app_module
+
+    original = app_module.fetch_games_for_range
+    app_module.fetch_games_for_range = lambda *a, **k: monkey_games
+    try:
+        without = {r["team"]: r for r in client.get("/api/playoff-odds").json()}
+    finally:
+        app_module.fetch_games_for_range = original
+        _clear_live_odds_cache()
+
+    winner, loser = _SETTLED_AWAY, _SETTLED_HOME
+    assert live[winner]["wins"] == without[winner]["wins"] + 1, (
+        "the settled winner's W must include tonight's result, like the odds do"
+    )
+    assert live[loser]["losses"] == without[loser]["losses"] + 1, (
+        "the settled loser's L must include tonight's result, like the odds do"
+    )
+    # An in-progress game has no result — it must not move anyone's record.
+    assert live[_LIVE_HOME]["wins"] == without[_LIVE_HOME]["wins"]
+    assert live[_LIVE_AWAY]["wins"] == without[_LIVE_AWAY]["wins"]
+
+
+def test_a_late_game_still_live_after_et_midnight_stays_in_live_mode(
+    client, seeded_live_slate, monkeypatch
+):
+    """Codex adversarial review: a 10pm-ET tip is still in progress after ET
+    midnight, and its Game.date is yesterday. The live path floored its
+    remaining-game window at today, so _detect_live_shapes reported the game
+    live while it had no index to attach an override to — live.overrides came
+    back empty and the endpoint fell back to the stored snapshot during exactly
+    the late game worth watching.
+    """
+    import datetime as _dt
+
+    import src.api.app as app_module
+    import src.data.espn_api as espn_module
+
+    tomorrow = (
+        _dt.date.fromisoformat(today_et()) + _dt.timedelta(days=1)
+    ).isoformat()
+
+    # Roll the clock past ET midnight, so the seeded slate is now YESTERDAY.
+    # Both names on purpose: app.py bound today_et by value (its date string
+    # comes from that binding), while yesterday_et resolves today_et through
+    # espn_api's own globals.
+    monkeypatch.setattr(app_module, "today_et", lambda: tomorrow)
+    monkeypatch.setattr(espn_module, "today_et", lambda: tomorrow)
+
+    _clear_live_odds_cache()
+    body = client.get("/api/playoff-odds").json()
+
+    assert body, "the stored snapshot fallback should still return rows"
+    assert all(row["live"] is True for row in body), (
+        "a game still in progress after ET midnight must keep live mode on — "
+        "flooring the window at today drops it and silently serves the stale "
+        "morning snapshot"
+    )
+    assert any(row["live_state"] == "live" for row in body)
+
+
+def test_a_settled_final_moves_elo_sensitive_odds_before_the_daily_run(
+    client, seeded_live_slate, monkeypatch
+):
+    """Codex adversarial review: a settled final folded its OUTCOME into the
+    overlay but not its Elo effect, so the published numbers used this
+    morning's team strength and disagreed with the next daily snapshot for the
+    same result (measured up to ~4pp on a seed cell, 8x the sim's own noise).
+
+    A decided game is a fact the 6 AM Elo replay will consume, so the overlay
+    must consume it too.
+    """
+    import src.api.app as app_module
+
+    _clear_live_odds_cache()
+    with_elo = {r["team"]: r for r in client.get("/api/playoff-odds").json()}
+
+    # Same request with the settled game's Elo effect suppressed: the pre-fix
+    # behaviour, where only W/L moved.
+    monkeypatch.setattr(
+        app_module, "settled_elo_updates", lambda live, games, elo: dict(elo)
+    )
+    _clear_live_odds_cache()
+    without_elo = {r["team"]: r for r in client.get("/api/playoff-odds").json()}
+    _clear_live_odds_cache()
+
+    assert with_elo and without_elo
+    # The settled winner's rating rose, so its round odds must differ.
+    moved = [
+        t
+        for t in with_elo
+        if with_elo[t]["reach_semis_prob"] != without_elo[t]["reach_semis_prob"]
+    ]
+    assert moved, (
+        "replaying the settled final's Elo must change the published odds — "
+        "otherwise the overlay is still rating teams as of this morning"
+    )

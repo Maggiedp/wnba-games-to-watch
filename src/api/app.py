@@ -3,7 +3,9 @@
 import asyncio
 import json
 import logging
+import math
 import os
+import random
 import threading
 import time
 from collections import OrderedDict
@@ -30,6 +32,7 @@ from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
     clock_season,
+    fetch_games_for_range,
     fetch_live_win_probability,
     fetch_today_game_statuses,
     today_et,
@@ -73,11 +76,19 @@ from src.notify.thriller import (
 from src.db.schema import get_session, init_db
 from src.scoring.calibration import compute_calibration
 from src.scoring.game_shape import compute_live_shape
+from src.scoring.live_odds import (
+    build_live_overrides,
+    live_sim_seed,
+    settled_elo_updates,
+    settled_record_deltas,
+)
+from src.scoring.monte_carlo import run_monte_carlo_simulation
 from src.scoring.shot_making import (
     bridge_scale,
     build_baseline,
     compute_player_shot_chart,
 )
+from src.scoring.sim_inputs import build_sim_inputs
 from src.scoring.team_style import compute_style_view
 
 logger = logging.getLogger(__name__)
@@ -667,6 +678,15 @@ _replay_live_cache: "tuple[float, dict] | None" = None
 _replay_live_cache_lock = threading.Lock()
 _replay_live_build_lock = threading.Lock()
 
+# Live playoff-odds overlay. Same single-flight + short-TTL shape as
+# _replay_live_cache: one recompute is shared by every concurrent viewer.
+# The Monte Carlo is ~1.2s of GIL-held CPU on --max-instances=1, so this
+# cache is what keeps that to once per TTL rather than once per request.
+_LIVE_ODDS_CACHE_TTL_S = 15
+_live_odds_cache: "tuple[float, list] | None" = None
+_live_odds_cache_lock = threading.Lock()
+_live_odds_build_lock = threading.Lock()
+
 # Serializes the thriller poll's per-game check-send-record critical section so
 # two overlapping polls (a slow poll still running at the next 5-min fire, or a
 # manual replay) can't both pass the has_alerted check and double-send. One
@@ -770,6 +790,35 @@ def _detect_live_shapes():
     return games, has_pending
 
 
+def _detect_live_wps() -> dict[str, float]:
+    """{espn_id: latest home win probability} for games in progress.
+
+    Thin sibling of _detect_live_shapes: same detection and the same shared
+    bounded pool, but it returns only what the odds overlay needs and NEVER
+    raises. /api/replay-live surfaces a scoreboard outage to the client because
+    it has nothing else to show; /api/playoff-odds has a stored snapshot, so an
+    outage must degrade to that instead of failing the page.
+    """
+    try:
+        games, _ = _detect_live_shapes()
+    except HTTPException:
+        logger.warning("live-odds: live shape detection failed; no WP overrides")
+        return {}
+    out: dict[str, float] = {}
+    for g in games:
+        # LiveShape.curve is [[elapsed_seconds, home_pct], ...] — pairs, not
+        # dicts — and downsample_curve always keeps the last sample, so [-1][1]
+        # is the latest home-oriented win probability.
+        curve = g.get("curve") or []
+        last = curve[-1] if curve else None
+        if not isinstance(last, (list, tuple)) or len(last) < 2:
+            continue
+        home_pct = last[1]
+        if isinstance(home_pct, (int, float)) and math.isfinite(home_pct):
+            out[g["espn_id"]] = float(home_pct)
+    return out
+
+
 def _build_replay_live() -> dict:
     """Compute the live slate for /api/replay-live (raises 502 on today failure).
     get_replay_live() wraps this with the response cache."""
@@ -811,19 +860,201 @@ def get_replay_live():
 _PLAYOFF_FALLBACK_MAX_AGE_DAYS = 3
 
 
+def _build_live_playoff_odds(session, today: str):
+    """Recompute round probs + seed distribution conditioned on today's slate.
+
+    Returns (round_probs, live_overrides) or None when live mode does not apply.
+    Read-only: this writes nothing, and must never touch overall_score,
+    importance_score, daily_rankings or playoff_probabilities.
+    """
+    # Widen to yesterday-ET on both inputs: a 10pm-ET tip is still in progress
+    # after midnight, and its Game.date is yesterday. A today-floored window
+    # would leave the live game with no index, so no override would attach and
+    # the endpoint would silently fall back to the stored snapshot during
+    # exactly the late game worth watching. Matches _detect_live_shapes, which
+    # already reports that game as live.
+    since = yesterday_et()
+    inputs = build_sim_inputs(session, since)
+    if not inputs.standings or not inputs.remaining_games:
+        return None
+    # Between this deploy and the first daily run that writes Team.elo_rating,
+    # every team would simulate at INITIAL_RATING — a coin-flip league. Stand
+    # down and let the stored snapshot serve.
+    if not inputs.elo_populated:
+        logger.warning("live-odds: Team.elo_rating not yet populated; no live mode")
+        return None
+
+    try:
+        today_games = fetch_games_for_range(
+            date_cls.fromisoformat(since), date_cls.fromisoformat(today)
+        )
+    except ESPNAPIError as e:
+        logger.warning("live-odds: today's slate fetch failed: %s", e)
+        return None
+
+    live = build_live_overrides(
+        today_games,
+        _detect_live_wps(),
+        inputs.remaining_index_by_espn_id,
+        inputs.remaining_games,
+    )
+    # Postseason runs through bracket_state, not remaining_games — a different
+    # model. Out of scope for this overlay; fall back rather than publish a
+    # number built the wrong way.
+    if live.has_postseason or not live.overrides:
+        return None
+
+    # A settled final is a FACT the 6 AM Elo replay will consume, so consume it
+    # here too — otherwise the overlay publishes odds that know tonight's result
+    # while still rating the teams as they were this morning (measured: up to
+    # ~4pp on a seed cell, 8x the sim's own noise). Applied BEFORE the seed, so
+    # the seed covers the standings the sim actually runs on.
+    updated_elo = settled_elo_updates(
+        live,
+        inputs.remaining_games,
+        {name: row["elo"] for name, row in inputs.standings.items()},
+    )
+    for name, row in inputs.standings.items():
+        row["elo"] = updated_elo[name]
+
+    # Seed from the quantized inputs, never hash() (salted per process). A 10k
+    # run carries ~±0.5pp of jitter, which is larger than the championship
+    # column's real per-game movement — an unseeded rerun would look like news.
+    #
+    # This owns a PRIVATE random.Random rather than calling random.seed(): the
+    # process-global RNG is shared with scripts/daily_update, which seeds it and
+    # runs its own multi-second Monte Carlo in a threadpool worker whenever
+    # /internal/daily-update is re-triggered (the documented manual fix-it
+    # action). Interleaved draws from that run would silently break the
+    # determinism guarantee here. An instance cannot be perturbed by any other
+    # thread, and costs nothing.
+    rng = random.Random(
+        live_sim_seed(inputs.standings, inputs.remaining_games, live.overrides)
+    )
+    round_probs = run_monte_carlo_simulation(
+        inputs.standings,
+        inputs.remaining_games,
+        num_simulations=10000,
+        return_matrix=False,
+        win_prob_overrides=live.overrides,
+        rng=rng,
+    )
+    record_deltas = settled_record_deltas(
+        live, inputs.remaining_games, inputs.remaining_index_by_espn_id
+    )
+    return round_probs, live, record_deltas, inputs
+
+
+def _live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
+    """The live overlay's rows for today, or [] when live mode does not apply.
+
+    Owns the session and the failure contract; _build_live_playoff_odds owns the
+    computation. Returning [] (never raising) is what lets the caller fall
+    through to the stored snapshot — this page always has a good number to show,
+    so nothing here may take it down.
+    """
+    session = get_session()
+    try:
+        built = _build_live_playoff_odds(session, today)
+        if built is None:
+            return []
+        round_probs, live, record_deltas, inputs = built
+        teams_by_name = {t.name: t for t in inputs.teams}
+        records = get_team_records(session, int(today[:4]))
+        live_state = "live" if live.live_espn_ids else "settled"
+        rows = []
+        for team_name, mp_prob in round_probs.make_playoffs.items():
+            team = teams_by_name.get(team_name)
+            if team is None:
+                continue
+            wins, losses = records.get(team.id, (0, 0))
+            # The odds above already fold in tonight's finals; the games table
+            # will not until 6 AM. Move the record with them or the row shows
+            # post-result odds beside a pre-result W-L.
+            w_delta, l_delta = record_deltas.get(team_name, (0, 0))
+            wins, losses = wins + w_delta, losses + l_delta
+            rows.append(
+                PlayoffOddsResponse(
+                    team=team.name,
+                    abbreviation=team.abbreviation or "",
+                    logo_url=team.logo_url or "",
+                    make_playoffs_prob=mp_prob,
+                    reach_semis_prob=round_probs.reach_semis.get(team_name, 0.0),
+                    reach_finals_prob=round_probs.reach_finals.get(team_name, 0.0),
+                    win_championship_prob=round_probs.win_championship.get(
+                        team_name, 0.0
+                    ),
+                    wins=wins,
+                    losses=losses,
+                    seed_distribution=round_probs.seed_distribution.get(team_name)
+                    or {},
+                    live=True,
+                    live_state=live_state,
+                )
+            )
+        return sorted(
+            rows,
+            key=lambda x: (-x.make_playoffs_prob, -x.win_championship_prob, x.team),
+        )
+    except Exception:
+        logger.exception("live-odds: live overlay failed; serving stored snapshot")
+        return []
+    finally:
+        session.close()
+
+
+def _cached_live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
+    """`_live_playoff_odds_rows` behind the single-flight + TTL cache.
+
+    Same shape as `get_replay_live`: check the cache, then take the build lock
+    and re-check, so concurrent viewers share ONE ~1.2s Monte Carlo rather than
+    each starting their own on a single-instance container. Returns [] when live
+    mode does not apply, which the caller reads as "fall through to the stored
+    snapshot".
+    """
+    global _live_odds_cache
+    with _live_odds_cache_lock:
+        cached = _live_odds_cache
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+    with _live_odds_build_lock:
+        with _live_odds_cache_lock:
+            cached = _live_odds_cache
+            if cached and cached[0] > time.monotonic():
+                return cached[1]  # another request built it while we waited
+        rows = _live_playoff_odds_rows(today)
+        with _live_odds_cache_lock:
+            _live_odds_cache = (time.monotonic() + _LIVE_ODDS_CACHE_TTL_S, rows)
+        return rows
+
+
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])
-async def get_playoff_odds(date: str = Query(default=None)):
+def get_playoff_odds(date: str = Query(default=None)):
     """Return per-team round-by-round playoff probabilities.
 
     Sorted by make_playoffs_prob desc (the leftmost, most-read column, so the
     table reads monotonically), then win_championship_prob desc, then team name
     as tiebreakers.
+
+    While any of today's games is unresolved the numbers are recomputed at
+    request time with those games pinned to their observed win probability;
+    single-flighted behind a short TTL and read-only. Sync def so the blocking
+    work (a 10k Monte Carlo plus the ESPN slate fetch) runs in FastAPI's
+    threadpool instead of stalling the event loop for every other request.
     """
+    global _live_odds_cache
     today = today_et()
     explicit_date = date is not None
     if date is None:
         date = today
     is_today = date == today
+
+    # An explicit ?date= is a historical lookup and must stay exact — including
+    # ?date= equal to today, whose stored snapshot is a specific 6 AM artifact.
+    live_rows = [] if explicit_date else _cached_live_playoff_odds_rows(today)
+    if live_rows:
+        return live_rows
+
     session = get_session()
     try:
 

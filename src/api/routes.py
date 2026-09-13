@@ -143,6 +143,11 @@ class PlayoffOddsResponse(BaseModel):
     # Per-seed probabilities {seed: prob} for seeds 1-8 (sums to make_playoffs);
     # None for rows not yet written by a daily run (forward-only).
     seed_distribution: dict[int, float] | None
+    # True when this row came from the live overlay rather than the stored
+    # daily snapshot. live_state distinguishes "a game is in progress" from
+    # "today's games are done but the 6 AM run hasn't folded them in yet".
+    live: bool = False
+    live_state: str | None = None
 
 
 _COMPLETED_MINI_POINTS = 28  # sparkline resolution for the homepage completed minis

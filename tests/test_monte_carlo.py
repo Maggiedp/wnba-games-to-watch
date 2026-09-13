@@ -135,7 +135,7 @@ def test_compute_standings_populates_h2h(monkeypatch):
     """Smoke test: standings dict produced by compute_standings has h2h field
     that's compatible with run_monte_carlo_simulation."""
     from unittest.mock import MagicMock
-    from scripts.daily_update import compute_standings
+    from src.scoring.sim_inputs import compute_standings
 
     # Configure mocks to return string attributes instead of generating new mocks
     team_a = MagicMock()
@@ -165,15 +165,11 @@ def test_compute_standings_populates_h2h(monkeypatch):
 
     # Patch at the module level where functions are imported
     monkeypatch.setattr(
-        "scripts.daily_update.get_all_teams", lambda s: [team_a, team_b]
+        "src.scoring.sim_inputs.get_all_teams", lambda s: [team_a, team_b]
     )
     monkeypatch.setattr(
-        "scripts.daily_update.get_completed_games",
+        "src.scoring.sim_inputs.get_completed_games",
         lambda s, season_year=2026: [game_1, game_2, game_3],
-    )
-    monkeypatch.setattr(
-        "scripts.daily_update.get_team_by_id",
-        lambda s, tid: {1: team_a, 2: team_b}[tid],
     )
 
     standings = compute_standings(session=None, elo_ratings={})
@@ -189,7 +185,7 @@ def test_compute_standings_ignores_postseason_completions(monkeypatch):
     """Completed postseason games (season_type=3) must not bump regular-season W/L
     or H2H. Otherwise playoff wins would distort seeding mid-postseason."""
     from unittest.mock import MagicMock
-    from scripts.daily_update import compute_standings
+    from src.scoring.sim_inputs import compute_standings
 
     team_a = MagicMock(id=1, bpi_rating=5.0)
     team_a.name = "New York Liberty"
@@ -202,15 +198,11 @@ def test_compute_standings_ignores_postseason_completions(monkeypatch):
     post = MagicMock(team_a_id=2, team_b_id=1, winner_id=2, season_type=3)
 
     monkeypatch.setattr(
-        "scripts.daily_update.get_all_teams", lambda s: [team_a, team_b]
+        "src.scoring.sim_inputs.get_all_teams", lambda s: [team_a, team_b]
     )
     monkeypatch.setattr(
-        "scripts.daily_update.get_completed_games",
+        "src.scoring.sim_inputs.get_completed_games",
         lambda s, season_year=2026: [reg, post],
-    )
-    monkeypatch.setattr(
-        "scripts.daily_update.get_team_by_id",
-        lambda s, tid: {1: team_a, 2: team_b}[tid],
     )
 
     standings = compute_standings(session=None, elo_ratings={})
@@ -229,7 +221,7 @@ def test_compute_standings_skips_null_season_type(monkeypatch):
     win could leak into seeding and distort downstream odds.
     """
     from unittest.mock import MagicMock
-    from scripts.daily_update import compute_standings
+    from src.scoring.sim_inputs import compute_standings
 
     team_a = MagicMock(id=1, bpi_rating=5.0)
     team_a.name = "New York Liberty"
@@ -243,15 +235,11 @@ def test_compute_standings_skips_null_season_type(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "scripts.daily_update.get_all_teams", lambda s: [team_a, team_b]
+        "src.scoring.sim_inputs.get_all_teams", lambda s: [team_a, team_b]
     )
     monkeypatch.setattr(
-        "scripts.daily_update.get_completed_games",
+        "src.scoring.sim_inputs.get_completed_games",
         lambda s, season_year=2026: [null_row],
-    )
-    monkeypatch.setattr(
-        "scripts.daily_update.get_team_by_id",
-        lambda s, tid: {1: team_a, 2: team_b}[tid],
     )
 
     standings = compute_standings(session=None, elo_ratings={})
@@ -696,3 +684,94 @@ def test_run_monte_carlo_seed_distribution():
     assert result.seed_distribution[_ALL_TEAMS[0]] == {1: 1.0}
     assert result.seed_distribution[_ALL_TEAMS[7]] == {8: 1.0}
     assert result.seed_distribution[_ALL_TEAMS[8]] == {}
+
+
+# ---------------------------------------------------------------------------
+# win_prob_overrides tests (Task 4)
+# ---------------------------------------------------------------------------
+
+
+def _override_standings():
+    """13-team standings for the override tests. Uses _ALL_TEAMS because
+    run_monte_carlo_simulation asserts every team has a known conference."""
+    return {
+        name: {"wins": 20 - i, "losses": i, "elo": 1600 - i * 20}
+        for i, name in enumerate(_ALL_TEAMS)
+    }
+
+
+def test_win_prob_override_forces_outcome():
+    """An override of 1.0 makes team_a win that game in every sim; 0.0 in none."""
+    home, away = _ALL_TEAMS[0], _ALL_TEAMS[1]
+    remaining = [(home, away)]
+
+    forced_home = run_monte_carlo_simulation(
+        _override_standings(),
+        remaining,
+        num_simulations=200,
+        win_prob_overrides={0: 1.0},
+        return_matrix=True,
+    )
+    forced_away = run_monte_carlo_simulation(
+        _override_standings(),
+        remaining,
+        num_simulations=200,
+        win_prob_overrides={0: 0.0},
+        return_matrix=True,
+    )
+
+    assert all(sim[0] is True for sim in forced_home[1])
+    assert all(sim[0] is False for sim in forced_away[1])
+
+
+def test_win_prob_override_only_applies_to_its_index():
+    """Overriding game 0 must leave game 1 on its Elo-derived probability."""
+    home, away = _ALL_TEAMS[0], _ALL_TEAMS[1]
+    remaining = [(home, away), (away, home)]
+
+    result = run_monte_carlo_simulation(
+        _override_standings(),
+        remaining,
+        num_simulations=300,
+        win_prob_overrides={0: 1.0},
+        return_matrix=True,
+    )
+    matrix = result[1]
+
+    assert all(sim[0] is True for sim in matrix)
+    # Game 1 is untouched: with these Elo ratings both outcomes must occur.
+    assert {sim[1] for sim in matrix} == {True, False}
+
+
+def test_override_branch_consumes_the_same_rng_draws_as_the_elo_branch(monkeypatch):
+    """A certainty override must still draw from random, so two runs differing
+    only in override VALUES stay comparable.
+
+    Uses a 4-team league: fewer than PLAYOFF_TEAMS, so no bracket is played and
+    every draw comes from the regular-season loop, making the counts comparable.
+    """
+    teams = ["Atlanta Dream", "Chicago Sky", "Dallas Wings", "Minnesota Lynx"]
+    standings = {n: {"wins": 5, "losses": 5, "elo": 1500} for n in teams}
+    remaining = [(teams[0], teams[1]), (teams[2], teams[3])]
+
+    def count_draws(**kwargs):
+        calls = {"n": 0}
+        real = random.random
+
+        def counting():
+            calls["n"] += 1
+            return real()
+
+        monkeypatch.setattr(random, "random", counting)
+        try:
+            run_monte_carlo_simulation(
+                standings, remaining, num_simulations=10, **kwargs
+            )
+        finally:
+            monkeypatch.setattr(random, "random", real)
+        return calls["n"]
+
+    without = count_draws()
+    with_overrides = count_draws(win_prob_overrides={0: 1.0, 1: 0.0})
+
+    assert without == with_overrides

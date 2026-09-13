@@ -57,6 +57,18 @@
                    this wrapper — never the whole page. */
                 overflow-x: auto;
             }
+            .playoff-live-marker {
+                margin: 0 0 10px;
+                font-size: 13px;
+                color: #7c7266;
+            }
+            .playoff-live-marker .live-dot {
+                display: inline-block;
+                width: 7px; height: 7px;
+                margin-right: 6px;
+                border-radius: 50%;
+                background: #ff6b00;
+            }
             .playoff-table {
                 width: 100%;
                 border-collapse: collapse;
@@ -190,6 +202,7 @@
     </div>
     <p class="empty" id="playoff-status">Loading…</p>
     <div class="playoff-table-scroll">
+      <p id="playoff-live-marker" class="playoff-live-marker" hidden></p>
       <table class="playoff-table" id="playoff-table" hidden>
         <thead id="playoff-thead"></thead>
         <tbody id="playoff-tbody"></tbody>
@@ -232,6 +245,17 @@ function hidePlayoffStatus() {
     if (table) table.hidden = false;
 }
 
+// Thin DOM writer over the pure liveMarkerFor decision (playoff_odds_helpers.js).
+function updateLiveMarker(odds) {
+    const marker = document.getElementById('playoff-live-marker');
+    if (!marker) return;
+    const state = liveMarkerFor(odds);
+    marker.hidden = !state.visible;
+    if (!state.visible) return;
+    marker.innerHTML = (state.showDot ? '<span class="live-dot"></span>' : '')
+        + escapeHtml(state.text);
+}
+
 async function fetchPlayoffOdds() {
     try {
         const resp = await fetch('/api/playoff-odds');
@@ -239,6 +263,7 @@ async function fetchPlayoffOdds() {
         const odds = await resp.json();
         if (!odds || odds.length === 0) { showPlayoffStatus(PLAYOFF_EMPTY); return; }
         allPlayoffOdds = odds;
+        updateLiveMarker(odds);
         hidePlayoffStatus();
         renderPlayoffPicture();
     } catch (e) {
@@ -310,10 +335,21 @@ function renderPlayoffPicture() {
             </tr>`;
         }).join('');
     } else {
+        // Hide the Playoffs column only when it is BOTH a live overlay and the
+        // column can no longer move — every team mathematically in or out.
+        // Frozen at 100/0 beside four moving columns reads as a broken live
+        // path; but mid-race it is the most informative column on the page, and
+        // gating on `live` alone would hide it for most of a season. The
+        // measurement behind this (2026-09-09: 469pp of seed movement, 0.0pp of
+        // make_playoffs movement) was taken AFTER the 2026 field clinched — a
+        // fact about that date, not a property of live mode.
+        const isLive = odds.length > 0 && odds[0].live;
+        const hidePlayoffs = isLive && playoffsColumnIsDead(odds);
         thead.innerHTML = '<tr>'
             + '<th class="team-col">Team</th>'
             + '<th class="record-col">Rec</th>'
-            + '<th>Playoffs</th><th>Semis</th><th>Finals</th><th>Champ</th>'
+            + (hidePlayoffs ? '' : '<th>Playoffs</th>')
+            + '<th>Semis</th><th>Finals</th><th>Champ</th>'
             + '</tr>';
         tbody.innerHTML = odds.map(t => {
             // True elimination = exactly 0 odds to make the playoffs, not
@@ -354,7 +390,7 @@ function renderPlayoffPicture() {
             <tr${eliminated ? ' class="eliminated"' : ''}>
                 ${teamCell(t)}
                 ${recordCell}
-                ${barCell(t.make_playoffs_prob, 'chance to make the playoffs')}
+                ${hidePlayoffs ? '' : barCell(t.make_playoffs_prob, 'chance to make the playoffs')}
                 ${numCell(t.reach_semis_prob, 'chance to reach the semifinals')}
                 ${numCell(t.reach_finals_prob, 'chance to reach the finals')}
                 ${champCell(t.win_championship_prob, 'chance to win the championship')}
@@ -384,7 +420,23 @@ function setupPlayoffViewToggle() {
 // renderPlayoffPicture updates it per view once odds arrive.
 document.getElementById('playoff-explainer').textContent = ROUNDS_EXPLAINER;
 setupPlayoffViewToggle();
-fetchPlayoffOdds();
+
+// Poll only while the server says a game is in progress. A settled overlay
+// ("updated through tonight's results") holds until the 6 AM run, so there is
+// nothing to poll for; the server-side cache is 15s, so poll no faster.
+let playoffPollTimer = null;
+
+function schedulePlayoffPoll() {
+    if (playoffPollTimer) clearTimeout(playoffPollTimer);
+    const isLive = allPlayoffOdds.length > 0
+        && allPlayoffOdds[0].live
+        && allPlayoffOdds[0].live_state === 'live';
+    if (!isLive) return;
+    playoffPollTimer = setTimeout(
+        () => fetchPlayoffOdds().then(schedulePlayoffPoll), 20000);
+}
+
+fetchPlayoffOdds().then(schedulePlayoffPoll);
 </script>
 </body>
 </html>

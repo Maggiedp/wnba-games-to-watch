@@ -63,6 +63,7 @@ def play_series(
     starting_higher_wins: int = 0,
     starting_lower_wins: int = 0,
     recorder: list[bool] | None = None,
+    rng=None,
 ) -> str:
     """Simulate a best-of-N. Returns the winning team name.
 
@@ -78,6 +79,9 @@ def play_series(
     `recorder`, if provided, has one bool appended per game *actually
     simulated* (True = higher seed won). Pre-played games (starting_*_wins)
     are not appended — only the games this call simulates.
+
+    `rng` is passed straight through to simulate_game (see there); None keeps
+    the process-global `random` module, which is what every existing caller uses.
     """
     games_needed = len(home_pattern) // 2 + 1
     higher_wins = starting_higher_wins
@@ -95,13 +99,13 @@ def play_series(
     for host in remaining_pattern:
         if host == "H":
             higher_won = simulate_game(
-                higher_elo, lower_elo, home_advantage=home_advantage
+                higher_elo, lower_elo, home_advantage=home_advantage, rng=rng
             )
         else:
             # Lower seed hosts: swap args so the +H bonus goes to the host,
             # then invert the result so it still reports "did higher seed win".
             higher_won = not simulate_game(
-                lower_elo, higher_elo, home_advantage=home_advantage
+                lower_elo, higher_elo, home_advantage=home_advantage, rng=rng
             )
 
         if recorder is not None:
@@ -235,6 +239,7 @@ def simulate_playoffs(
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     bracket_state: BracketState | None = None,
     recorder: dict[tuple[str, int], bool] | None = None,
+    rng=None,
 ) -> dict[str, set[str] | str]:
     """Play the full 8-team WNBA bracket (no reseeding).
 
@@ -259,6 +264,9 @@ def simulate_playoffs(
     None, or slot's higher/lower still None because upstream is
     unresolved) still record from every sim — those entries are never
     queried, since `_find_bracket_slot` filters them out at lookup time.
+
+    `rng` is threaded down to every simulated game (see simulate_game); None
+    keeps the process-global `random` module.
 
     Returns:
         {
@@ -312,6 +320,7 @@ def simulate_playoffs(
                 home_advantage,
                 starting_higher_wins=start_h,
                 starting_lower_wins=start_l,
+                rng=rng,
             )
 
         local_recorder: list[bool] = []
@@ -324,6 +333,7 @@ def simulate_playoffs(
             starting_higher_wins=start_h,
             starting_lower_wins=start_l,
             recorder=local_recorder,
+            rng=rng,
         )
         offset = start_h + start_l
         for i, higher_won in enumerate(local_recorder):

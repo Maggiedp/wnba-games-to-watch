@@ -62,3 +62,36 @@ function seedsViewAvailable(odds) {
     return Array.isArray(odds) && odds.length > 0
         && odds.every(t => t && t.seed_distribution != null);
 }
+
+// /api/playoff-odds response → what the #playoff-live-marker should show.
+// `live`/`live_state` are per-row fields from the Task 7 live overlay, but
+// identical on every row of one response, so odds[0] speaks for the whole
+// snapshot. Pure decision logic — the template's updateLiveMarker does the
+// DOM writing (hidden toggle, innerHTML) and nothing else.
+// Returns { visible, text, showDot }: visible=false means the stored-snapshot
+// path (off-day) and the caller should hide the marker entirely; text is
+// plain text (no HTML) for the caller to escape/render; showDot says whether
+// to prepend the pulsing live-dot span.
+function liveMarkerFor(odds) {
+    const live = Array.isArray(odds) && odds.length > 0 && odds[0].live;
+    if (!live) return { visible: false, text: '', showDot: false };
+    // Two live states: a game is on the floor right now, or today's games
+    // have finished but the 6 AM run hasn't folded them in yet.
+    return odds[0].live_state === 'live'
+        ? { visible: true, text: 'Live · updating as tonight’s games play', showDot: true }
+        : { visible: true, text: 'Updated through tonight’s results', showDot: false };
+}
+
+// Should the Rounds view hide its "Playoffs" column? ONLY when make_playoffs
+// carries no information: every team mathematically in (1.0) or out (0.0).
+// Hiding it beside four moving columns reads as a broken live path — but ONLY
+// once the field has clinched. Gating on `live` alone (the original form) would
+// hide the page's primary probability mid-race in any season where live mode
+// runs before clinching, which is most of a season. The measurement that
+// motivated this (2026-09-09: 469pp of seed movement, 0.0pp of make_playoffs
+// movement) was taken AFTER the 2026 field clinched; it is a fact about that
+// date, not a property of live mode.
+function playoffsColumnIsDead(odds) {
+    return Array.isArray(odds) && odds.length > 0
+        && odds.every(t => t && (t.make_playoffs_prob === 0 || t.make_playoffs_prob === 1));
+}

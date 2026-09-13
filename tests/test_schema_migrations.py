@@ -77,6 +77,40 @@ def test_sqlite_migration_adds_seed_distribution_to_stale_playoff_probabilities(
         schema._session_factory = None
 
 
+def test_sqlite_migration_adds_elo_rating_to_stale_teams(tmp_path, monkeypatch):
+    """A pre-existing SQLite teams table that predates elo_rating must gain it
+    on init_db(), so the daily write (set_team_elo_ratings) and the live-odds
+    read don't hit a missing-column error."""
+    db_path = tmp_path / "stale.db"
+    raw = create_engine(f"sqlite:///{db_path}")
+    with raw.connect() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE teams ("
+                "id INTEGER PRIMARY KEY, "
+                "name VARCHAR(255) NOT NULL, "
+                "abbreviation VARCHAR(16), "
+                "logo_url VARCHAR(500), "
+                "bpi_rating FLOAT, "
+                "last_updated DATETIME)"
+            )
+        )
+        conn.commit()
+    raw.dispose()
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    import src.db.schema as schema
+
+    monkeypatch.setattr(schema, "_engine", None, raising=False)
+    schema.init_db()
+
+    cols = {
+        c["name"]
+        for c in inspect(create_engine(f"sqlite:///{db_path}")).get_columns("teams")
+    }
+    assert "elo_rating" in cols
+
+
 def test_sqlite_migration_adds_shot_season_athlete_index_to_stale_shots(
     tmp_path, monkeypatch
 ):
