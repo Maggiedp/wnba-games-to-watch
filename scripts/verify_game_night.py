@@ -22,7 +22,7 @@ import argparse
 import shutil
 import subprocess
 import time
-from datetime import date as date_cls
+from datetime import date as date_cls, timedelta
 from typing import Iterable, NamedTuple
 
 import requests
@@ -78,6 +78,41 @@ def classify_night(games: list[dict]) -> str:
     if all(s == "STATUS_FINAL" for s in statuses):
         return "settled"
     return "pregame"
+
+
+def probed_games(games: list[dict]) -> list[dict]:
+    """The games that can actually produce a live override.
+
+    A scheduled game contributes no override, so it must not drag the snapshot
+    baseline forward onto a date whose 6 AM run has not happened yet.
+    """
+    return [
+        g for g in games if g.get("status") in ("STATUS_IN_PROGRESS", "STATUS_FINAL")
+    ]
+
+
+def baseline_date(probed: list[dict]) -> str | None:
+    """The snapshot date to diff against: the morning of the earliest probed game.
+
+    NOT today. A 10pm-ET tip is still in progress after midnight, when today_et()
+    has already rolled over and today's 6 AM snapshot does not exist yet — an
+    explicit ?date= for it returns []. The right baseline is that game's own
+    morning, which is also the standings state the overlay is building on.
+    """
+    dates = [g["date"] for g in probed if g.get("date")]
+    return min(dates) if dates else None
+
+
+def daily_run_consumed(probed: list[dict], snapshot_after: list[dict]) -> bool:
+    """True when the 6 AM run has already folded these results into the snapshot.
+
+    get_upcoming_games filters on `winner_id IS NULL`, so once the daily run
+    records last night's winners those games leave remaining_games, no override
+    can attach, and the overlay correctly stands down. Demanding live flags then
+    would FAIL against correct behavior. A snapshot dated AFTER the last probed
+    game is the observable proof that this has happened.
+    """
+    return bool(probed) and bool(snapshot_after)
 
 
 def playoffs_column_is_dead(odds: list[dict]) -> bool:
@@ -296,8 +331,16 @@ def checks_for_night(
     Off and pregame nights return SKIPs rather than an empty list, so a run
     that proved nothing says so out loud instead of reading as a clean pass.
     """
-    if night in ("off", "pregame"):
-        why = "no games today" if night == "off" else "no game has tipped yet"
+    if night in ("off", "pregame", "consumed"):
+        why = {
+            "off": "no games today",
+            "pregame": "no game has tipped yet",
+            "consumed": (
+                "the 6 AM run already folded these results in — the overlay is "
+                "CORRECTLY standing down, so there is nothing live to observe. "
+                "Run during the game, or before the next 6 AM run."
+            ),
+        }[night]
         return [
             CheckResult("live flags", SKIP, why),
             CheckResult("seed matrix moved vs the 6 AM snapshot", SKIP, why),
@@ -340,7 +383,32 @@ def main() -> int:
         date_cls.fromisoformat(yesterday_et()), date_cls.fromisoformat(today)
     )
     night = classify_night(games)
-    playing = {g["team_a"] for g in games} | {g["team_b"] for g in games}
+    probed = probed_games(games)
+    playing = {g["team_a"] for g in probed} | {g["team_b"] for g in probed}
+
+    odds = _get_json(base, "/api/playoff-odds")
+
+    # Baseline: the morning of the EARLIEST probed game, not today. After
+    # midnight today_et() has rolled over and today's snapshot does not exist
+    # yet, so a today-keyed baseline would silently SKIP the seed check on
+    # exactly the late game the widened window exists to catch.
+    base_date = baseline_date(probed) or today
+    snapshot = _get_json(base, f"/api/playoff-odds?date={base_date}")
+
+    # A snapshot dated after the last probed game proves the 6 AM run already
+    # consumed those results, which is why the overlay stands down.
+    if night in ("live", "settled"):
+        last_probed = max(g["date"] for g in probed)
+        day_after = (
+            date_cls.fromisoformat(last_probed) + timedelta(days=1)
+        ).isoformat()
+        if daily_run_consumed(
+            probed, _get_json(base, f"/api/playoff-odds?date={day_after}")
+        ):
+            night = "consumed"
+
+    upcoming = _get_json(base, "/api/games/upcoming") if night == "postseason" else []
+    today_games = [g for g in upcoming if g.get("date") == today]
 
     print(f"GAME NIGHT PROBE  {today}  ({base})")
     print(f"  night: {night}  ({len(games)} game(s) on the yesterday-today window)")
@@ -348,11 +416,8 @@ def main() -> int:
         print(
             f"    {g['team_a']} v {g['team_b']}  {g['status']}  type={g['season_type']}"
         )
-
-    odds = _get_json(base, "/api/playoff-odds")
-    snapshot = _get_json(base, f"/api/playoff-odds?date={today}")
-    upcoming = _get_json(base, "/api/games/upcoming") if night == "postseason" else []
-    today_games = [g for g in upcoming if g.get("date") == today]
+    if night in ("live", "settled"):
+        print(f"  baseline snapshot: {base_date}")
 
     night_results = checks_for_night(night, odds, snapshot, playing, games=today_games)
 

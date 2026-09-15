@@ -12,8 +12,12 @@ from scripts.verify_game_night import (
     FAIL,
     PASS,
     SKIP,
+    baseline_date,
+    daily_run_consumed,
+    probed_games,
     check_column_suppression,
     check_live_flags,
+    checks_for_night,
     check_seed_movement,
     classify_night,
     playoffs_column_is_dead,
@@ -191,8 +195,60 @@ def test_column_suppression_reports_pass_for_a_clinched_field():
 @pytest.mark.parametrize("night", ["off", "pregame"])
 def test_off_and_pregame_nights_have_nothing_to_prove(night):
     """The probe must not manufacture a green run out of an empty slate."""
-    from scripts.verify_game_night import checks_for_night
-
     results = checks_for_night(night, odds=[], snapshot=[], playing=set())
     assert results, "an off night should still report something"
     assert all(r.status == SKIP for r in results)
+
+
+# --- snapshot baseline + the 6 AM boundary (Codex adversarial review) -----
+
+
+def _dated(date, status="STATUS_FINAL", **kw):
+    g = _game(status=status, **kw)
+    g["date"] = date
+    return g
+
+
+def test_probed_games_excludes_scheduled():
+    """A scheduled game produces no override, so it must not drag the baseline
+    forward onto a date whose 6 AM run has not happened yet."""
+    games = [_dated("2026-09-20"), _dated("2026-09-21", status="STATUS_SCHEDULED")]
+    assert [g["date"] for g in probed_games(games)] == ["2026-09-20"]
+
+
+def test_baseline_is_the_morning_of_the_late_game_not_today():
+    """The post-midnight case: today_et() has rolled to the 21st, but the game
+    being probed is dated the 20th and the 21st's snapshot does not exist yet."""
+    probed = [_dated("2026-09-20", status="STATUS_IN_PROGRESS")]
+    assert baseline_date(probed) == "2026-09-20"
+
+
+def test_baseline_takes_the_earliest_when_the_window_spans_midnight():
+    probed = [_dated("2026-09-21"), _dated("2026-09-20")]
+    assert baseline_date(probed) == "2026-09-20"
+
+
+def test_baseline_is_none_without_probed_games():
+    assert baseline_date([]) is None
+
+
+def test_daily_run_consumed_when_a_later_snapshot_exists():
+    """get_upcoming_games filters winner_id IS NULL, so once the 6 AM run
+    records the winners the overlay correctly stands down."""
+    probed = [_dated("2026-09-20")]
+    later = [_odds("A", "A", 1.0, {})]
+    assert daily_run_consumed(probed, later) is True
+
+
+def test_not_consumed_before_the_next_daily_run():
+    probed = [_dated("2026-09-20")]
+    assert daily_run_consumed(probed, []) is False
+
+
+def test_consumed_night_skips_rather_than_failing():
+    """The spurious-FAIL guard: demanding live flags after the daily run has
+    folded the results in would report FAIL against correct behavior."""
+    results = checks_for_night("consumed", odds=[], snapshot=[], playing=set())
+    assert results
+    assert all(r.status == SKIP for r in results)
+    assert "standing down" in results[0].detail
