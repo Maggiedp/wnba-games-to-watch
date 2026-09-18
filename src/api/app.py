@@ -22,11 +22,11 @@ from src.api.routes import (
     GameResponse,
     PlayoffOddsResponse,
     format_games_response,
-    is_live_status,
 )
 from src.constants import (  # noqa: F401 — Broadcasters used in get_broadcasters endpoint
     CURRENT_SEASON,
     Broadcasters,
+    is_live_status,
 )
 from src.data.espn_api import (
     ESPNAPIError,
