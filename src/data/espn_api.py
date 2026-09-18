@@ -315,10 +315,25 @@ def fetch_games_for_range(
     crash); pass `failed_windows` to have those skipped `YYYYMMDD-YYYYMMDD`
     windows recorded, so a caller needing completeness (the one-shot backfill)
     can detect the gap and fail closed instead of reporting a partial run.
+
+    **The scoreboard is queried as `dates=YYYYMM`, one whole month per request.
+    ESPN began rejecting the `dates=YYYYMMDD-YYYYMMDD` range form with HTTP 400
+    ("Failed to get events endpoint.") on 2026-09-16** — every window 400'd, each
+    was logged as a WARNING and skipped, and the daily job then "succeeded" on
+    zero games for two days without tripping an alert. The month form returns the
+    same monthly batch in the same number of requests, so **the window filter has
+    to happen here now**: a month request returns the WHOLE month, and a bounded
+    caller (the live overlay asks for yesterday-today) would otherwise silently
+    widen to 30+ days. Do not reintroduce the range form to avoid the filter.
+
+    The filter is applied against the OVERALL [start, end] window rather than each
+    month's sub-window, so a late-night game ESPN buckets into a neighbouring
+    month is still kept once (dedup is by event_id).
     """
     wnba_teams = set(fetch_team_id_map().values())
     all_games: list[dict] = []
     seen_ids: set[str] = set()
+    start_str, end_str = start.isoformat(), end.isoformat()
 
     cursor = start.replace(day=1)
     while cursor <= end:
@@ -327,16 +342,19 @@ def fetch_games_for_range(
             if cursor.month == 12
             else cursor.replace(month=cursor.month + 1)
         )
+        # Kept in the YYYYMMDD-YYYYMMDD form: `failed_windows` names the window a
+        # caller failed to cover, which is still the clamped sub-window, not the
+        # whole month we happened to request it with.
         range_start = max(start, cursor)
         range_end = min(next_month - timedelta(days=1), end)
-        date_param = f"{range_start.strftime('%Y%m%d')}-{range_end.strftime('%Y%m%d')}"
+        window = f"{range_start.strftime('%Y%m%d')}-{range_end.strftime('%Y%m%d')}"
 
         try:
-            data = _get(f"{SITE_API}/scoreboard", dates=date_param)
+            data = _get(f"{SITE_API}/scoreboard", dates=cursor.strftime("%Y%m"))
         except ESPNAPIError as e:
-            logger.warning(f"Failed to fetch scoreboard for {date_param}: {e}")
+            logger.warning(f"Failed to fetch scoreboard for {window}: {e}")
             if failed_windows is not None:
-                failed_windows.append(date_param)
+                failed_windows.append(window)
             cursor = next_month
             continue
 
@@ -344,9 +362,11 @@ def fetch_games_for_range(
             event_id = event.get("id")
             if event_id in seen_ids:
                 continue
-            seen_ids.add(event_id)
             game = _parse_event(event)
-            if game and game["team_a"] in wnba_teams and game["team_b"] in wnba_teams:
+            if not game or not (start_str <= game["date"] <= end_str):
+                continue
+            seen_ids.add(event_id)
+            if game["team_a"] in wnba_teams and game["team_b"] in wnba_teams:
                 all_games.append(game)
 
         cursor = next_month
