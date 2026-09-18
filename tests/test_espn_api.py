@@ -113,3 +113,93 @@ def test_parse_event_treats_missing_time_valid_at_midnight_utc_as_tbd():
     assert result["date"] == "2026-05-21"
     assert result["time"] == ""
     assert result["time_utc"] is None
+
+
+# --- scoreboard date parameter (ESPN dropped the range format 2026-09-16) ---
+
+
+def _range_fetch(monkeypatch, start, end, events_by_param=None):
+    """Run fetch_games_for_range with _get stubbed; return (games, params)."""
+    from src.data import espn_api
+
+    params: list[str] = []
+
+    def fake_get(url, **kwargs):
+        param = kwargs.get("dates", "")
+        params.append(param)
+        return {"events": (events_by_param or {}).get(param, [])}
+
+    monkeypatch.setattr(espn_api, "_get", fake_get)
+    monkeypatch.setattr(
+        espn_api,
+        "fetch_team_id_map",
+        lambda: {"1": "Connecticut Sun", "2": "New York Liberty"},
+    )
+    games = espn_api.fetch_games_for_range(start, end)
+    return games, params
+
+
+def test_scoreboard_is_queried_by_month_not_by_date_range(monkeypatch):
+    """ESPN began 400ing dates=YYYYMMDD-YYYYMMDD on 2026-09-16.
+
+    A range param silently returned zero games for every window, which took the
+    daily job down without tripping any alert.
+    """
+    from datetime import date
+
+    _, params = _range_fetch(monkeypatch, date(2026, 8, 15), date(2026, 9, 17))
+
+    assert params == ["202608", "202609"]
+    assert not any("-" in p for p in params)
+
+
+def test_single_month_window_queries_that_month_once(monkeypatch):
+    from datetime import date
+
+    _, params = _range_fetch(monkeypatch, date(2026, 9, 1), date(2026, 9, 17))
+
+    assert params == ["202609"]
+
+
+def test_events_outside_the_requested_window_are_dropped(monkeypatch):
+    """A month query returns the WHOLE month, so the window filter moves
+    client-side. Without it, a bounded caller would silently widen."""
+    from datetime import date
+
+    events = [
+        _base_event("2026-09-05T23:00:00Z"),  # before start
+        _base_event("2026-09-17T23:00:00Z"),  # inside
+        _base_event("2026-09-28T23:00:00Z"),  # after end
+    ]
+    for i, e in enumerate(events):
+        e["id"] = f"40170000{i}"
+
+    games, _ = _range_fetch(
+        monkeypatch,
+        date(2026, 9, 10),
+        date(2026, 9, 20),
+        events_by_param={"202609": events},
+    )
+
+    assert [g["date"] for g in games] == ["2026-09-17"]
+
+
+def test_a_game_returned_by_a_neighbouring_month_still_counts(monkeypatch):
+    """Filtering is against the OVERALL window, not the per-month sub-window,
+    so a late-night game ESPN buckets into the next month is not lost."""
+    from datetime import date
+
+    sept = _base_event("2026-09-30T23:30:00Z")
+    sept["id"] = "401700010"
+    oct_bucket = _base_event("2026-09-30T23:30:00Z")  # same ET date, Oct bucket
+    oct_bucket["id"] = "401700010"
+
+    games, params = _range_fetch(
+        monkeypatch,
+        date(2026, 9, 1),
+        date(2026, 10, 31),
+        events_by_param={"202609": [], "202610": [oct_bucket]},
+    )
+
+    assert params == ["202609", "202610"]
+    assert [g["date"] for g in games] == ["2026-09-30"]
