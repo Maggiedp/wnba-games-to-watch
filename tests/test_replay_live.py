@@ -3,7 +3,7 @@
 import pytest
 
 import src.api.app as app
-from src.api.routes import is_live_status
+from src.constants import is_live_status
 from src.data.espn_api import ESPNAPIError, today_et
 
 

@@ -27,7 +27,7 @@ from typing import Iterable, NamedTuple
 
 import requests
 
-from src.api.routes import is_live_status
+from src.constants import is_live_status
 from src.data.espn_api import (
     ESPNAPIError,
     fetch_games_for_range,
@@ -97,7 +97,7 @@ def probed_games(games: list[dict]) -> list[dict]:
     A scheduled game contributes no override, so it must not drag the snapshot
     baseline forward onto a date whose 6 AM run has not happened yet.
 
-    Liveness comes from production's own is_live_status, NOT a hand-rolled
+    Liveness comes from the shared is_live_status, NOT a hand-rolled
     STATUS_IN_PROGRESS check: ESPN reports THREE in-progress states, and the
     real 2026-09-17 slate carried STATUS_HALFTIME and STATUS_END_PERIOD
     alongside it. Matching only STATUS_IN_PROGRESS silently dropped two of the
@@ -524,9 +524,15 @@ def main() -> int:
     # inputs can no longer move.
     if night in ("live", "settled") and odds:
         frozen = night == "settled"
+        # Sample BOTH ends here rather than reusing `odds`: the slate fetch,
+        # the baseline search and the per-game ESPN win-prob calls above take
+        # long enough to push the gap past the 15s TTL, which silently turned
+        # the within-TTL cache check into an uncontrolled one (observed
+        # 2026-09-17: it reported a difference that the TTL should have hidden).
+        first = _get_json(base, "/api/playoff-odds")
         time.sleep(_CACHE_TTL_S + 2 if frozen else 3)
         second = _get_json(base, "/api/playoff-odds")
-        night_results.append(check_repeatability(odds, second, frozen=frozen))
+        night_results.append(check_repeatability(first, second, frozen=frozen))
 
     # The log read is auxiliary and deliberately kept OUT of the verdict: on an
     # off day it passes for want of anything to warn about, and letting that

@@ -61,9 +61,31 @@ class GameStatus:
     FINAL = "STATUS_FINAL"
     SCHEDULED = "STATUS_SCHEDULED"
     IN_PROGRESS = "STATUS_IN_PROGRESS"
+    HALFTIME = "STATUS_HALFTIME"
+    END_PERIOD = "STATUS_END_PERIOD"
     POSTPONED = "STATUS_POSTPONED"
     CANCELED = "STATUS_CANCELED"
     RESCHEDULED = "STATUS_RESCHEDULED"
+
+
+# ESPN reports THREE in-progress states: STATUS_HALFTIME between halves and
+# STATUS_END_PERIOD between quarters are both "live" for rendering, polling and
+# any is-this-game-on question. Mirrors shared.js's isLiveStatus. (3 rarely-
+# changing status strings duplicated Python<->JS; not a calibration seam, so no
+# sync test — an accepted small duplication, see the Plan 3d spec.)
+#
+# This lives in constants, NOT in the API layer, because the vocabulary is not
+# API-specific: a script asking "is this game on" was reaching into
+# src.api.routes for it, and before that hand-rolled a STATUS_IN_PROGRESS-only
+# copy that silently dropped two of three live games (2026-09-17).
+LIVE_STATUSES = frozenset(
+    {GameStatus.IN_PROGRESS, GameStatus.HALFTIME, GameStatus.END_PERIOD}
+)
+
+
+def is_live_status(status: str | None) -> bool:
+    """True if an ESPN status name denotes a game in progress."""
+    return status in LIVE_STATUSES
 
 
 # Terminal statuses that clear stored completion. STATUS_SCHEDULED,
