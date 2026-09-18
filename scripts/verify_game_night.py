@@ -28,7 +28,13 @@ from typing import Iterable, NamedTuple
 import requests
 
 from src.api.routes import is_live_status
-from src.data.espn_api import fetch_games_for_range, today_et, yesterday_et
+from src.data.espn_api import (
+    ESPNAPIError,
+    fetch_games_for_range,
+    fetch_live_win_probability,
+    today_et,
+    yesterday_et,
+)
 
 PASS, FAIL, SKIP, INFO = "PASS", "FAIL", "SKIP", "INFO"
 
@@ -140,6 +146,32 @@ def daily_run_consumed(baseline: str | None, probed: list[dict]) -> bool:
     return baseline > max(g["date"] for g in probed)
 
 
+def live_wp_sample_counts(games: list[dict]) -> dict[str, int]:
+    """{event_id: usable win-probability samples} for the in-progress games.
+
+    Calls production's own fetch_live_win_probability, so the probe sees exactly
+    what the overlay sees — including samples our sanitizer drops. A count of 0
+    everywhere means the overlay had nothing to condition on.
+
+    Limitation, stated rather than engineered around: this does NOT separate
+    "ESPN sent no samples" from "ESPN sent samples our parser rejected". Both
+    leave the overlay with no input, so both are the same verdict here. If a
+    zero is surprising, check the raw array:
+        .../wnba/summary?event=<id> -> winprobability
+    """
+    counts: dict[str, int] = {}
+    for g in games:
+        if not is_live_status(g.get("status")):
+            continue
+        event_id = g.get("event_id") or ""
+        try:
+            payload = fetch_live_win_probability(event_id)
+            counts[event_id] = len((payload or {}).get("plays") or [])
+        except ESPNAPIError:
+            counts[event_id] = 0
+    return counts
+
+
 def playoffs_column_is_dead(odds: list[dict]) -> bool:
     """Mirror of playoffsColumnIsDead() in playoff_odds_helpers.js.
 
@@ -174,17 +206,41 @@ def seed_movement(
 # --- checks ---------------------------------------------------------------
 
 
-def check_live_flags(odds: list[dict], expect_state: str) -> CheckResult:
+def check_live_flags(
+    odds: list[dict], expect_state: str, wp_available: bool = True
+) -> CheckResult:
+    """`wp_available` decides whether a stood-down overlay is a defect.
+
+    The overlay conditions on ESPN's per-game win probability. On 2026-09-17
+    ESPN published `winprobability: []` for every in-progress game (while
+    carrying 116-193 plays; a completed game carried 405 samples), so the
+    overlay correctly declined to publish odds it could not condition on.
+    Reporting FAIL there blames us for an upstream gap. With no input there is
+    nothing to judge, which is this probe's definition of SKIP.
+
+    The distinction is what keeps that SKIP safe: if ESPN DID supply win
+    probability and the overlay still did not engage, that is our bug, and it
+    stays a FAIL.
+    """
     name = f"live flags (expect live_state={expect_state!r})"
     if not odds:
         return CheckResult(name, SKIP, "no odds rows returned")
     row = odds[0]
     got_live, got_state = row.get("live"), row.get("live_state")
     if not got_live:
+        if not wp_available:
+            return CheckResult(
+                name,
+                SKIP,
+                "ESPN published no usable live win probability for tonight's "
+                "games, so the overlay is CORRECTLY standing down rather than "
+                "publishing odds it cannot condition on. Not a defect.",
+            )
         return CheckResult(
             name,
             FAIL,
-            f"overlay did not engage: live={got_live!r} — serving the snapshot",
+            f"overlay did not engage: live={got_live!r} — serving the snapshot, "
+            "though ESPN DID supply win probability",
         )
     if got_state != expect_state:
         return CheckResult(name, FAIL, f"live=True but live_state={got_state!r}")
@@ -217,6 +273,11 @@ def check_repeatability(
     name = "seed determinism" if frozen else "cache coherence"
     if not first or not second:
         return CheckResult(name, SKIP, "no odds rows to compare")
+    # Two identical reads of the STORED snapshot are trivially identical and
+    # say nothing about the live path — the same vacuous green this probe
+    # refuses everywhere else.
+    if not first[0].get("live"):
+        return CheckResult(name, SKIP, "overlay not engaged; nothing to compare")
     if first == second:
         return CheckResult(
             name,
@@ -240,6 +301,11 @@ def check_seed_movement(
     live: list[dict], snapshot: list[dict], playing: set[str]
 ) -> CheckResult:
     name = "seed matrix moved vs the 6 AM snapshot"
+    # A non-live payload IS (a fallback to) the snapshot, so zero movement is
+    # the expected result, not a finding. Judging it would double-report the
+    # stood-down overlay that check_live_flags has already classified.
+    if not live or not live[0].get("live"):
+        return CheckResult(name, SKIP, "overlay not engaged; nothing to diff")
     if not snapshot:
         return CheckResult(name, SKIP, "no stored snapshot to compare against")
     if not playing:
@@ -350,6 +416,7 @@ def checks_for_night(
     snapshot: list[dict],
     playing: set[str],
     games: list[dict] | None = None,
+    wp_available: bool = True,
 ) -> list[CheckResult]:
     """The data checks that apply to this kind of night.
 
@@ -378,7 +445,7 @@ def checks_for_night(
         ]
     expect = "live" if night == "live" else "settled"
     return [
-        check_live_flags(odds, expect_state=expect),
+        check_live_flags(odds, expect_state=expect, wp_available=wp_available),
         check_seed_movement(odds, snapshot, playing),
         check_column_suppression(odds),
     ]
@@ -427,6 +494,11 @@ def main() -> int:
     if night in ("live", "settled") and daily_run_consumed(base_date, probed):
         night = "consumed"
 
+    # Does the overlay have anything to condition on? Decides whether a
+    # stood-down overlay is our defect or an upstream gap.
+    wp_counts = live_wp_sample_counts(games) if night == "live" else {}
+    wp_available = any(n > 0 for n in wp_counts.values()) if wp_counts else True
+
     upcoming = _get_json(base, "/api/games/upcoming") if night == "postseason" else []
     today_games = [g for g in upcoming if g.get("date") == today]
 
@@ -438,8 +510,14 @@ def main() -> int:
         )
     if night in ("live", "settled"):
         print(f"  baseline snapshot: {base_date or 'NONE FOUND'}")
+    if wp_counts:
+        shown = "  ".join(f"{gid}={n}" for gid, n in sorted(wp_counts.items()))
+        print(f"  ESPN live win-prob samples: {shown}")
 
-    night_results = checks_for_night(night, odds, snapshot, playing, games=today_games)
+    night_results = checks_for_night(
+        night, odds, snapshot, playing, games=today_games,
+        wp_available=wp_available,
+    )
 
     # Repeatability needs a second sample. Past the TTL the server runs a fresh
     # Monte Carlo; that is a determinism test only on a settled slate, where the

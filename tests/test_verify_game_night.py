@@ -17,6 +17,7 @@ from scripts.verify_game_night import (
     probed_games,
     check_column_suppression,
     check_live_flags,
+    check_repeatability,
     checks_for_night,
     check_seed_movement,
     classify_night,
@@ -281,3 +282,61 @@ def test_halftime_games_are_probed_for_seed_movement(status):
     unchecked on the one night live mode has ever run."""
     games = [_dated("2026-09-17", status=status)]
     assert probed_games(games) == games
+
+
+# --- FAIL vs SKIP when the overlay stands down (settled 2026-09-17) -------
+
+
+def test_not_engaging_without_usable_input_is_not_a_defect():
+    """ESPN published winprobability: [] for every in-progress game on
+    2026-09-17. The overlay refuses to publish odds it cannot condition on,
+    which is correct behavior — the check has no input to judge, so SKIP."""
+    odds = [_odds("A", "A", 1.0, {}, live=False)]
+    r = check_live_flags(odds, expect_state="live", wp_available=False)
+    assert r.status == SKIP
+    assert "standing down" in r.detail
+
+
+def test_not_engaging_WITH_usable_input_is_a_real_failure():
+    """The distinction that makes the SKIP above safe: if ESPN had win
+    probability and the overlay still did not engage, that is our bug."""
+    odds = [_odds("A", "A", 1.0, {}, live=False)]
+    r = check_live_flags(odds, expect_state="live", wp_available=True)
+    assert r.status == FAIL
+
+
+def test_seed_movement_is_unjudgeable_when_the_overlay_is_not_engaged():
+    """A non-live payload IS the snapshot, so zero movement is expected and
+    FAILing on it is a second false alarm."""
+    snap = [_odds("Dallas Wings", "DAL", 1.0, {"5": 0.40})]
+    served = [_odds("Dallas Wings", "DAL", 1.0, {"5": 0.40}, live=False)]
+    assert check_seed_movement(served, snap, {"Dallas Wings"}).status == SKIP
+
+
+def test_seed_movement_still_fails_when_live_but_frozen():
+    """The genuine defect this check exists for must survive the guard above."""
+    snap = [_odds("Dallas Wings", "DAL", 1.0, {"5": 0.40})]
+    served = [_odds("Dallas Wings", "DAL", 1.0, {"5": 0.40}, live=True)]
+    assert check_seed_movement(served, snap, {"Dallas Wings"}).status == FAIL
+
+
+def test_live_night_without_wp_reports_nothing_verified():
+    """End to end: the whole night must not read as a pass, nor as a failure."""
+    odds = [_odds("A", "A", 1.0, {}, live=False)]
+    results = checks_for_night(
+        "live", odds, odds, {"Dallas Wings"}, wp_available=False
+    )
+    assert not any(r.status == FAIL for r in results)
+    assert any(r.status == SKIP for r in results)
+
+
+def test_repeatability_is_vacuous_when_the_overlay_is_not_engaged():
+    """Two identical reads of the stored snapshot say nothing about the live
+    path; letting that PASS resurrects the vacuous green in a new place."""
+    snap = [_odds("A", "A", 1.0, {}, live=False)]
+    assert check_repeatability(snap, snap, frozen=False).status == SKIP
+
+
+def test_repeatability_still_judges_an_engaged_overlay():
+    live = [_odds("A", "A", 1.0, {}, live=True, live_state="live")]
+    assert check_repeatability(live, live, frozen=False).status == PASS
