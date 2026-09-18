@@ -49,6 +49,16 @@ def today_et() -> str:
     return datetime.now(ET).strftime("%Y-%m-%d")
 
 
+def now_et() -> datetime:
+    """Current instant in America/New_York, timezone-aware.
+
+    Sibling to today_et() for the one caller that needs the TIME of day as
+    well as the date: /api/health decides whether the 6 AM daily run should
+    already have landed, which today_et()'s string cannot express.
+    """
+    return datetime.now(ET)
+
+
 def yesterday_et() -> str:
     """ET date one day before today_et(), as 'YYYY-MM-DD'.
 

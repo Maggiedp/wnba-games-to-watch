@@ -2,7 +2,8 @@
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date as date_cls
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
@@ -1562,3 +1563,25 @@ def record_alert(session: Session, espn_id: str, date: str, label: str) -> None:
         session.commit()
     except IntegrityError:
         session.rollback()
+
+
+def has_game_near_date(session: Session, date: str, days: int) -> bool:
+    """True if any game is scheduled or was played within `days` of `date`.
+
+    Arms the /api/health freshness check. Reads the SCHEDULE rather than the
+    calendar: games extends into the future, so this stays true exactly while
+    the daily job is expected to produce a snapshot, and goes false on its own
+    in the offseason -- where fetch_schedule_and_results' window has inverted
+    past _SEASON_END, compute_daily_scores' empty-fetch guard trips, and NO
+    snapshot is written by design. It is stale-tolerant on purpose: during an
+    ESPN outage the previously-stored schedule still knows games are coming,
+    which is precisely when a missing snapshot is alarming. No season constant
+    to maintain across a rollover.
+    """
+    d = date_cls.fromisoformat(date)
+    lo = (d - timedelta(days=days)).isoformat()
+    hi = (d + timedelta(days=days)).isoformat()
+    return (
+        session.query(Game.id).filter(Game.date >= lo, Game.date <= hi).first()
+        is not None
+    )

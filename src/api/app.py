@@ -35,6 +35,7 @@ from src.data.espn_api import (
     fetch_games_for_range,
     fetch_live_win_probability,
     fetch_today_game_statuses,
+    now_et,
     today_et,
     yesterday_et,
 )
@@ -50,6 +51,7 @@ from src.db.queries import (
     get_latest_elo_history_season,
     get_latest_playoff_probability_date,
     get_playoff_probabilities,
+    has_game_near_date,
     get_rankings_by_broadcaster,
     get_shape_seasons,
     get_shot_league_avg,
@@ -1469,3 +1471,51 @@ async def trigger_thriller_poll(x_trigger_secret: str = Header(default="")):
         raise HTTPException(status_code=403, detail="Forbidden")
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _run_thriller_poll)
+
+
+# Hour (ET) by which the 6 AM daily run must have landed a snapshot. The job
+# fires at 06:00 ET with a 600s timeout, so this leaves ~2h of slack before a
+# missing row counts as a failure.
+_HEALTH_RUN_WINDOW_HOUR = 8
+# How near a scheduled/played game must be for the freshness check to be armed.
+_HEALTH_SCHEDULE_WINDOW_DAYS = 3
+
+
+@app.get("/api/health")
+def health():
+    """Publish the age of the newest playoff snapshot for the uptime check.
+
+    The missing monitoring layer from the 2026-09-17 incident: ESPN dropped a
+    scoreboard query form, compute_daily_scores correctly refused to overwrite
+    good rows with an empty fetch, main() returned 0, and two days passed with
+    nobody told. The log-based alert keys on a crash that never happened and
+    the uptime check passed on stale rows that still contained overall_score --
+    both layers only catch a crash. Snapshot AGE is what a silent degradation
+    moves.
+
+    Always 200: the uptime check matches on content ("status":"ok"), because a
+    stale snapshot is a data problem, not a server error, and a 5xx here would
+    pollute Cloud Run's own error metrics.
+    """
+    now = now_et()
+    today = now.strftime("%Y-%m-%d")
+    session = get_session()
+    try:
+        # Before the run window, yesterday's row is the freshest answer that
+        # can exist -- expecting today would alert every night at midnight.
+        expected = (
+            today
+            if now.hour >= _HEALTH_RUN_WINDOW_HOUR
+            else (now.date() - timedelta(days=1)).isoformat()
+        )
+        armed = has_game_near_date(session, today, _HEALTH_SCHEDULE_WINDOW_DAYS)
+        latest = get_latest_playoff_probability_date(session, today)
+        stale = armed and (latest is None or latest < expected)
+        return {
+            "status": "stale" if stale else "ok",
+            "latest_snapshot": latest,
+            "expected": expected,
+            "armed": armed,
+        }
+    finally:
+        session.close()
