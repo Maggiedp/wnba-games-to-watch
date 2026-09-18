@@ -12,7 +12,7 @@ from scripts.verify_game_night import (
     FAIL,
     PASS,
     SKIP,
-    baseline_date,
+    candidate_baseline_dates,
     daily_run_consumed,
     probed_games,
     check_column_suppression,
@@ -216,33 +216,41 @@ def test_probed_games_excludes_scheduled():
     assert [g["date"] for g in probed_games(games)] == ["2026-09-20"]
 
 
-def test_baseline_is_the_morning_of_the_late_game_not_today():
-    """The post-midnight case: today_et() has rolled to the 21st, but the game
-    being probed is dated the 20th and the 21st's snapshot does not exist yet."""
-    probed = [_dated("2026-09-20", status="STATUS_IN_PROGRESS")]
-    assert baseline_date(probed) == "2026-09-20"
+def test_baseline_candidates_run_newest_first_from_today():
+    """The overlay perturbs whatever the LAST daily run stored, so the newest
+    existing snapshot is the baseline."""
+    assert candidate_baseline_dates("2026-09-18", back=3) == [
+        "2026-09-18",
+        "2026-09-17",
+        "2026-09-16",
+    ]
 
 
-def test_baseline_takes_the_earliest_when_the_window_spans_midnight():
-    probed = [_dated("2026-09-21"), _dated("2026-09-20")]
-    assert baseline_date(probed) == "2026-09-20"
+def test_baseline_search_never_looks_past_today():
+    """Bound the search, don't clamp the result — a future-dated row must not
+    become the baseline."""
+    assert max(candidate_baseline_dates("2026-09-18")) == "2026-09-18"
 
 
-def test_baseline_is_none_without_probed_games():
-    assert baseline_date([]) is None
+def test_consumed_when_the_newest_snapshot_postdates_the_games():
+    """store_playoff_probabilities keys every snapshot to today_et() at write
+    time, so a snapshot dated after the game proves that run consumed it."""
+    assert daily_run_consumed("2026-09-21", [_dated("2026-09-20")]) is True
 
 
-def test_daily_run_consumed_when_a_later_snapshot_exists():
-    """get_upcoming_games filters winner_id IS NULL, so once the 6 AM run
-    records the winners the overlay correctly stands down."""
-    probed = [_dated("2026-09-20")]
-    later = [_odds("A", "A", 1.0, {})]
-    assert daily_run_consumed(probed, later) is True
+def test_not_consumed_while_the_snapshot_is_the_games_own_morning():
+    assert daily_run_consumed("2026-09-20", [_dated("2026-09-20")]) is False
 
 
-def test_not_consumed_before_the_next_daily_run():
-    probed = [_dated("2026-09-20")]
-    assert daily_run_consumed(probed, []) is False
+def test_not_consumed_when_tonights_games_are_the_newest_thing():
+    """Evening case: the window holds last night's finals AND tonight's live
+    games, and today's snapshot predates tonight."""
+    probed = [_dated("2026-09-20"), _dated("2026-09-21", status="STATUS_IN_PROGRESS")]
+    assert daily_run_consumed("2026-09-21", probed) is False
+
+
+def test_not_consumed_without_a_baseline():
+    assert daily_run_consumed(None, [_dated("2026-09-20")]) is False
 
 
 def test_consumed_night_skips_rather_than_failing():
@@ -252,3 +260,24 @@ def test_consumed_night_skips_rather_than_failing():
     assert results
     assert all(r.status == SKIP for r in results)
     assert "standing down" in results[0].detail
+
+
+# --- ESPN's three in-progress states (observed live, 2026-09-17) ----------
+
+
+@pytest.mark.parametrize(
+    "status", ["STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_END_PERIOD"]
+)
+def test_every_in_progress_state_counts_as_live(status):
+    """The real 2026-09-17 slate carried all three at once. Matching only
+    STATUS_IN_PROGRESS would call an all-halftime slate 'pregame' and skip
+    every check."""
+    assert classify_night([_game(status=status)]) == "live"
+
+
+@pytest.mark.parametrize("status", ["STATUS_HALFTIME", "STATUS_END_PERIOD"])
+def test_halftime_games_are_probed_for_seed_movement(status):
+    """They were silently dropped from `playing`, so their seed movement went
+    unchecked on the one night live mode has ever run."""
+    games = [_dated("2026-09-17", status=status)]
+    assert probed_games(games) == games

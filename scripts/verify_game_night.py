@@ -27,6 +27,7 @@ from typing import Iterable, NamedTuple
 
 import requests
 
+from src.api.routes import is_live_status
 from src.data.espn_api import fetch_games_for_range, today_et, yesterday_et
 
 PASS, FAIL, SKIP, INFO = "PASS", "FAIL", "SKIP", "INFO"
@@ -51,6 +52,10 @@ _CACHE_TTL_S = 15
 # postseason path never engaged at all.
 _POSTSEASON_BAND = (25.0, 85.0)
 
+# How far back to look for the newest stored snapshot. Covers a missed daily run
+# or two without letting a long outage silently diff against ancient standings.
+_BASELINE_LOOKBACK_DAYS = 4
+
 
 class CheckResult(NamedTuple):
     name: str
@@ -72,9 +77,9 @@ def classify_night(games: list[dict]) -> str:
         return "off"
     if any(g.get("season_type") == 3 for g in games):
         return "postseason"
-    statuses = [g.get("status") for g in games]
-    if "STATUS_IN_PROGRESS" in statuses:
+    if any(is_live_status(g.get("status")) for g in games):
         return "live"
+    statuses = [g.get("status") for g in games]
     if all(s == "STATUS_FINAL" for s in statuses):
         return "settled"
     return "pregame"
@@ -85,34 +90,54 @@ def probed_games(games: list[dict]) -> list[dict]:
 
     A scheduled game contributes no override, so it must not drag the snapshot
     baseline forward onto a date whose 6 AM run has not happened yet.
+
+    Liveness comes from production's own is_live_status, NOT a hand-rolled
+    STATUS_IN_PROGRESS check: ESPN reports THREE in-progress states, and the
+    real 2026-09-17 slate carried STATUS_HALFTIME and STATUS_END_PERIOD
+    alongside it. Matching only STATUS_IN_PROGRESS silently dropped two of the
+    three live games from the seed-movement check.
     """
     return [
-        g for g in games if g.get("status") in ("STATUS_IN_PROGRESS", "STATUS_FINAL")
+        g
+        for g in games
+        if is_live_status(g.get("status")) or g.get("status") == "STATUS_FINAL"
     ]
 
 
-def baseline_date(probed: list[dict]) -> str | None:
-    """The snapshot date to diff against: the morning of the earliest probed game.
+def candidate_baseline_dates(today: str, back: int = _BASELINE_LOOKBACK_DAYS) -> list[str]:
+    """Dates to try for the baseline snapshot, newest first, bounded at `today`.
 
-    NOT today. A 10pm-ET tip is still in progress after midnight, when today_et()
-    has already rolled over and today's 6 AM snapshot does not exist yet — an
-    explicit ?date= for it returns []. The right baseline is that game's own
-    morning, which is also the standings state the overlay is building on.
+    The overlay perturbs whatever the LAST daily run stored, so the baseline is
+    the newest snapshot that exists — before 6 AM that is yesterday's, after it
+    today's. Two earlier attempts got this wrong in opposite directions: keying
+    on `today` SKIPPED the check after midnight (today's snapshot does not exist
+    yet), and keying on the earliest probed game's date picks a STALE day once
+    the window holds both last night's finals and tonight's live games.
+
+    Bounded at today rather than clamped afterwards: a future-dated row must not
+    become the baseline, and clamping a newest-first search can land on an empty
+    date instead of the newest real one.
     """
-    dates = [g["date"] for g in probed if g.get("date")]
-    return min(dates) if dates else None
+    d = date_cls.fromisoformat(today)
+    return [(d - timedelta(days=i)).isoformat() for i in range(back)]
 
 
-def daily_run_consumed(probed: list[dict], snapshot_after: list[dict]) -> bool:
+def daily_run_consumed(baseline: str | None, probed: list[dict]) -> bool:
     """True when the 6 AM run has already folded these results into the snapshot.
 
     get_upcoming_games filters on `winner_id IS NULL`, so once the daily run
     records last night's winners those games leave remaining_games, no override
     can attach, and the overlay correctly stands down. Demanding live flags then
-    would FAIL against correct behavior. A snapshot dated AFTER the last probed
-    game is the observable proof that this has happened.
+    would FAIL against correct behavior.
+
+    The proof is the newest snapshot being dated AFTER the last probed game.
+    store_playoff_probabilities keys every snapshot to today_et() at write time
+    (daily_update.py), so a snapshot dated D exists only once the clock reached D
+    and that run completed — which is exactly what consumed those results.
     """
-    return bool(probed) and bool(snapshot_after)
+    if not baseline or not probed:
+        return False
+    return baseline > max(g["date"] for g in probed)
 
 
 def playoffs_column_is_dead(odds: list[dict]) -> bool:
@@ -388,24 +413,19 @@ def main() -> int:
 
     odds = _get_json(base, "/api/playoff-odds")
 
-    # Baseline: the morning of the EARLIEST probed game, not today. After
-    # midnight today_et() has rolled over and today's snapshot does not exist
-    # yet, so a today-keyed baseline would silently SKIP the seed check on
-    # exactly the late game the widened window exists to catch.
-    base_date = baseline_date(probed) or today
-    snapshot = _get_json(base, f"/api/playoff-odds?date={base_date}")
+    # Baseline: the NEWEST stored snapshot, which is the state the overlay is
+    # perturbing. Searching newest-first from today (never past it) handles both
+    # the post-midnight case, where today's snapshot does not exist yet, and the
+    # evening case, where the window also holds last night's finals.
+    base_date, snapshot = None, []
+    for cand in candidate_baseline_dates(today):
+        rows = _get_json(base, f"/api/playoff-odds?date={cand}")
+        if rows:
+            base_date, snapshot = cand, rows
+            break
 
-    # A snapshot dated after the last probed game proves the 6 AM run already
-    # consumed those results, which is why the overlay stands down.
-    if night in ("live", "settled"):
-        last_probed = max(g["date"] for g in probed)
-        day_after = (
-            date_cls.fromisoformat(last_probed) + timedelta(days=1)
-        ).isoformat()
-        if daily_run_consumed(
-            probed, _get_json(base, f"/api/playoff-odds?date={day_after}")
-        ):
-            night = "consumed"
+    if night in ("live", "settled") and daily_run_consumed(base_date, probed):
+        night = "consumed"
 
     upcoming = _get_json(base, "/api/games/upcoming") if night == "postseason" else []
     today_games = [g for g in upcoming if g.get("date") == today]
@@ -417,7 +437,7 @@ def main() -> int:
             f"    {g['team_a']} v {g['team_b']}  {g['status']}  type={g['season_type']}"
         )
     if night in ("live", "settled"):
-        print(f"  baseline snapshot: {base_date}")
+        print(f"  baseline snapshot: {base_date or 'NONE FOUND'}")
 
     night_results = checks_for_night(night, odds, snapshot, playing, games=today_games)
 
