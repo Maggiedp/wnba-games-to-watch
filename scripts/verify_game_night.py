@@ -27,7 +27,7 @@ from typing import Iterable, NamedTuple
 
 import requests
 
-from src.constants import is_live_status
+from src.constants import GameStatus, is_live_status
 from src.data.espn_api import (
     ESPNAPIError,
     fetch_games_for_range,
@@ -63,6 +63,12 @@ _POSTSEASON_BAND = (25.0, 85.0)
 _BASELINE_LOOKBACK_DAYS = 4
 
 
+# Check names, shared so a rename cannot silently desync the generic-SKIP
+# branch in checks_for_night from the check that owns the name.
+_NAME_SEED_MOVEMENT = "seed matrix moved vs the 6 AM snapshot"
+_NAME_COLUMN_SUPPRESSION = "Playoffs column suppression"
+
+
 class CheckResult(NamedTuple):
     name: str
     status: str
@@ -86,7 +92,7 @@ def classify_night(games: list[dict]) -> str:
     if any(is_live_status(g.get("status")) for g in games):
         return "live"
     statuses = [g.get("status") for g in games]
-    if all(s == "STATUS_FINAL" for s in statuses):
+    if all(s == GameStatus.FINAL for s in statuses):
         return "settled"
     return "pregame"
 
@@ -106,7 +112,7 @@ def probed_games(games: list[dict]) -> list[dict]:
     return [
         g
         for g in games
-        if is_live_status(g.get("status")) or g.get("status") == "STATUS_FINAL"
+        if is_live_status(g.get("status")) or g.get("status") == GameStatus.FINAL
     ]
 
 
@@ -206,6 +212,15 @@ def seed_movement(
 # --- checks ---------------------------------------------------------------
 
 
+def _overlay_engaged(odds: list[dict]) -> bool:
+    """True when the served payload is the live overlay, not the stored snapshot.
+
+    Three checks gate on this: a non-live payload IS (a fallback to) the
+    snapshot, so diffing or re-reading it measures nothing about the live path.
+    """
+    return bool(odds) and bool(odds[0].get("live"))
+
+
 def check_live_flags(
     odds: list[dict], expect_state: str, wp_available: bool = True
 ) -> CheckResult:
@@ -276,7 +291,7 @@ def check_repeatability(
     # Two identical reads of the STORED snapshot are trivially identical and
     # say nothing about the live path — the same vacuous green this probe
     # refuses everywhere else.
-    if not first[0].get("live"):
+    if not _overlay_engaged(first):
         return CheckResult(name, SKIP, "overlay not engaged; nothing to compare")
     if first == second:
         return CheckResult(
@@ -300,18 +315,16 @@ def check_repeatability(
 def check_seed_movement(
     live: list[dict], snapshot: list[dict], playing: set[str]
 ) -> CheckResult:
-    name = "seed matrix moved vs the 6 AM snapshot"
+    name = _NAME_SEED_MOVEMENT
     # A non-live payload IS (a fallback to) the snapshot, so zero movement is
     # the expected result, not a finding. Judging it would double-report the
     # stood-down overlay that check_live_flags has already classified.
-    if not live or not live[0].get("live"):
+    if not _overlay_engaged(live):
         return CheckResult(name, SKIP, "overlay not engaged; nothing to diff")
     if not snapshot:
         return CheckResult(name, SKIP, "no stored snapshot to compare against")
     if not playing:
         return CheckResult(name, SKIP, "no teams playing")
-    if not live:
-        return CheckResult(name, SKIP, "no live rows returned")
     moved = seed_movement(live, snapshot, playing)
     if not moved:
         return CheckResult(
@@ -327,11 +340,11 @@ def check_seed_movement(
 
 
 def check_column_suppression(odds: list[dict]) -> CheckResult:
-    name = "Playoffs column suppression"
+    name = _NAME_COLUMN_SUPPRESSION
     if not odds:
         return CheckResult(name, SKIP, "no odds rows returned")
     dead = playoffs_column_is_dead(odds)
-    live = bool(odds[0].get("live"))
+    live = _overlay_engaged(odds)
     if dead and live:
         return CheckResult(
             name,
@@ -435,8 +448,8 @@ def checks_for_night(
         }[night]
         return [
             CheckResult("live flags", SKIP, why),
-            CheckResult("seed matrix moved vs the 6 AM snapshot", SKIP, why),
-            CheckResult("Playoffs column suppression", SKIP, why),
+            CheckResult(_NAME_SEED_MOVEMENT, SKIP, why),
+            CheckResult(_NAME_COLUMN_SUPPRESSION, SKIP, why),
         ]
     if night == "postseason":
         return [
