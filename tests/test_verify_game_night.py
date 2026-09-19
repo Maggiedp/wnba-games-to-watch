@@ -352,8 +352,19 @@ def test_repeatability_still_judges_an_engaged_overlay():
 # band must not be retuned without re-measuring.
 
 
-def _post(v, abbr_a="MIN", abbr_b="DAL"):
-    return {"team_a_abbr": abbr_a, "team_b_abbr": abbr_b, "importance_score": v}
+_MIN, _DAL = "Minnesota Lynx", "Dallas Wings"
+
+
+def _post(v, team_a=_MIN, team_b=_DAL):
+    """An /api/games/upcoming row. Carries real team names so the opener
+    check keys on a realistic pair rather than a degenerate empty one."""
+    return {
+        "team_a": team_a,
+        "team_b": team_b,
+        "team_a_abbr": team_a[:3].upper(),
+        "team_b_abbr": team_b[:3].upper(),
+        "importance_score": v,
+    }
 
 
 @pytest.mark.parametrize(
@@ -376,6 +387,10 @@ def test_measured_postseason_values_pass(value, label):
     win-or-go-home game is structurally pinned near POSTSEASON_MAX_SWING, so it
     scores ~99, not the ~45 an opener scores. The original (25, 85) band failed
     all three against correct behavior.
+
+    F G7's 99.20 also covers the fallback sentinel from below: the gap between
+    a real winner-take-all game and 100.0 is the Monte Carlo noise floor, so
+    the sentinel must not be a threshold parked in that gap.
     """
     assert check_postseason_importance([_post(value)]).status == PASS, label
 
@@ -386,16 +401,6 @@ def test_the_slot_match_fallback_is_still_caught():
     result = check_postseason_importance([_post(100.0)])
     assert result.status == FAIL
     assert "fallback" in result.detail
-
-
-def test_a_real_game_seven_is_not_read_as_the_fallback():
-    """99.20 is a measured Finals Game 7, not a fallback.
-
-    Guards the reason the sentinel is an exact 100.0 rather than a threshold:
-    the gap between a real winner-take-all game and the fallback is the Monte
-    Carlo noise floor (~0.8 points at 10k sims), and it narrows as sims rise.
-    """
-    assert check_postseason_importance([_post(99.20)]).status == PASS
 
 
 def test_a_value_just_under_the_fallback_is_not_read_as_the_fallback():
@@ -449,21 +454,14 @@ def test_a_decisive_later_game_in_the_nineties_still_passes():
     have already played, the series can be at win-or-go-home and ~99 is
     correct. Guards against reintroducing the 85-ceiling bug behind a new
     name."""
-    pair = {frozenset({"Minnesota Lynx", "Dallas Wings"})}
-    game = {
-        "team_a": "Minnesota Lynx",
-        "team_b": "Dallas Wings",
-        "team_a_abbr": "MIN",
-        "team_b_abbr": "DAL",
-        "importance_score": 98.80,
-    }
-    assert check_postseason_importance([game], played_pairs=pair).status == PASS
+    pair = {frozenset({_MIN, _DAL})}
+    assert check_postseason_importance([_post(98.80)], played_pairs=pair).status == PASS
 
 
-def test_measured_openers_pass_against_the_opener_ceiling():
+@pytest.mark.parametrize("value", [40.37, 51.36, 32.82, 37.09, 27.37, 30.93])
+def test_measured_openers_pass_against_the_opener_ceiling(value):
     """Every opener value actually measured must clear the ceiling."""
-    for v in (40.37, 51.36, 32.82, 37.09, 27.37, 30.93):
-        assert check_postseason_importance([_post(v)], played_pairs=set()).status == PASS
+    assert check_postseason_importance([_post(value)], played_pairs=set()).status == PASS
 
 
 def test_unknown_series_history_does_not_manufacture_a_failure():
