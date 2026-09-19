@@ -495,7 +495,9 @@ def check_postseason_importance(
     return CheckResult(name, PASS, listing)
 
 
-def check_postseason_movers(games: list[dict], fetch_detail) -> CheckResult:
+def check_postseason_movers(
+    games: list[dict], pages: dict[str, str | None]
+) -> CheckResult:
     """Confirm each postseason game's detail page names its teams at stake.
 
     The structural counterpart to the magnitude check above, and the stronger
@@ -504,11 +506,14 @@ def check_postseason_movers(games: list[dict], fetch_detail) -> CheckResult:
     score. So a rendered "What's at stake" block proves the postseason path
     engaged, with no dependence on sim count or the Monte Carlo noise floor.
 
-    `fetch_detail` maps an espn_id to the page's HTML, or None when the page
-    could not be read. Losing every page on a scored slate FAILS rather than
-    SKIPs: the magnitude check passes off /api/games/upcoming alone, so a SKIP
-    would hide behind its PASS as "OK (1 skipped)" — and the by-eye step this
-    replaced is gone, so nobody would look instead.
+    `pages` maps an espn_id to its detail HTML; a missing key or a None value
+    is a page that could not be read. Plain data, like every other check in
+    this layer — main does the fetching.
+
+    Losing every page on a scored slate FAILS rather than SKIPs: the magnitude
+    check passes off /api/games/upcoming alone, so a SKIP would hide behind its
+    PASS as "OK (1 skipped)" — and the by-eye step this replaced is gone, so
+    nobody would look instead.
 
     Kept ALONGSIDE the magnitude band rather than replacing it: the band is
     measured, and it catches a regular-season-sized score that this check
@@ -532,7 +537,7 @@ def check_postseason_movers(games: list[dict], fetch_detail) -> CheckResult:
         if not espn_id:
             lost.append(f"{label} (no espn_id on the row)")
             continue
-        html = fetch_detail(espn_id)
+        html = pages.get(espn_id)
         if html is None:
             lost.append(f"{label} (detail page unreachable)")
             continue
@@ -547,31 +552,29 @@ def check_postseason_movers(games: list[dict], fetch_detail) -> CheckResult:
                     f"{label} (no movers block — bracket slot match unproven; "
                     "benign only if neither team's odds moved 3pp)"
                 )
+            continue
+        playing = {g.get("team_a", ""), g.get("team_b", "")}
+        if any(t not in playing for t in named):
+            # A bracket game moves only its two participants, so anyone else
+            # named means the regular-season payload was rendered — whatever
+            # the magnitude says.
+            bad.append(
+                f"{label} (at stake: {', '.join(named)}; a bracket game moves "
+                "only its two participants — this looks like the "
+                "regular-season payload)"
+            )
         else:
-            playing = {g.get("team_a", ""), g.get("team_b", "")}
-            stray = [t for t in named if t not in playing]
-            if stray or not named:
-                # A bracket game moves only its two participants, so anyone
-                # else named means the regular-season payload was rendered —
-                # whatever the magnitude says.
-                bad.append(
-                    f"{label} (at stake: {', '.join(named) or 'nobody'}; a "
-                    "bracket game moves only its two participants — this "
-                    "looks like the regular-season payload)"
-                )
-            else:
-                # One mover means a participant sat below min_delta=0.03. The
-                # block rendering at all is what proves the slot matched.
-                proved.append(f"{label} x{len(named)}")
+            # One mover means a participant sat below min_delta=0.03. The
+            # block rendering at all is what proves the slot matched.
+            proved.append(f"{label} x{len(named)}")
     notes = lost + benign
     if bad:
         return CheckResult(name, FAIL, "; ".join(bad + notes))
     if proved:
         return CheckResult(name, PASS, "; ".join(proved + notes))
     if lost:
-        # Nothing proved AND evidence was lost. The magnitude check passes off
-        # /api/games/upcoming alone, so a SKIP here would hide behind its PASS
-        # as "OK (1 skipped)" — and the by-eye step this replaced is gone.
+        # Nothing proved AND evidence was lost — see the docstring on why that
+        # is a failure rather than a skip.
         return CheckResult(
             name, FAIL, "no detail page could be read: " + "; ".join(notes)
         )
@@ -624,7 +627,7 @@ def checks_for_night(
     games: list[dict] | None = None,
     wp_available: bool = True,
     played_pairs: set[frozenset[str]] | None = None,
-    fetch_detail=None,
+    detail_pages: dict[str, str | None] | None = None,
 ) -> list[CheckResult]:
     """The data checks that apply to this kind of night.
 
@@ -647,13 +650,10 @@ def checks_for_night(
             CheckResult(_NAME_COLUMN_SUPPRESSION, SKIP, why),
         ]
     if night == "postseason":
-        # No fetcher means the detail pages cannot be read at all, which the
-        # check reports as a failure on a scored slate — the same as any other
-        # way of losing the evidence.
         return [
             check_live_disabled(odds),
             check_postseason_importance(games or [], played_pairs=played_pairs),
-            check_postseason_movers(games or [], fetch_detail or (lambda _id: None)),
+            check_postseason_movers(games or [], detail_pages or {}),
         ]
     expect = "live" if night == "live" else "settled"
     return [
@@ -672,22 +672,24 @@ def _get_json(base: str, path: str) -> list[dict]:
     return r.json()
 
 
-def _detail_fetcher(base: str):
-    """`espn_id -> game detail page HTML`, or None when the page can't be read.
+def _fetch_detail_pages(base: str, games: list[dict]) -> dict[str, str | None]:
+    """`espn_id -> detail page HTML` for every scored game, None if unreadable.
 
-    Unreachable has to be distinguishable from "the block is missing": one is
-    an unproven check, the other is the defect this looks for.
+    Unreachable has to stay distinguishable from "the block is missing": one
+    is an unproven check, the other is the defect this looks for.
     """
-
-    def fetch(espn_id: str) -> str | None:
+    pages: dict[str, str | None] = {}
+    for g in games:
+        espn_id = g.get("espn_id")
+        if not espn_id or g.get("importance_score") is None:
+            continue
         try:
             r = requests.get(f"{base}/game/{espn_id}", timeout=_HTTP_TIMEOUT)
             r.raise_for_status()
+            pages[espn_id] = r.text
         except requests.RequestException:
-            return None
-        return r.text
-
-    return fetch
+            pages[espn_id] = None
+    return pages
 
 
 def main() -> int:
@@ -771,7 +773,9 @@ def main() -> int:
     night_results = checks_for_night(
         night, odds, snapshot, playing, games=today_games,
         wp_available=wp_available, played_pairs=played_pairs,
-        fetch_detail=_detail_fetcher(base),
+        detail_pages=(
+            _fetch_detail_pages(base, today_games) if night == "postseason" else {}
+        ),
     )
 
     # Repeatability needs a second sample. Past the TTL the server runs a fresh
