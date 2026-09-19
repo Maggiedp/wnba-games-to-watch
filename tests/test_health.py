@@ -10,11 +10,9 @@ AGE, which is what this endpoint publishes.
 """
 
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
+from src.data.espn_api import ET
 from src.db.queries import upsert_game, upsert_playoff_probability, upsert_team
-
-ET = ZoneInfo("America/New_York")
 
 
 def _at(hour: int, day_offset: int = 0) -> datetime:

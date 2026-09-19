@@ -29,10 +29,10 @@ from src.constants import (  # noqa: F401 — Broadcasters used in get_broadcast
     is_live_status,
 )
 from src.data.espn_api import (
-    _SEASON_END,
     ESPNAPIError,
     ESPNNotFoundError,
     clock_season,
+    daily_fetch_window,
     fetch_games_for_range,
     fetch_live_win_probability,
     fetch_today_game_statuses,
@@ -52,7 +52,6 @@ from src.db.queries import (
     get_latest_elo_history_season,
     get_latest_playoff_probability_date,
     get_playoff_probabilities,
-    has_game_in_window,
     get_rankings_by_broadcaster,
     get_shape_seasons,
     get_shot_league_avg,
@@ -67,6 +66,7 @@ from src.db.queries import (
     get_teams_by_ids,
     get_upcoming_rankings,
     has_alerted,
+    has_game_in_window,
     record_alert,
     shot_row_to_dict,
 )
@@ -1480,7 +1480,6 @@ async def trigger_thriller_poll(x_trigger_secret: str = Header(default="")):
 _HEALTH_RUN_WINDOW_HOUR = 8
 
 
-
 @app.get("/api/health")
 def health():
     """Publish the age of the newest playoff snapshot for the uptime check.
@@ -1499,23 +1498,18 @@ def health():
     """
     now = now_et()
     today = now.strftime("%Y-%m-%d")
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
     session = get_session()
     try:
         # Before the run window, yesterday's row is the freshest answer that
         # can exist -- expecting today would alert every night at midnight.
-        expected = (
-            today
-            if now.hour >= _HEALTH_RUN_WINDOW_HOUR
-            else (now.date() - timedelta(days=1)).isoformat()
-        )
-        # Arm on the daily job's OWN fetch window: it writes a snapshot iff a
-        # game falls in [today-1, _SEASON_END]. A mid-season break keeps future
-        # games in range, so the job keeps writing and the check stays armed.
-        armed = has_game_in_window(
-            session,
-            (now.date() - timedelta(days=1)).isoformat(),
-            _SEASON_END.isoformat(),
-        )
+        expected = today if now.hour >= _HEALTH_RUN_WINDOW_HOUR else yesterday
+        # Arm on the daily job's OWN fetch window (one shared definition, so
+        # the two cannot drift): it writes a snapshot iff a game falls in that
+        # range. A mid-season break keeps future games in it, so the job keeps
+        # writing and the check stays armed.
+        start, end = daily_fetch_window(now.date())
+        armed = has_game_in_window(session, start.isoformat(), end.isoformat())
         latest = get_latest_playoff_probability_date(session, today)
         stale = armed and (latest is None or latest < expected)
         return {

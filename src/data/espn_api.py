@@ -384,11 +384,29 @@ def fetch_games_for_range(
     return all_games
 
 
+def daily_fetch_window(today: date) -> tuple[date, date]:
+    """The range the daily ingest covers: yesterday through end of season.
+
+    Shared so the /api/health freshness monitor can ask "should a snapshot
+    exist by now?" against the SAME window the writer actually fetches,
+    instead of re-deriving it. Those two drifting apart is how a monitor
+    quietly stops watching -- this branch already shipped one such blind
+    spot (an arming rule keyed to proximity rather than to this window went
+    dark for 11 days of a mid-season break).
+
+    `today` is a parameter rather than a clock read because the two callers
+    legitimately keep different clocks -- the ingest runs on date.today()
+    (UTC on Cloud Run), /api/health reasons in ET. The shape of the window is
+    what needs sharing; imposing one clock on both would change behaviour.
+    """
+    # Include yesterday to catch games that just finished.
+    return today - timedelta(days=1), _SEASON_END
+
+
 def fetch_schedule_and_results() -> list[dict]:
     """Return all games from yesterday through end of season, WNBA teams only."""
-    today = date.today()
-    # Include yesterday to catch games that just finished
-    games = fetch_games_for_range(today - timedelta(days=1), _SEASON_END)
+    start, end = daily_fetch_window(date.today())
+    games = fetch_games_for_range(start, end)
     logger.info(f"Fetched {len(games)} WNBA games through end of season")
     return games
 
