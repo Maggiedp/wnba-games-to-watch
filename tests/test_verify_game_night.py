@@ -17,6 +17,7 @@ from scripts.verify_game_night import (
     probed_games,
     check_column_suppression,
     check_postseason_importance,
+    played_postseason_pairs,
     check_live_flags,
     check_repeatability,
     checks_for_night,
@@ -412,6 +413,66 @@ def test_a_regular_season_sized_score_still_fails():
     """A postseason game scored down the regular-season path — the failure the
     floor exists to catch."""
     assert check_postseason_importance([_post(12.0)]).status == FAIL
+
+
+def test_played_postseason_pairs_ignores_scheduled_and_regular_season_rows():
+    """Only COMPLETED postseason games make a matchup "already played".
+
+    A scheduled later game in the same series must not mark the series as
+    under way — that would silently drop the opener ceiling on the very game
+    it is meant to judge.
+    """
+    history = [
+        {"team_a": "A", "team_b": "B", "season_type": 3, "winner_team": "A"},
+        {"team_a": "C", "team_b": "D", "season_type": 3, "winner_team": None},
+        {"team_a": "E", "team_b": "F", "season_type": 2, "winner_team": "E"},
+    ]
+    assert played_postseason_pairs(history) == {frozenset({"A", "B"})}
+
+
+def test_a_series_opener_in_the_nineties_fails():
+    """The gap adversarial review found: with only a floor and an exact
+    sentinel, an over-inflated opener reads as healthy.
+
+    Game 1 of a series is never win-or-go-home -- true of Bo3, Bo5 and Bo7
+    alike -- so an opener has a real ceiling even though a later game does
+    not. Measured openers top out at 51.36; 95.0 is the inflated value this
+    must catch.
+    """
+    result = check_postseason_importance([_post(95.0)], played_pairs=set())
+    assert result.status == FAIL
+    assert "opener" in result.detail
+
+
+def test_a_decisive_later_game_in_the_nineties_still_passes():
+    """The counterpart the opener ceiling must not break: once the two teams
+    have already played, the series can be at win-or-go-home and ~99 is
+    correct. Guards against reintroducing the 85-ceiling bug behind a new
+    name."""
+    pair = {frozenset({"Minnesota Lynx", "Dallas Wings"})}
+    game = {
+        "team_a": "Minnesota Lynx",
+        "team_b": "Dallas Wings",
+        "team_a_abbr": "MIN",
+        "team_b_abbr": "DAL",
+        "importance_score": 98.80,
+    }
+    assert check_postseason_importance([game], played_pairs=pair).status == PASS
+
+
+def test_measured_openers_pass_against_the_opener_ceiling():
+    """Every opener value actually measured must clear the ceiling."""
+    for v in (40.37, 51.36, 32.82, 37.09, 27.37, 30.93):
+        assert check_postseason_importance([_post(v)], played_pairs=set()).status == PASS
+
+
+def test_unknown_series_history_does_not_manufacture_a_failure():
+    """If the postseason history fetch fails, the opener ceiling cannot be
+    applied. It must go unapplied rather than failing every decisive game --
+    the false-positive direction this branch exists to remove."""
+    result = check_postseason_importance([_post(98.80)], played_pairs=None)
+    assert result.status == PASS
+    assert "opener ceiling not applied" in result.detail
 
 
 def test_the_probe_sentinel_matches_the_value_production_actually_emits():
