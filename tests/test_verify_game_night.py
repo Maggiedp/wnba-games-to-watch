@@ -414,6 +414,24 @@ def test_a_regular_season_sized_score_still_fails():
     assert check_postseason_importance([_post(12.0)]).status == FAIL
 
 
+def test_the_probe_sentinel_matches_the_value_production_actually_emits():
+    """Pin the cross-module coupling the exact comparison depends on.
+
+    `_POSTSEASON_FALLBACK` is only meaningful because `_importance_for_game`
+    returns that exact literal when a postseason game cannot be matched to a
+    bracket slot. Nothing else ties the two together, so changing the
+    production fallback would silently blind the probe. Assert the real
+    function, rather than trusting a number copied between modules.
+    """
+    from scripts.daily_update import _importance_for_game
+    from scripts.verify_game_night import _POSTSEASON_FALLBACK
+
+    unmatchable = {"team_a": "A", "team_b": "B", "season_type": 3, "event_id": "x"}
+    fallback = _importance_for_game(unmatchable, [], {}, 1.0, bracket_state=None)
+    assert fallback == _POSTSEASON_FALLBACK
+    assert check_postseason_importance([_post(fallback)]).status == FAIL
+
+
 def test_no_postseason_score_skips_rather_than_passes():
     assert check_postseason_importance([]).status == SKIP
     assert (
