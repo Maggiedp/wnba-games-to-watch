@@ -505,7 +505,10 @@ def check_postseason_movers(games: list[dict], fetch_detail) -> CheckResult:
     engaged, with no dependence on sim count or the Monte Carlo noise floor.
 
     `fetch_detail` maps an espn_id to the page's HTML, or None when the page
-    could not be read — unreachable is unproven, never healthy.
+    could not be read. Losing every page on a scored slate FAILS rather than
+    SKIPs: the magnitude check passes off /api/games/upcoming alone, so a SKIP
+    would hide behind its PASS as "OK (1 skipped)" — and the by-eye step this
+    replaced is gone, so nobody would look instead.
 
     Kept ALONGSIDE the magnitude band rather than replacing it: the band is
     measured, and it catches a regular-season-sized score that this check
@@ -522,23 +525,23 @@ def check_postseason_movers(games: list[dict], fetch_detail) -> CheckResult:
     scored = [g for g in games if g.get("importance_score") is not None]
     if not scored:
         return CheckResult(name, SKIP, "no postseason game carries an importance score")
-    bad, proved, notes = [], [], []
+    bad, proved, lost, benign = [], [], [], []
     for g in scored:
         label = _score_label(g)
         espn_id = g.get("espn_id")
         if not espn_id:
-            notes.append(f"{label} (no espn_id on the row)")
+            lost.append(f"{label} (no espn_id on the row)")
             continue
         html = fetch_detail(espn_id)
         if html is None:
-            notes.append(f"{label} (detail page unreachable)")
+            lost.append(f"{label} (detail page unreachable)")
             continue
         named = mover_teams(html)
         if named is None:
             # Suppressed by design when the corrected swing clamped to zero;
             # anywhere else, a missing block is the fallback's signature.
             if g["importance_score"] == 0.0:
-                notes.append(f"{label} (movers suppressed at 0.0, as designed)")
+                benign.append(f"{label} (movers suppressed at 0.0, as designed)")
             else:
                 bad.append(
                     f"{label} (no movers block — bracket slot match unproven; "
@@ -560,11 +563,21 @@ def check_postseason_movers(games: list[dict], fetch_detail) -> CheckResult:
                 # One mover means a participant sat below min_delta=0.03. The
                 # block rendering at all is what proves the slot matched.
                 proved.append(f"{label} x{len(named)}")
+    notes = lost + benign
     if bad:
         return CheckResult(name, FAIL, "; ".join(bad + notes))
-    if not proved:
-        return CheckResult(name, SKIP, "; ".join(notes) or "nothing to read")
-    return CheckResult(name, PASS, "; ".join(proved + notes))
+    if proved:
+        return CheckResult(name, PASS, "; ".join(proved + notes))
+    if lost:
+        # Nothing proved AND evidence was lost. The magnitude check passes off
+        # /api/games/upcoming alone, so a SKIP here would hide behind its PASS
+        # as "OK (1 skipped)" — and the by-eye step this replaced is gone.
+        return CheckResult(
+            name, FAIL, "no detail page could be read: " + "; ".join(notes)
+        )
+    # Nothing proved but nothing lost either: every score legitimately
+    # suppressed its own movers. Unproven, not broken.
+    return CheckResult(name, SKIP, "; ".join(benign) or "nothing to read")
 
 
 def check_logs(hours: int = 12) -> CheckResult:
@@ -634,8 +647,9 @@ def checks_for_night(
             CheckResult(_NAME_COLUMN_SUPPRESSION, SKIP, why),
         ]
     if night == "postseason":
-        # No fetcher means the detail pages could not be read at all, which
-        # the check reports as SKIP rather than treating as healthy.
+        # No fetcher means the detail pages cannot be read at all, which the
+        # check reports as a failure on a scored slate — the same as any other
+        # way of losing the evidence.
         return [
             check_live_disabled(odds),
             check_postseason_importance(games or [], played_pairs=played_pairs),

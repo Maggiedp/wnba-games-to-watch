@@ -606,14 +606,41 @@ def test_more_than_two_teams_at_stake_fails():
     )
 
 
-def test_an_unreachable_detail_page_skips_rather_than_passing():
+def test_losing_every_detail_page_fails_rather_than_skipping():
+    """Evidence lost is not evidence of health.
+
+    The magnitude check passes off /api/games/upcoming alone, so a SKIP here
+    would be masked by an "OK (1 skipped)" verdict — and the by-eye step that
+    used to cover this is gone. On the one night a year the postseason path
+    runs, an unreadable detail page has to stop the run.
+    """
     game = _post(46.8, espn_id="401900001")
-    assert check_postseason_movers([game], _fetcher({})).status == SKIP
+    assert check_postseason_movers([game], _fetcher({})).status == FAIL
 
 
-def test_a_row_without_an_espn_id_cannot_be_checked():
+def test_a_row_without_an_espn_id_also_fails():
     game = _post(46.8, espn_id=None)
-    assert check_postseason_movers([game], _fetcher({})).status == SKIP
+    assert check_postseason_movers([game], _fetcher({})).status == FAIL
+
+
+def test_one_unreachable_page_beside_a_proved_one_does_not_fail():
+    """Partial evidence still proves the path engaged; a transient blip on the
+    second page is not a production defect."""
+    proved = _post(46.8, espn_id="401900001")
+    blip = _post(44.1, espn_id="401900002")
+    html = _rendered((_MIN, 0.61, 0.28), (_DAL, 0.22, 0.55))
+    r = check_postseason_movers([proved, blip], _fetcher({"401900001": html}))
+    assert r.status == PASS
+    assert "unreachable" in r.detail
+
+
+def test_a_slate_suppressed_at_zero_is_still_a_skip_not_a_failure():
+    """The guard against over-correcting. Nothing was proved here either, but
+    nothing was LOST — a 0.0 score suppresses its movers by design, so this
+    must not be swept into the new failure."""
+    game = _post(0.0, espn_id="401900001")
+    pages = {"401900001": "<html><body>no stakes here</body></html>"}
+    assert check_postseason_movers([game], _fetcher(pages)).status == SKIP
 
 
 def test_no_postseason_score_skips_the_structural_check_too():
@@ -656,15 +683,17 @@ def test_a_postseason_night_runs_the_structural_check():
     assert structural[0].status == PASS
 
 
-def test_a_postseason_night_without_a_fetcher_skips_the_structural_check():
-    """No way to read the page is not evidence the page is right."""
+def test_a_postseason_night_without_a_fetcher_fails_the_structural_check():
+    """No way to read the page is not evidence the page is right. One rule,
+    no special cases: on a scored postseason slate, unable to read is a
+    failure however it arose."""
     results = checks_for_night(
         "postseason", odds=[], snapshot=[], playing=set(),
         games=[_post(46.8, espn_id="401900001")],
     )
     structural = [r for r in results if "structural" in r.name]
     assert len(structural) == 1
-    assert structural[0].status == SKIP
+    assert structural[0].status == FAIL
 
 
 def test_movers_naming_a_team_that_is_not_playing_fail():
