@@ -6,7 +6,12 @@ must SKIP, never PASS — an off-day run that printed all-green would prove
 nothing and would be indistinguishable from a working live path.
 """
 
+import json
+from types import SimpleNamespace
+
 import pytest
+
+from src.api.routes import _importance_movers_html
 
 from scripts.verify_game_night import (
     FAIL,
@@ -17,6 +22,8 @@ from scripts.verify_game_night import (
     probed_games,
     check_column_suppression,
     check_postseason_importance,
+    check_postseason_movers,
+    mover_teams,
     played_postseason_pairs,
     check_live_flags,
     check_repeatability,
@@ -355,7 +362,7 @@ def test_repeatability_still_judges_an_engaged_overlay():
 _MIN, _DAL = "Minnesota Lynx", "Dallas Wings"
 
 
-def _post(v, team_a=_MIN, team_b=_DAL):
+def _post(v, team_a=_MIN, team_b=_DAL, espn_id="401900000"):
     """An /api/games/upcoming row. Carries real team names so the opener
     check keys on a realistic pair rather than a degenerate empty one."""
     return {
@@ -364,6 +371,7 @@ def _post(v, team_a=_MIN, team_b=_DAL):
         "team_a_abbr": team_a[:3].upper(),
         "team_b_abbr": team_b[:3].upper(),
         "importance_score": v,
+        "espn_id": espn_id,
     }
 
 
@@ -499,3 +507,187 @@ def test_no_postseason_score_skips_rather_than_passes():
         ).status
         == SKIP
     )
+
+
+# --- structural postseason check: the movers block on /game/{espn_id} -----
+#
+# `importance_detail` is None exactly when the bracket-slot lookup fails, which
+# is the same condition that makes `_importance_for_game` return the 100.0
+# fallback. So the rendered "What's at stake" block discriminates the fallback
+# structurally — no dependence on sim count or the noise floor, unlike the
+# magnitude band above.
+
+
+def _rendered(*movers):
+    """Real detail-page HTML for a postseason game with these movers.
+
+    Built by the PRODUCTION renderer rather than a hand-copied string: the
+    parser exists to read markup this repo emits, so a test against a private
+    copy of that markup would keep passing after the page changed.
+    """
+    payload = {
+        "metric": "championship",
+        "if_a_team": _MIN,
+        "if_b_team": _DAL,
+        "movers": [
+            {"team": t, "level": "championship", "if_a": a, "if_b": b}
+            for t, a, b in movers
+        ],
+    }
+    return (
+        "<html><body><h1>game</h1>"
+        + _importance_movers_html(SimpleNamespace(importance_detail=json.dumps(payload)))
+        + "</body></html>"
+    )
+
+
+def test_movers_count_is_none_when_the_block_is_absent():
+    """Absence is not zero: it is the state that cannot rule out the fallback."""
+    assert mover_teams("<html><body><h1>game</h1></body></html>") is None
+
+
+def test_two_teams_at_stake_rules_out_the_fallback():
+    game = _post(46.8, espn_id="401900001")
+    html = _rendered((_MIN, 0.61, 0.28), (_DAL, 0.22, 0.55))
+    assert (
+        check_postseason_movers([game], ({"401900001": html})).status == PASS
+    )
+
+
+def test_a_missing_block_on_a_scored_game_fails():
+    """The block is absent exactly when the bracket slot did not match."""
+    game = _post(46.8, espn_id="401900001")
+    pages = {"401900001": "<html><body>no stakes here</body></html>"}
+    assert check_postseason_movers([game], pages).status == FAIL
+
+
+def test_one_mover_still_proves_the_slot_matched():
+    """A participant below min_delta=0.03 drops out of the list. The block is
+    still rendered, which is the thing being tested."""
+    game = _post(46.8, espn_id="401900001")
+    html = _rendered((_MIN, 0.61, 0.28))
+    assert (
+        check_postseason_movers([game], ({"401900001": html})).status == PASS
+    )
+
+
+# Only the two participants can move on a bracket game, so any other name
+# means the regular-season payload was rendered and the postseason path never
+# engaged — whatever the magnitude says. A count cannot see this: production
+# on 2026-09-19 rendered Dallas v Phoenix with a single mover, and it was
+# New York.
+@pytest.mark.parametrize(
+    "movers",
+    [
+        pytest.param([("New York Liberty", 0.61, 0.28)], id="one-stray"),
+        pytest.param(
+            [(_MIN, 0.61, 0.28), ("Las Vegas Aces", 0.22, 0.55)],
+            id="stray-beside-a-participant",
+        ),
+        pytest.param(
+            [(_MIN, 0.61, 0.28), (_DAL, 0.22, 0.55), ("Las Vegas Aces", 0.4, 0.5)],
+            id="both-participants-plus-a-stray",
+        ),
+    ],
+)
+def test_a_team_that_is_not_playing_fails_the_check(movers):
+    game = _post(46.8, espn_id="401900001")
+    html = _rendered(*movers)
+    assert check_postseason_movers([game], {"401900001": html}).status == FAIL
+
+
+def test_losing_every_detail_page_fails_rather_than_skipping():
+    """Evidence lost is not evidence of health.
+
+    The magnitude check passes off /api/games/upcoming alone, so a SKIP here
+    would be masked by an "OK (1 skipped)" verdict — and the by-eye step that
+    used to cover this is gone. On the one night a year the postseason path
+    runs, an unreadable detail page has to stop the run.
+    """
+    game = _post(46.8, espn_id="401900001")
+    assert check_postseason_movers([game], ({})).status == FAIL
+
+
+def test_a_row_without_an_espn_id_also_fails():
+    game = _post(46.8, espn_id=None)
+    assert check_postseason_movers([game], ({})).status == FAIL
+
+
+def test_one_unreachable_page_beside_a_proved_one_does_not_fail():
+    """Partial evidence still proves the path engaged; a transient blip on the
+    second page is not a production defect."""
+    proved = _post(46.8, espn_id="401900001")
+    blip = _post(44.1, espn_id="401900002")
+    html = _rendered((_MIN, 0.61, 0.28), (_DAL, 0.22, 0.55))
+    r = check_postseason_movers([proved, blip], ({"401900001": html}))
+    assert r.status == PASS
+    assert "unreachable" in r.detail
+
+
+def test_a_slate_suppressed_at_zero_is_still_a_skip_not_a_failure():
+    """importance 0.0 suppresses its own movers by design (swing clamped to the
+    noise floor), so a missing block there is not evidence of the fallback.
+
+    Also the guard against over-correcting: nothing was proved here, but
+    nothing was LOST either, so it must not be swept into the new failure."""
+    game = _post(0.0, espn_id="401900001")
+    pages = {"401900001": "<html><body>no stakes here</body></html>"}
+    assert check_postseason_movers([game], pages).status == SKIP
+
+
+def test_no_postseason_score_skips_the_structural_check_too():
+    assert check_postseason_movers([], ({})).status == SKIP
+
+
+def test_the_missing_block_is_exactly_the_production_fallback_condition():
+    """Pin the coupling this whole check rests on.
+
+    `_importance_detail_for_game` returning None is only a useful signal
+    because it is None under the SAME condition that makes
+    `_importance_for_game` return the 100.0 fallback. Assert both real
+    functions on one unmatchable game rather than trusting the claim.
+    """
+    from scripts.daily_update import _importance_detail_for_game, _importance_for_game
+
+    unmatchable = {"team_a": _MIN, "team_b": _DAL, "season_type": 3, "event_id": "x"}
+    assert _importance_for_game(unmatchable, [], {}, 1.0, bracket_state=None) == 100.0
+    assert _importance_detail_for_game(unmatchable, [], [], {}, bracket_state=None) is None
+
+    assert _importance_movers_html(SimpleNamespace(importance_detail=None)) == ""
+
+
+def test_a_postseason_night_runs_the_structural_check():
+    """The by-eye "confirm exactly TWO teams at stake" step is now automatic."""
+    game = _post(46.8, espn_id="401900001")
+    html = _rendered((_MIN, 0.61, 0.28), (_DAL, 0.22, 0.55))
+    results = checks_for_night(
+        "postseason",
+        odds=[],
+        snapshot=[],
+        playing=set(),
+        games=[game],
+        detail_pages={"401900001": html},
+    )
+    structural = [r for r in results if "structural" in r.name]
+    assert len(structural) == 1
+    assert structural[0].status == PASS
+
+
+def test_a_postseason_night_without_any_pages_fails_the_structural_check():
+    """No way to read the page is not evidence the page is right. One rule,
+    no special cases: on a scored postseason slate, unable to read is a
+    failure however it arose."""
+    results = checks_for_night(
+        "postseason", odds=[], snapshot=[], playing=set(),
+        games=[_post(46.8, espn_id="401900001")],
+    )
+    structural = [r for r in results if "structural" in r.name]
+    assert len(structural) == 1
+    assert structural[0].status == FAIL
+
+
+def test_mover_teams_reads_the_names_not_the_percentages():
+    """Each <li> carries three <strong> spans — the team, then both odds. Only
+    the first is a team name."""
+    html = _rendered((_MIN, 0.61, 0.28), (_DAL, 0.22, 0.55))
+    assert mover_teams(html) == [_MIN, _DAL]
