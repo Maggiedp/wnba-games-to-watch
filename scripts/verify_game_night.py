@@ -426,22 +426,30 @@ def _score_label(game: dict) -> str:
 
 # The detail page renders each team at stake as one <li> inside this block.
 # Matching the container, not the whole page, keeps an <li> from elsewhere in
-# the markup out of the count.
+# the markup out of the list.
 _MOVERS_BLOCK_RE = re.compile(r'<div class="importance-movers">(.*?)</div>', re.S)
 
+# Each <li> opens with the mover's team, then uses <strong> twice more for the
+# two odds. Anchoring on <li> takes the team and leaves the percentages.
+_MOVER_TEAM_RE = re.compile(r"<li><strong>(.*?)</strong>")
 
-def movers_count(html: str) -> int | None:
+
+def mover_teams(html: str) -> list[str] | None:
     """Teams shown at stake on a game detail page, or None if the block is absent.
 
-    None and 0 are different answers: the block renders only when
+    None and [] are different answers: the block renders only when
     `importance_detail` exists, and that is None for a postseason game whose
     bracket slot could not be matched — the same condition that produces the
     100.0 fallback score. So absence is the signal, not an empty list.
+
+    Names, not a count: a regular-season payload lists league-wide movers and
+    frequently lists only ONE, so a count cannot tell it from a healthy
+    postseason block. Who is named can.
     """
     m = _MOVERS_BLOCK_RE.search(html)
     if m is None:
         return None
-    return m.group(1).count("<li>")
+    return _MOVER_TEAM_RE.findall(m.group(1))
 
 
 def check_postseason_importance(
@@ -506,7 +514,9 @@ def check_postseason_movers(games: list[dict], fetch_detail) -> CheckResult:
     Every branch below was exercised against production HTML on 2026-09-19
     (a regular-season night, rows treated as postseason ones): pages rendered
     1 or 3 movers, a game scored 0.0 rendered no block, and both FAIL branches
-    fired on real pages.
+    fired on real pages. That same sampling is why identity is checked rather
+    than a count — Dallas v Phoenix rendered exactly one mover, and it was
+    New York.
     """
     name = "postseason movers block (structural)"
     scored = [g for g in games if g.get("importance_score") is not None]
@@ -523,8 +533,8 @@ def check_postseason_movers(games: list[dict], fetch_detail) -> CheckResult:
         if html is None:
             notes.append(f"{label} (detail page unreachable)")
             continue
-        count = movers_count(html)
-        if count is None:
+        named = mover_teams(html)
+        if named is None:
             # Suppressed by design when the corrected swing clamped to zero;
             # anywhere else, a missing block is the fallback's signature.
             if g["importance_score"] == 0.0:
@@ -534,16 +544,22 @@ def check_postseason_movers(games: list[dict], fetch_detail) -> CheckResult:
                     f"{label} (no movers block — bracket slot match unproven; "
                     "benign only if neither team's odds moved 3pp)"
                 )
-        elif count in (1, 2):
-            # One mover means a participant sat below min_delta=0.03. The block
-            # rendered at all is what proves the slot matched.
-            proved.append(f"{label} x{count}")
         else:
-            bad.append(
-                f"{label} ({count} teams at stake; a bracket game moves only "
-                "its two participants — this looks like the regular-season "
-                "payload)"
-            )
+            playing = {g.get("team_a", ""), g.get("team_b", "")}
+            stray = [t for t in named if t not in playing]
+            if stray or not named:
+                # A bracket game moves only its two participants, so anyone
+                # else named means the regular-season payload was rendered —
+                # whatever the magnitude says.
+                bad.append(
+                    f"{label} (at stake: {', '.join(named) or 'nobody'}; a "
+                    "bracket game moves only its two participants — this "
+                    "looks like the regular-season payload)"
+                )
+            else:
+                # One mover means a participant sat below min_delta=0.03. The
+                # block rendering at all is what proves the slot matched.
+                proved.append(f"{label} x{len(named)}")
     if bad:
         return CheckResult(name, FAIL, "; ".join(bad + notes))
     if not proved:

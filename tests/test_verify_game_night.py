@@ -20,7 +20,7 @@ from scripts.verify_game_night import (
     check_column_suppression,
     check_postseason_importance,
     check_postseason_movers,
-    movers_count,
+    mover_teams,
     played_postseason_pairs,
     check_live_flags,
     check_repeatability,
@@ -549,12 +549,12 @@ def _rendered(*movers):
 
 def test_movers_count_reads_the_two_teams_from_rendered_html():
     html = _rendered((_MIN, 0.61, 0.28), (_DAL, 0.22, 0.55))
-    assert movers_count(html) == 2
+    assert len(mover_teams(html)) == 2
 
 
 def test_movers_count_is_none_when_the_block_is_absent():
     """Absence is not zero: it is the state that cannot rule out the fallback."""
-    assert movers_count("<html><body><h1>game</h1></body></html>") is None
+    assert mover_teams("<html><body><h1>game</h1></body></html>") is None
 
 
 def _fetcher(pages):
@@ -665,3 +665,27 @@ def test_a_postseason_night_without_a_fetcher_skips_the_structural_check():
     structural = [r for r in results if "structural" in r.name]
     assert len(structural) == 1
     assert structural[0].status == SKIP
+
+
+def test_movers_naming_a_team_that_is_not_playing_fail():
+    """A regular-season payload names league-wide movers, and OFTEN just one:
+    production on 2026-09-19 rendered Dallas v Phoenix with a single mover,
+    "New York Liberty". Counting alone waves that through, so the teams named
+    have to be the two teams playing.
+    """
+    game = _post(46.8, espn_id="401900001")
+    html = _rendered(("New York Liberty", 0.61, 0.28))
+    assert check_postseason_movers([game], _fetcher({"401900001": html})).status == FAIL
+
+
+def test_a_stray_team_alongside_a_real_participant_fails():
+    game = _post(46.8, espn_id="401900001")
+    html = _rendered((_MIN, 0.61, 0.28), ("Las Vegas Aces", 0.22, 0.55))
+    assert check_postseason_movers([game], _fetcher({"401900001": html})).status == FAIL
+
+
+def test_mover_teams_reads_the_names_not_the_percentages():
+    """Each <li> carries three <strong> spans — the team, then both odds. Only
+    the first is a team name."""
+    html = _rendered((_MIN, 0.61, 0.28), (_DAL, 0.22, 0.55))
+    assert mover_teams(html) == [_MIN, _DAL]
