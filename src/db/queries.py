@@ -2,8 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from datetime import date as date_cls
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
@@ -1565,23 +1564,27 @@ def record_alert(session: Session, espn_id: str, date: str, label: str) -> None:
         session.rollback()
 
 
-def has_game_near_date(session: Session, date: str, days: int) -> bool:
-    """True if any game is scheduled or was played within `days` of `date`.
+def has_game_in_window(session: Session, start: str, end: str) -> bool:
+    """True if the games table holds any game dated in [start, end] inclusive.
 
-    Arms the /api/health freshness check. Reads the SCHEDULE rather than the
-    calendar: games extends into the future, so this stays true exactly while
-    the daily job is expected to produce a snapshot, and goes false on its own
-    in the offseason -- where fetch_schedule_and_results' window has inverted
-    past _SEASON_END, compute_daily_scores' empty-fetch guard trips, and NO
-    snapshot is written by design. It is stale-tolerant on purpose: during an
-    ESPN outage the previously-stored schedule still knows games are coming,
-    which is precisely when a missing snapshot is alarming. No season constant
-    to maintain across a rollover.
+    Arms the /api/health freshness check by mirroring the WRITER's own
+    condition. scripts.daily_update fetches [today-1, _SEASON_END] and
+    compute_daily_scores refuses to write when that comes back empty, so a
+    snapshot is expected exactly when a known game falls inside that window.
+
+    This is deliberately NOT proximity to today. A mid-season BREAK is not the
+    offseason: 2026 ran 08-30 -> 09-17 with no games, yet the job wrote a
+    snapshot on all 17 of those days because future games were still in range.
+    A +/-3-day predicate disarmed for 11 of them -- blind through the middle of
+    the season. Only once no game remains in the fetch range (post-Finals, or
+    the offseason where the window itself inverts) does the job stop writing,
+    and only then is there nothing to be stale about.
+
+    Stale-tolerant on purpose: during an ESPN outage the previously-stored
+    schedule still knows games are coming, which is precisely when a missing
+    snapshot is alarming.
     """
-    d = date_cls.fromisoformat(date)
-    lo = (d - timedelta(days=days)).isoformat()
-    hi = (d + timedelta(days=days)).isoformat()
     return (
-        session.query(Game.id).filter(Game.date >= lo, Game.date <= hi).first()
+        session.query(Game.id).filter(Game.date >= start, Game.date <= end).first()
         is not None
     )

@@ -165,6 +165,45 @@ def test_offseason_disarms_the_check(env, client, monkeypatch):
     assert body["latest_snapshot"] == "2026-09-17"
 
 
+def test_a_mid_season_break_stays_armed(env, client, monkeypatch):
+    """A BREAK is not the offseason. 2026 really ran 08-30 -> 09-17 with no
+    games, and the daily job wrote a snapshot on every one of those 17 days --
+    future games were still inside its fetch window, so `games` was non-empty
+    and compute_daily_scores ran. Arming on proximity to a game went blind for
+    11 straight days mid-season, which is the exact silence this endpoint
+    exists to break.
+    """
+    session = env.get_session()
+    a_id, b_id = _seed_teams(session, env)
+    _seed_game(session, a_id, b_id, "2026-08-30")  # last before the break
+    _seed_game(session, a_id, b_id, "2026-09-17")  # first after it
+    _seed_snapshot(session, a_id, "2026-09-06")
+    session.close()
+    _freeze(monkeypatch, _at(9, day_offset=-9))  # 2026-09-08, mid-break
+
+    body = client.get("/api/health").json()
+
+    assert body["armed"] is True
+    assert body["status"] == "stale"
+
+
+def test_no_games_left_in_the_season_disarms_the_check(env, client, monkeypatch):
+    """Post-Finals but still inside the _SEASON_END calendar window. No game
+    remains in the fetch range, so the job writes nothing and there is nothing
+    to be stale about -- the other side of the break case above."""
+    session = env.get_session()
+    a_id, b_id = _seed_teams(session, env)
+    _seed_game(session, a_id, b_id, "2026-10-20")
+    _seed_snapshot(session, a_id, "2026-10-20")
+    session.close()
+    _freeze(monkeypatch, _at(9, day_offset=38))  # 2026-10-25
+
+    body = client.get("/api/health").json()
+
+    assert body["armed"] is False
+    assert body["status"] == "ok"
+
+
 def test_an_upcoming_game_arms_the_check_before_it_is_played(env, client, monkeypatch):
     """Arming reads the SCHEDULE, not the snapshot — a scheduled game two days
     out keeps the check live even though nothing has been played yet. This is

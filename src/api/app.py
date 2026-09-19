@@ -29,6 +29,7 @@ from src.constants import (  # noqa: F401 — Broadcasters used in get_broadcast
     is_live_status,
 )
 from src.data.espn_api import (
+    _SEASON_END,
     ESPNAPIError,
     ESPNNotFoundError,
     clock_season,
@@ -51,7 +52,7 @@ from src.db.queries import (
     get_latest_elo_history_season,
     get_latest_playoff_probability_date,
     get_playoff_probabilities,
-    has_game_near_date,
+    has_game_in_window,
     get_rankings_by_broadcaster,
     get_shape_seasons,
     get_shot_league_avg,
@@ -1477,8 +1478,7 @@ async def trigger_thriller_poll(x_trigger_secret: str = Header(default="")):
 # fires at 06:00 ET with a 600s timeout, so this leaves ~2h of slack before a
 # missing row counts as a failure.
 _HEALTH_RUN_WINDOW_HOUR = 8
-# How near a scheduled/played game must be for the freshness check to be armed.
-_HEALTH_SCHEDULE_WINDOW_DAYS = 3
+
 
 
 @app.get("/api/health")
@@ -1508,7 +1508,14 @@ def health():
             if now.hour >= _HEALTH_RUN_WINDOW_HOUR
             else (now.date() - timedelta(days=1)).isoformat()
         )
-        armed = has_game_near_date(session, today, _HEALTH_SCHEDULE_WINDOW_DAYS)
+        # Arm on the daily job's OWN fetch window: it writes a snapshot iff a
+        # game falls in [today-1, _SEASON_END]. A mid-season break keeps future
+        # games in range, so the job keeps writing and the check stays armed.
+        armed = has_game_in_window(
+            session,
+            (now.date() - timedelta(days=1)).isoformat(),
+            _SEASON_END.isoformat(),
+        )
         latest = get_latest_playoff_probability_date(session, today)
         stale = armed and (latest is None or latest < expected)
         return {
