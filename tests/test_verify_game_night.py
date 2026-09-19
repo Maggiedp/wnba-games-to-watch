@@ -16,6 +16,7 @@ from scripts.verify_game_night import (
     daily_run_consumed,
     probed_games,
     check_column_suppression,
+    check_postseason_importance,
     check_live_flags,
     check_repeatability,
     checks_for_night,
@@ -340,3 +341,84 @@ def test_repeatability_is_vacuous_when_the_overlay_is_not_engaged():
 def test_repeatability_still_judges_an_engaged_overlay():
     live = [_odds("A", "A", 1.0, {}, live=True, live_state="live")]
     assert check_repeatability(live, live, frozen=False).status == PASS
+
+
+# --- check_postseason_importance -----------------------------------------
+#
+# Values measured 2026-09-19 by driving the real scoring path over a completed
+# 2026 season (see _POSTSEASON_FLOOR's comment). These are the numbers the
+# postseason is expected to produce; the band exists to bracket them, so the
+# band must not be retuned without re-measuring.
+
+
+def _post(v, abbr_a="MIN", abbr_b="DAL"):
+    return {"team_a_abbr": abbr_a, "team_b_abbr": abbr_b, "importance_score": v}
+
+
+@pytest.mark.parametrize(
+    "value,label",
+    [
+        (40.37, "QF G1 low"),
+        (51.36, "QF G1 high"),
+        (25.17, "QF G2 at 1-0, low"),
+        (98.80, "QF G3 at 1-1"),
+        (32.82, "SF G1 low"),
+        (98.92, "SF G5 at 2-2"),
+        (27.37, "F G1 low"),
+        (99.20, "F G7 winner-take-all"),
+    ],
+)
+def test_measured_postseason_values_pass(value, label):
+    """Every value the real path was measured to produce must read as healthy.
+
+    The decisive games (QF G3, SF G5, F G7) are the ones that matter here: a
+    win-or-go-home game is structurally pinned near POSTSEASON_MAX_SWING, so it
+    scores ~99, not the ~45 an opener scores. The original (25, 85) band failed
+    all three against correct behavior.
+    """
+    assert check_postseason_importance([_post(value)]).status == PASS, label
+
+
+def test_the_slot_match_fallback_is_still_caught():
+    """The documented likely failure mode: a game that couldn't be matched to a
+    bracket slot is scored a flat 100.0."""
+    result = check_postseason_importance([_post(100.0)])
+    assert result.status == FAIL
+    assert "fallback" in result.detail
+
+
+def test_a_real_game_seven_is_not_read_as_the_fallback():
+    """99.20 is a measured Finals Game 7, not a fallback.
+
+    Guards the reason the sentinel is an exact 100.0 rather than a threshold:
+    the gap between a real winner-take-all game and the fallback is the Monte
+    Carlo noise floor (~0.8 points at 10k sims), and it narrows as sims rise.
+    """
+    assert check_postseason_importance([_post(99.20)]).status == PASS
+
+
+def test_a_value_just_under_the_fallback_is_not_read_as_the_fallback():
+    """The input that separates an exact sentinel from a `>= 99.5` threshold.
+
+    99.20 (the measured Game 7) passes under both rules, so it cannot pin this
+    behavior on its own. 99.6 can: it is what the same winner-take-all game
+    scores once the noise floor shrinks — roughly a 40k-sim run — and the old
+    threshold would have called it a slot-matching failure.
+    """
+    assert check_postseason_importance([_post(99.6)]).status == PASS
+
+
+def test_a_regular_season_sized_score_still_fails():
+    """A postseason game scored down the regular-season path — the failure the
+    floor exists to catch."""
+    assert check_postseason_importance([_post(12.0)]).status == FAIL
+
+
+def test_no_postseason_score_skips_rather_than_passes():
+    assert check_postseason_importance([]).status == SKIP
+    assert (
+        check_postseason_importance(
+            [{"team_a_abbr": "A", "team_b_abbr": "B", "importance_score": None}]
+        ).status
+        == SKIP
+    )

@@ -53,10 +53,31 @@ _SEED_MOVE_EPS = 0.01
 # i.e. after the last final.
 _CACHE_TTL_S = 15
 
-# QF Game 1 importance should land near 45. 100 is the slot-matching fallback
-# (the documented likely failure mode); a regular-season-sized number means the
-# postseason path never engaged at all.
-_POSTSEASON_BAND = (25.0, 85.0)
+# Measured 2026-09-19 by driving the real scoring path over a COMPLETED 2026
+# season (five plausible final seedings x the real locked field), because no
+# postseason game had ever been scored and the previous band here was a guess:
+#   QF G1 (0-0)        40.4 - 51.4      SF G1 (0-0)         32.8 - 37.1
+#   QF G2 (1-0)        25.2 - 45.0      SF G5 (2-2)         98.89 - 98.92
+#   QF G3 (1-1)        98.7 - 98.8      F  G1 (0-0)         27.4 - 30.9
+#                                       F  G7 (3-3)         99.20
+# The queue's "QF Game 1 should land near 45" held. What the guess missed is
+# that a win-or-go-home game is structurally pinned near POSTSEASON_MAX_SWING
+# and scores ~99, not ~45 — so the old (25.0, 85.0) band reported FAIL against
+# correct behavior on every decisive game in the bracket, starting with a Bo3
+# Game 3 in the first round. Only a floor is meaningful; the ceiling is the
+# fallback sentinel below.
+#
+# Do not retune either of these from a single observed value — re-measure.
+_POSTSEASON_FLOOR = 20.0
+
+# The slot-matching fallback (the documented likely failure mode) returns the
+# literal 100.0. A computed swing cannot reach it: _corrected_swing always
+# subtracts a strictly positive noise floor, worth ~0.8 points at 10k sims.
+# So test the sentinel EXACTLY. The previous `>= 99.5` threshold sat 0.30 above
+# a measured Finals Game 7, and that margin IS the noise floor — it shrinks if
+# the simulation count ever rises, which would turn the biggest game of the
+# season into a false FAIL.
+_POSTSEASON_FALLBACK = 100.0
 
 # How far back to look for the newest stored snapshot. Covers a missed daily run
 # or two without letting a long outage silently diff against ancient standings.
@@ -366,17 +387,17 @@ def check_postseason_importance(games: list[dict]) -> CheckResult:
     scored = [g for g in games if g.get("importance_score") is not None]
     if not scored:
         return CheckResult(name, SKIP, "no postseason game carries an importance score")
-    lo, hi = _POSTSEASON_BAND
     bad = []
     for g in scored:
         v = g["importance_score"]
-        if v >= 99.5:
+        if v == _POSTSEASON_FALLBACK:
             bad.append(
                 f"{g['team_a_abbr']}v{g['team_b_abbr']}={v:.1f} (slot-match fallback)"
             )
-        elif not lo <= v <= hi:
+        elif v < _POSTSEASON_FLOOR:
             bad.append(
-                f"{g['team_a_abbr']}v{g['team_b_abbr']}={v:.1f} (outside {lo:.0f}-{hi:.0f})"
+                f"{g['team_a_abbr']}v{g['team_b_abbr']}={v:.1f} "
+                f"(below {_POSTSEASON_FLOOR:.0f} — postseason path may not have engaged)"
             )
     listing = ", ".join(
         f"{g['team_a_abbr']}v{g['team_b_abbr']}={g['importance_score']:.1f}"
