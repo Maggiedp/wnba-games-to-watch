@@ -53,10 +53,49 @@ _SEED_MOVE_EPS = 0.01
 # i.e. after the last final.
 _CACHE_TTL_S = 15
 
-# QF Game 1 importance should land near 45. 100 is the slot-matching fallback
-# (the documented likely failure mode); a regular-season-sized number means the
-# postseason path never engaged at all.
-_POSTSEASON_BAND = (25.0, 85.0)
+# Measured 2026-09-19 by driving the real scoring path over a COMPLETED 2026
+# season (five plausible final seedings x the real locked field), because no
+# postseason game had ever been scored and the previous band here was a guess:
+#   QF G1 (0-0)        40.4 - 51.4      SF G1 (0-0)         32.8 - 37.1
+#   QF G2 (1-0)        25.2 - 45.0      SF G5 (2-2)         98.89 - 98.92
+#   QF G3 (1-1)        98.7 - 98.8      F  G1 (0-0)         27.4 - 30.9
+#                                       F  G7 (3-3)         99.20
+# The queue's "QF Game 1 should land near 45" held. What the guess missed is
+# that a win-or-go-home game is structurally pinned near POSTSEASON_MAX_SWING
+# and scores ~99, not ~45 — so the old (25.0, 85.0) band reported FAIL against
+# correct behavior on every decisive game in the bracket, starting with a Bo3
+# Game 3 in the first round. Only a floor is meaningful; the ceiling is the
+# fallback sentinel below.
+#
+# Do not retune this from a single observed value — re-measure.
+_POSTSEASON_FLOOR = 20.0
+
+# The slot-matching fallback (the documented likely failure mode) returns the
+# literal 100.0. A computed swing cannot reach it: _corrected_swing always
+# subtracts a strictly positive noise floor, worth ~0.8 points at 10k sims.
+# So test the sentinel EXACTLY. The previous `>= 99.5` threshold sat 0.30 above
+# a measured Finals Game 7, and that margin IS the noise floor — it shrinks if
+# the simulation count ever rises, which would turn the biggest game of the
+# season into a false FAIL.
+_POSTSEASON_FALLBACK = 100.0
+
+# Game 1 of a series is never win-or-go-home — true of Bo3, Bo5 and Bo7 alike —
+# so an opener has a meaningful ceiling even though a later game does not. The
+# G1 rows above top out at 51.4 and the lowest decisive game measured 98.68, so
+# 75.0 sits ~23 points clear of both.
+#
+# This is deliberately derived from "have these two teams already played a
+# postseason game", NOT from a reconstructed bracket: a second model of the
+# series state in the probe could drift from the real one, which is how the
+# third copy of LIVE_STATUSES silently dropped two of three live games on
+# 2026-09-17. The cost is that games 2+ keep only the floor and the sentinel —
+# their honest range spans ~25 to ~99 depending on series state, and guessing
+# it is what this whole change exists to stop doing.
+_POSTSEASON_OPENER_CEILING = 75.0
+
+# A WNBA postseason runs about a month (2024: 09-22 to 10-20), so this covers
+# it from either end when looking up which matchups have already played.
+_POSTSEASON_LOOKBACK_DAYS = 40
 
 # How far back to look for the newest stored snapshot. Covers a missed daily run
 # or two without letting a long outage silently diff against ancient standings.
@@ -361,29 +400,69 @@ def check_column_suppression(odds: list[dict]) -> CheckResult:
     )
 
 
-def check_postseason_importance(games: list[dict]) -> CheckResult:
+def played_postseason_pairs(history: list[dict]) -> set[frozenset[str]]:
+    """Matchups with at least one COMPLETED postseason game behind them.
+
+    Only used to separate a series opener from a later game, so it needs no
+    bracket, no round identification and no game count — just whether these
+    two teams have met in the postseason yet.
+    """
+    return {
+        frozenset({g["team_a"], g["team_b"]})
+        for g in history
+        if g.get("season_type") == 3 and g.get("winner_team")
+    }
+
+
+def _score_label(game: dict) -> str:
+    """`MINvDAL=46.8` — how a scored game is named in every line this check
+    emits, healthy or not."""
+    return (
+        f"{game['team_a_abbr']}v{game['team_b_abbr']}="
+        f"{game['importance_score']:.1f}"
+    )
+
+
+def check_postseason_importance(
+    games: list[dict], played_pairs: set[frozenset[str]] | None = None
+) -> CheckResult:
+    """Judge tonight's postseason importance scores against measured ranges.
+
+    `played_pairs` is the set of matchups that have already played a
+    postseason game this year, used only to tell a series opener from a later
+    game. None means the history could not be fetched, which disables the
+    opener ceiling rather than failing every decisive game.
+    """
     name = "postseason importance magnitude"
     scored = [g for g in games if g.get("importance_score") is not None]
     if not scored:
         return CheckResult(name, SKIP, "no postseason game carries an importance score")
-    lo, hi = _POSTSEASON_BAND
     bad = []
     for g in scored:
         v = g["importance_score"]
-        if v >= 99.5:
+        pair = frozenset({g.get("team_a", ""), g.get("team_b", "")})
+        if v == _POSTSEASON_FALLBACK:
+            bad.append(f"{_score_label(g)} (slot-match fallback)")
+        elif v < _POSTSEASON_FLOOR:
             bad.append(
-                f"{g['team_a_abbr']}v{g['team_b_abbr']}={v:.1f} (slot-match fallback)"
+                f"{_score_label(g)} (below {_POSTSEASON_FLOOR:.0f} — "
+                "postseason path may not have engaged)"
             )
-        elif not lo <= v <= hi:
+        elif (
+            played_pairs is not None
+            and pair not in played_pairs
+            and v > _POSTSEASON_OPENER_CEILING
+        ):
             bad.append(
-                f"{g['team_a_abbr']}v{g['team_b_abbr']}={v:.1f} (outside {lo:.0f}-{hi:.0f})"
+                f"{_score_label(g)} (series opener above "
+                f"{_POSTSEASON_OPENER_CEILING:.0f}; an opener is never "
+                "win-or-go-home)"
             )
-    listing = ", ".join(
-        f"{g['team_a_abbr']}v{g['team_b_abbr']}={g['importance_score']:.1f}"
-        for g in scored
-    )
     if bad:
         return CheckResult(name, FAIL, "; ".join(bad))
+    listing = ", ".join(_score_label(g) for g in scored)
+    if played_pairs is None:
+        listing += "  [opener ceiling not applied — no postseason history]"
     return CheckResult(name, PASS, listing)
 
 
@@ -430,6 +509,7 @@ def checks_for_night(
     playing: set[str],
     games: list[dict] | None = None,
     wp_available: bool = True,
+    played_pairs: set[frozenset[str]] | None = None,
 ) -> list[CheckResult]:
     """The data checks that apply to this kind of night.
 
@@ -454,7 +534,7 @@ def checks_for_night(
     if night == "postseason":
         return [
             check_live_disabled(odds),
-            check_postseason_importance(games or []),
+            check_postseason_importance(games or [], played_pairs=played_pairs),
         ]
     expect = "live" if night == "live" else "settled"
     return [
@@ -527,9 +607,33 @@ def main() -> int:
         shown = "  ".join(f"{gid}={n}" for gid, n in sorted(wp_counts.items()))
         print(f"  ESPN live win-prob samples: {shown}")
 
+    # Series history, for the opener ceiling only. Gated on a game actually
+    # carrying a score, because the check SKIPs without reading played_pairs
+    # otherwise — and a bracket travel day still classifies as "postseason",
+    # which is roughly half the postseason calendar. On failure stay None:
+    # that drops the ceiling rather than failing every decisive game.
+    played_pairs = None
+    if night == "postseason" and any(
+        g.get("importance_score") is not None for g in today_games
+    ):
+        today_d = date_cls.fromisoformat(today)
+        try:
+            played_pairs = played_postseason_pairs(
+                fetch_games_for_range(
+                    today_d - timedelta(days=_POSTSEASON_LOOKBACK_DAYS), today_d
+                )
+            )
+            # Printed because the opener ceiling rides on ESPN feed names
+            # joining against the API's team names. If that join ever misses,
+            # every game reads as an opener and decisive games FAIL — a silent
+            # mode the None fail-open does NOT cover, since the fetch succeeded.
+            print(f"  series already under way: {len(played_pairs)} matchup(s)")
+        except ESPNAPIError as e:
+            print(f"  (postseason history unavailable: {e})")
+
     night_results = checks_for_night(
         night, odds, snapshot, playing, games=today_games,
-        wp_available=wp_available,
+        wp_available=wp_available, played_pairs=played_pairs,
     )
 
     # Repeatability needs a second sample. Past the TTL the server runs a fresh

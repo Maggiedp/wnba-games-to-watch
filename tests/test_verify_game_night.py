@@ -16,6 +16,8 @@ from scripts.verify_game_night import (
     daily_run_consumed,
     probed_games,
     check_column_suppression,
+    check_postseason_importance,
+    played_postseason_pairs,
     check_live_flags,
     check_repeatability,
     checks_for_night,
@@ -340,3 +342,160 @@ def test_repeatability_is_vacuous_when_the_overlay_is_not_engaged():
 def test_repeatability_still_judges_an_engaged_overlay():
     live = [_odds("A", "A", 1.0, {}, live=True, live_state="live")]
     assert check_repeatability(live, live, frozen=False).status == PASS
+
+
+# --- check_postseason_importance -----------------------------------------
+#
+# Values measured 2026-09-19 by driving the real scoring path over a completed
+# 2026 season (see _POSTSEASON_FLOOR's comment). These are the numbers the
+# postseason is expected to produce; the band exists to bracket them, so the
+# band must not be retuned without re-measuring.
+
+
+_MIN, _DAL = "Minnesota Lynx", "Dallas Wings"
+
+
+def _post(v, team_a=_MIN, team_b=_DAL):
+    """An /api/games/upcoming row. Carries real team names so the opener
+    check keys on a realistic pair rather than a degenerate empty one."""
+    return {
+        "team_a": team_a,
+        "team_b": team_b,
+        "team_a_abbr": team_a[:3].upper(),
+        "team_b_abbr": team_b[:3].upper(),
+        "importance_score": v,
+    }
+
+
+@pytest.mark.parametrize(
+    "value,label",
+    [
+        (40.37, "QF G1 low"),
+        (51.36, "QF G1 high"),
+        (25.17, "QF G2 at 1-0, low"),
+        (98.80, "QF G3 at 1-1"),
+        (32.82, "SF G1 low"),
+        (98.92, "SF G5 at 2-2"),
+        (27.37, "F G1 low"),
+        (99.20, "F G7 winner-take-all"),
+    ],
+)
+def test_measured_postseason_values_pass(value, label):
+    """Every value the real path was measured to produce must read as healthy.
+
+    The decisive games (QF G3, SF G5, F G7) are the ones that matter here: a
+    win-or-go-home game is structurally pinned near POSTSEASON_MAX_SWING, so it
+    scores ~99, not the ~45 an opener scores. The original (25, 85) band failed
+    all three against correct behavior.
+
+    F G7's 99.20 also covers the fallback sentinel from below: the gap between
+    a real winner-take-all game and 100.0 is the Monte Carlo noise floor, so
+    the sentinel must not be a threshold parked in that gap.
+    """
+    assert check_postseason_importance([_post(value)]).status == PASS, label
+
+
+def test_the_slot_match_fallback_is_still_caught():
+    """The documented likely failure mode: a game that couldn't be matched to a
+    bracket slot is scored a flat 100.0."""
+    result = check_postseason_importance([_post(100.0)])
+    assert result.status == FAIL
+    assert "fallback" in result.detail
+
+
+def test_a_value_just_under_the_fallback_is_not_read_as_the_fallback():
+    """The input that separates an exact sentinel from a `>= 99.5` threshold.
+
+    99.20 (the measured Game 7) passes under both rules, so it cannot pin this
+    behavior on its own. 99.6 can: it is what the same winner-take-all game
+    scores once the noise floor shrinks — roughly a 40k-sim run — and the old
+    threshold would have called it a slot-matching failure.
+    """
+    assert check_postseason_importance([_post(99.6)]).status == PASS
+
+
+def test_a_regular_season_sized_score_still_fails():
+    """A postseason game scored down the regular-season path — the failure the
+    floor exists to catch."""
+    assert check_postseason_importance([_post(12.0)]).status == FAIL
+
+
+def test_played_postseason_pairs_ignores_scheduled_and_regular_season_rows():
+    """Only COMPLETED postseason games make a matchup "already played".
+
+    A scheduled later game in the same series must not mark the series as
+    under way — that would silently drop the opener ceiling on the very game
+    it is meant to judge.
+    """
+    history = [
+        {"team_a": "A", "team_b": "B", "season_type": 3, "winner_team": "A"},
+        {"team_a": "C", "team_b": "D", "season_type": 3, "winner_team": None},
+        {"team_a": "E", "team_b": "F", "season_type": 2, "winner_team": "E"},
+    ]
+    assert played_postseason_pairs(history) == {frozenset({"A", "B"})}
+
+
+def test_a_series_opener_in_the_nineties_fails():
+    """The gap adversarial review found: with only a floor and an exact
+    sentinel, an over-inflated opener reads as healthy.
+
+    Game 1 of a series is never win-or-go-home -- true of Bo3, Bo5 and Bo7
+    alike -- so an opener has a real ceiling even though a later game does
+    not. Measured openers top out at 51.36; 95.0 is the inflated value this
+    must catch.
+    """
+    result = check_postseason_importance([_post(95.0)], played_pairs=set())
+    assert result.status == FAIL
+    assert "opener" in result.detail
+
+
+def test_a_decisive_later_game_in_the_nineties_still_passes():
+    """The counterpart the opener ceiling must not break: once the two teams
+    have already played, the series can be at win-or-go-home and ~99 is
+    correct. Guards against reintroducing the 85-ceiling bug behind a new
+    name."""
+    pair = {frozenset({_MIN, _DAL})}
+    assert check_postseason_importance([_post(98.80)], played_pairs=pair).status == PASS
+
+
+@pytest.mark.parametrize("value", [40.37, 51.36, 32.82, 37.09, 27.37, 30.93])
+def test_measured_openers_pass_against_the_opener_ceiling(value):
+    """Every opener value actually measured must clear the ceiling."""
+    assert check_postseason_importance([_post(value)], played_pairs=set()).status == PASS
+
+
+def test_unknown_series_history_does_not_manufacture_a_failure():
+    """If the postseason history fetch fails, the opener ceiling cannot be
+    applied. It must go unapplied rather than failing every decisive game --
+    the false-positive direction this branch exists to remove."""
+    result = check_postseason_importance([_post(98.80)], played_pairs=None)
+    assert result.status == PASS
+    assert "opener ceiling not applied" in result.detail
+
+
+def test_the_probe_sentinel_matches_the_value_production_actually_emits():
+    """Pin the cross-module coupling the exact comparison depends on.
+
+    `_POSTSEASON_FALLBACK` is only meaningful because `_importance_for_game`
+    returns that exact literal when a postseason game cannot be matched to a
+    bracket slot. Nothing else ties the two together, so changing the
+    production fallback would silently blind the probe. Assert the real
+    function, rather than trusting a number copied between modules.
+    """
+    from scripts.daily_update import _importance_for_game
+    from scripts.verify_game_night import _POSTSEASON_FALLBACK
+
+    unmatchable = {"team_a": "A", "team_b": "B", "season_type": 3, "event_id": "x"}
+    fallback = _importance_for_game(unmatchable, [], {}, 1.0, bracket_state=None)
+    assert fallback == _POSTSEASON_FALLBACK
+    assert check_postseason_importance([_post(fallback)]).status == FAIL
+
+
+def test_no_postseason_score_skips_rather_than_passes():
+    assert check_postseason_importance([]).status == SKIP
+    assert (
+        check_postseason_importance(
+            [{"team_a_abbr": "A", "team_b_abbr": "B", "importance_score": None}]
+        ).status
+        == SKIP
+    )
