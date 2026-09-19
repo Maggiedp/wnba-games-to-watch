@@ -32,9 +32,11 @@ from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
     clock_season,
+    daily_fetch_window,
     fetch_games_for_range,
     fetch_live_win_probability,
     fetch_today_game_statuses,
+    now_et,
     today_et,
     yesterday_et,
 )
@@ -64,6 +66,7 @@ from src.db.queries import (
     get_teams_by_ids,
     get_upcoming_rankings,
     has_alerted,
+    has_game_in_window,
     record_alert,
     shot_row_to_dict,
 )
@@ -1469,3 +1472,51 @@ async def trigger_thriller_poll(x_trigger_secret: str = Header(default="")):
         raise HTTPException(status_code=403, detail="Forbidden")
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _run_thriller_poll)
+
+
+# Hour (ET) by which the 6 AM daily run must have landed a snapshot. The job
+# fires at 06:00 ET with a 600s timeout, so this leaves ~2h of slack before a
+# missing row counts as a failure.
+_HEALTH_RUN_WINDOW_HOUR = 8
+
+
+@app.get("/api/health")
+def health():
+    """Publish the age of the newest playoff snapshot for the uptime check.
+
+    The missing monitoring layer from the 2026-09-17 incident: ESPN dropped a
+    scoreboard query form, compute_daily_scores correctly refused to overwrite
+    good rows with an empty fetch, main() returned 0, and two days passed with
+    nobody told. The log-based alert keys on a crash that never happened and
+    the uptime check passed on stale rows that still contained overall_score --
+    both layers only catch a crash. Snapshot AGE is what a silent degradation
+    moves.
+
+    Always 200: the uptime check matches on content ("status":"ok"), because a
+    stale snapshot is a data problem, not a server error, and a 5xx here would
+    pollute Cloud Run's own error metrics.
+    """
+    now = now_et()
+    today = now.strftime("%Y-%m-%d")
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
+    session = get_session()
+    try:
+        # Before the run window, yesterday's row is the freshest answer that
+        # can exist -- expecting today would alert every night at midnight.
+        expected = today if now.hour >= _HEALTH_RUN_WINDOW_HOUR else yesterday
+        # Arm on the daily job's OWN fetch window (one shared definition, so
+        # the two cannot drift): it writes a snapshot iff a game falls in that
+        # range. A mid-season break keeps future games in it, so the job keeps
+        # writing and the check stays armed.
+        start, end = daily_fetch_window(now.date())
+        armed = has_game_in_window(session, start.isoformat(), end.isoformat())
+        latest = get_latest_playoff_probability_date(session, today)
+        stale = armed and (latest is None or latest < expected)
+        return {
+            "status": "stale" if stale else "ok",
+            "latest_snapshot": latest,
+            "expected": expected,
+            "armed": armed,
+        }
+    finally:
+        session.close()

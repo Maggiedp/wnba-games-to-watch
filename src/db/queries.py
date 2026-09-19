@@ -1562,3 +1562,29 @@ def record_alert(session: Session, espn_id: str, date: str, label: str) -> None:
         session.commit()
     except IntegrityError:
         session.rollback()
+
+
+def has_game_in_window(session: Session, start: str, end: str) -> bool:
+    """True if the games table holds any game dated in [start, end] inclusive.
+
+    Arms the /api/health freshness check by mirroring the WRITER's own
+    condition. scripts.daily_update fetches [today-1, _SEASON_END] and
+    compute_daily_scores refuses to write when that comes back empty, so a
+    snapshot is expected exactly when a known game falls inside that window.
+
+    This is deliberately NOT proximity to today. A mid-season BREAK is not the
+    offseason: 2026 ran 08-30 -> 09-17 with no games, yet the job wrote a
+    snapshot on all 17 of those days because future games were still in range.
+    A +/-3-day predicate disarmed for 11 of them -- blind through the middle of
+    the season. Only once no game remains in the fetch range (post-Finals, or
+    the offseason where the window itself inverts) does the job stop writing,
+    and only then is there nothing to be stale about.
+
+    Stale-tolerant on purpose: during an ESPN outage the previously-stored
+    schedule still knows games are coming, which is precisely when a missing
+    snapshot is alarming.
+    """
+    return (
+        session.query(Game.id).filter(Game.date >= start, Game.date <= end).first()
+        is not None
+    )
