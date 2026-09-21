@@ -44,3 +44,24 @@ def test_season_end_covers_playoff_window():
         f"_SEASON_END={_SEASON_END} too early — must extend through the Finals "
         f"(WNBA Bo7 can reach ~Oct 25)"
     )
+
+
+def test_live_statuses_match_js():
+    """LIVE_STATUSES must match shared.js's isLiveStatus as shipped.
+
+    If this fails, update one side to match the other — drift silently drops
+    live games from the overlay, the thriller alerts and /replay's live strip.
+    Reads the RENDERED homepage, not shared.js, so it also proves the helper
+    reaches a shipped page.
+    """
+    import re
+
+    from src.api.routes import render_homepage
+    from src.constants import LIVE_STATUSES
+
+    src = render_homepage()
+    body = re.search(r"function isLiveStatus\(status\)\s*\{(.*?)\n\s*\}", src, re.S)
+    assert body is not None, "isLiveStatus not found in the rendered homepage"
+    js_statuses = set(re.findall(r"'(STATUS_[A-Z_]+)'", body.group(1)))
+    assert js_statuses, "no STATUS_ literals found inside isLiveStatus"
+    assert js_statuses == set(LIVE_STATUSES)
