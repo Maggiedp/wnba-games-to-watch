@@ -71,8 +71,7 @@ class GameStatus:
 # ESPN reports THREE in-progress states: STATUS_HALFTIME between halves and
 # STATUS_END_PERIOD between quarters are both "live" for rendering, polling and
 # any is-this-game-on question. Mirrors shared.js's isLiveStatus, pinned to it
-# by tests/test_constants.py::test_live_statuses_match_js. (The duplication ran
-# without a sync test until the 2026-09-17 drift described below.)
+# by tests/test_constants.py::test_live_statuses_match_js.
 #
 # This lives in constants, NOT in the API layer, because the vocabulary is not
 # API-specific: a script asking "is this game on" was reaching into

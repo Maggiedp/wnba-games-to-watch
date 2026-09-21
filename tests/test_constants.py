@@ -49,14 +49,9 @@ def test_season_end_covers_playoff_window():
 def test_live_statuses_match_js():
     """LIVE_STATUSES must match shared.js's isLiveStatus as shipped.
 
-    ESPN reports three in-progress states. A third copy of this set that was
-    narrower by two silently dropped two of three live games on a real slate
-    (2026-09-17), which is the drift this pins shut. If it fails, update one
-    side to match the other — the live overlay, the thriller alerts and
-    /replay's live strip all branch on this vocabulary.
-
-    Regexes the RENDERED homepage rather than the source file, matching
-    test_excitement.py::test_constants_match_js, so it also proves the helper
+    If this fails, update one side to match the other — drift silently drops
+    live games from the overlay, the thriller alerts and /replay's live strip.
+    Reads the RENDERED homepage, not shared.js, so it also proves the helper
     reaches a shipped page.
     """
     import re
