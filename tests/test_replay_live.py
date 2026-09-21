@@ -11,9 +11,9 @@ from src.data.espn_api import ESPNAPIError, today_et
 def _clear_replay_live_cache():
     # The /api/replay-live response cache would otherwise leak between tests
     # (TTL 15s >> test runtime), so reset it around every test.
-    app._replay_live_cache = None
+    app._replay_live_cache.clear()
     yield
-    app._replay_live_cache = None
+    app._replay_live_cache.clear()
 
 
 def test_is_live_status_true_for_the_three_live_states():

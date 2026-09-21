@@ -9,6 +9,7 @@ import random
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date as date_cls
 from datetime import datetime, timedelta, timezone
@@ -572,10 +573,74 @@ def _get_known_espn_ids() -> frozenset[str]:
     return ids
 
 
+class _SingleFlightTTLCache:
+    """A one-entry TTL cache that collapses concurrent misses into ONE build.
+
+    Extracted at the third hand-rolled copy (the shot baseline, the replay-live
+    slate, the live playoff odds). All three guard an expensive build — a
+    full-season shot reload, an ESPN slate fetch plus fan-out, a ~1.2s Monte
+    Carlo — on a `--max-instances=1` container, where a stampede is the whole
+    risk the cache exists to remove.
+
+    Two locks, deliberately:
+      * `_lock` is held only to read or replace the entry, never across a
+        build, so a slow build never serializes readers.
+      * `_build_lock` admits one builder. Waiters re-check under `_lock` once
+        they get it, so they reuse the winner's value instead of each starting
+        their own build.
+
+    A build that raises propagates to every waiter and stores nothing, so an
+    upstream failure is never sticky (`/api/replay-live` depends on this: its
+    502 must reach the client, not be served again for a whole TTL).
+
+    One entry rather than a dict: each caller has a single live key (one
+    season, one slate), so a new key evicts instead of growing unbounded.
+    Callers with nothing to key on pass `None`.
+    """
+
+    __slots__ = ("_ttl_s", "_lock", "_build_lock", "_entry")
+
+    def __init__(self, ttl_s: float) -> None:
+        self._ttl_s = ttl_s
+        self._lock = threading.Lock()
+        self._build_lock = threading.Lock()
+        self._entry: tuple[float, object, object] | None = None
+
+    def _hit(self, key: object) -> tuple[bool, object]:
+        """Fresh value for `key` as `(found, value)`. Call under `_lock`.
+
+        Returns the flag separately because a cached value is routinely falsy —
+        the live-odds build returns `[]` for "live mode does not apply" — so
+        `if value:` would treat a valid hit as a miss and rebuild every request.
+        """
+        entry = self._entry
+        if entry is not None and entry[1] == key and entry[0] > time.monotonic():
+            return True, entry[2]
+        return False, None
+
+    def get(self, key: object, build: Callable[[], object]) -> object:
+        with self._lock:
+            found, value = self._hit(key)
+            if found:
+                return value
+        with self._build_lock:
+            with self._lock:
+                found, value = self._hit(key)
+                if found:
+                    return value  # another caller built it while we waited
+            value = build()
+            with self._lock:
+                self._entry = (time.monotonic() + self._ttl_s, key, value)
+            return value
+
+    def clear(self) -> None:
+        """Drop the cached entry. Used by tests to defeat the TTL."""
+        with self._lock:
+            self._entry = None
+
+
 _SHOT_BASELINE_TTL_S = 300
-_shot_baseline_cache: tuple[float, int, dict] | None = None
-_shot_baseline_lock = threading.Lock()
-_shot_baseline_build_lock = threading.Lock()
+_shot_baseline_cache = _SingleFlightTTLCache(_SHOT_BASELINE_TTL_S)
 
 
 def _get_shot_baseline(season: int) -> dict:
@@ -585,33 +650,20 @@ def _get_shot_baseline(season: int) -> dict:
     within ~5 min of the daily run without an explicit invalidation hook — a
     longer TTL would just widen the post-run window where the baseline lags fresh
     shots. Same build_baseline the leaderboard uses, so per-shot added ties to
-    shot_making.points_added. Single-flighted: one request reloads the whole
-    season + rebuilds while the rest wait on the build lock and reuse its result,
-    so a cold/expired cache under concurrent panel-opens can't stampede a
-    full-season reload per request (mirrors _build_replay_live)."""
-    global _shot_baseline_cache
-    with _shot_baseline_lock:
-        cached = _shot_baseline_cache
-        if cached and cached[1] == season and cached[0] > time.monotonic():
-            return cached[2]
-    with _shot_baseline_build_lock:
-        with _shot_baseline_lock:
-            cached = _shot_baseline_cache
-            if cached and cached[1] == season and cached[0] > time.monotonic():
-                return cached[2]  # another request built it while we waited
+    shot_making.points_added. Single-flighted by _SingleFlightTTLCache, so a
+    cold or expired cache under concurrent panel-opens cannot stampede a
+    full-season reload per request. Keyed on `season`, so a season rollover
+    evicts rather than serving the prior year's baseline."""
+
+    def build() -> dict:
         session = get_session()
         try:
             shots = [shot_row_to_dict(r) for r in get_shots_for_season(session, season)]
         finally:
             session.close()
-        baseline = build_baseline(shots)
-        with _shot_baseline_lock:
-            _shot_baseline_cache = (
-                time.monotonic() + _SHOT_BASELINE_TTL_S,
-                season,
-                baseline,
-            )
-        return baseline
+        return build_baseline(shots)
+
+    return _shot_baseline_cache.get(season, build)
 
 
 @app.get("/api/player-shots")
@@ -677,18 +729,14 @@ _REPLAY_LIVE_CACHE_TTL_S = 15
 _replay_live_pool = ThreadPoolExecutor(
     max_workers=_REPLAY_LIVE_MAX_WORKERS, thread_name_prefix="replay-live"
 )
-_replay_live_cache: "tuple[float, dict] | None" = None
-_replay_live_cache_lock = threading.Lock()
-_replay_live_build_lock = threading.Lock()
+_replay_live_cache = _SingleFlightTTLCache(_REPLAY_LIVE_CACHE_TTL_S)
 
 # Live playoff-odds overlay. Same single-flight + short-TTL shape as
 # _replay_live_cache: one recompute is shared by every concurrent viewer.
 # The Monte Carlo is ~1.2s of GIL-held CPU on --max-instances=1, so this
 # cache is what keeps that to once per TTL rather than once per request.
 _LIVE_ODDS_CACHE_TTL_S = 15
-_live_odds_cache: "tuple[float, list] | None" = None
-_live_odds_cache_lock = threading.Lock()
-_live_odds_build_lock = threading.Lock()
+_live_odds_cache = _SingleFlightTTLCache(_LIVE_ODDS_CACHE_TTL_S)
 
 # Serializes the thriller poll's per-game check-send-record critical section so
 # two overlapping polls (a slow poll still running at the next 5-min fire, or a
@@ -834,26 +882,13 @@ def get_replay_live():
     """Live games as building fever-line cards for the /replay Live-now strip.
 
     Server-side sibling to /api/replay (DB-only). Single-flighted + cached briefly
-    so concurrent viewers share ONE ESPN slate fetch; per-game fetches run on the
-    shared bounded pool. Sync def so the blocking work runs in FastAPI's threadpool.
+    by _SingleFlightTTLCache so concurrent viewers share ONE ESPN slate fetch;
+    per-game fetches run on the shared bounded pool. Sync def so the blocking
+    work runs in FastAPI's threadpool.
     """
-    global _replay_live_cache
-    with _replay_live_cache_lock:
-        cached = _replay_live_cache
-        if cached and cached[0] > time.monotonic():
-            return cached[1]
-    # Single-flight the build: one request builds while the rest wait on the build
-    # lock, then reuse its cached result instead of each starting their own
-    # scoreboard fetch + fan-out (mirrors _fetch_live_wp_cached's per-key lock).
-    with _replay_live_build_lock:
-        with _replay_live_cache_lock:
-            cached = _replay_live_cache
-            if cached and cached[0] > time.monotonic():
-                return cached[1]  # another request built it while we waited
-        result = _build_replay_live()  # raises HTTPException(502) on scoreboard fail
-        with _replay_live_cache_lock:
-            _replay_live_cache = (time.monotonic() + _REPLAY_LIVE_CACHE_TTL_S, result)
-        return result
+    # _build_replay_live raises HTTPException(502) on a scoreboard failure; the
+    # cache stores nothing on a raise, so the error is not served for a whole TTL.
+    return _replay_live_cache.get(None, _build_replay_live)
 
 
 # How stale the freshest snapshot may be and still stand in for "today" on the
@@ -1009,26 +1044,16 @@ def _live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
 def _cached_live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
     """`_live_playoff_odds_rows` behind the single-flight + TTL cache.
 
-    Same shape as `get_replay_live`: check the cache, then take the build lock
-    and re-check, so concurrent viewers share ONE ~1.2s Monte Carlo rather than
-    each starting their own on a single-instance container. Returns [] when live
-    mode does not apply, which the caller reads as "fall through to the stored
-    snapshot".
+    Shares _SingleFlightTTLCache with `get_replay_live` and the shot baseline, so
+    concurrent viewers wait on ONE ~1.2s Monte Carlo rather than each starting
+    their own on a single-instance container. Returns [] when live mode does not
+    apply, which the caller reads as "fall through to the stored snapshot" — a
+    falsy value the cache stores and replays as a real hit.
     """
-    global _live_odds_cache
-    with _live_odds_cache_lock:
-        cached = _live_odds_cache
-        if cached and cached[0] > time.monotonic():
-            return cached[1]
-    with _live_odds_build_lock:
-        with _live_odds_cache_lock:
-            cached = _live_odds_cache
-            if cached and cached[0] > time.monotonic():
-                return cached[1]  # another request built it while we waited
-        rows = _live_playoff_odds_rows(today)
-        with _live_odds_cache_lock:
-            _live_odds_cache = (time.monotonic() + _LIVE_ODDS_CACHE_TTL_S, rows)
-        return rows
+    # Keyed on None, not `today`: the pre-existing cache ignored its argument and
+    # this extraction preserves that exactly. See the date-keying note in the
+    # work queue's PR #136 deferred minors.
+    return _live_odds_cache.get(None, lambda: _live_playoff_odds_rows(today))
 
 
 @app.get("/api/playoff-odds", response_model=list[PlayoffOddsResponse])

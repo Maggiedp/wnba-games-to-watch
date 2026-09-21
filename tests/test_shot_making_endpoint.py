@@ -180,7 +180,7 @@ def test_player_shots_returns_chart_and_zones(client, monkeypatch):
     from src.db.schema import get_session
 
     monkeypatch.setattr(espn_api_mod, "today_et", lambda: "2026-07-28")
-    app_module._shot_baseline_cache = None  # clear TTL cache between tests
+    app_module._shot_baseline_cache.clear()  # clear TTL cache between tests
     session = get_session()
     payload = []
     for i in range(40):
@@ -229,7 +229,7 @@ def test_player_shots_unknown_athlete_is_empty_not_500(client, monkeypatch):
     from src.data import espn_api as espn_api_mod
 
     monkeypatch.setattr(espn_api_mod, "today_et", lambda: "2026-07-28")
-    app_module._shot_baseline_cache = None
+    app_module._shot_baseline_cache.clear()
     r = client.get("/api/player-shots?athlete_id=nobody")
     assert r.status_code == 200
     data = r.json()
@@ -249,7 +249,7 @@ def test_player_shots_omits_team_and_total_for_traded_player(client, monkeypatch
     from src.db.schema import get_session
 
     monkeypatch.setattr(espn_api_mod, "today_et", lambda: "2026-07-28")
-    app_module._shot_baseline_cache = None
+    app_module._shot_baseline_cache.clear()
     session = get_session()
 
     def shot(pid, team_id, abbr):

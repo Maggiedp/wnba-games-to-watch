@@ -133,7 +133,7 @@ def _seed_sub_threshold_traded(env):
 def test_player_page_qualified(client, env):
     from src.api import app as app_module
 
-    app_module._shot_baseline_cache = None
+    app_module._shot_baseline_cache.clear()
     _seed_qualified(env)
 
     r = client.get("/player/p-qual")
@@ -161,7 +161,7 @@ def test_player_page_style_tags_are_balanced(client, env):
     structural invariant is balanced style tags + the `main` rule surviving."""
     from src.api import app as app_module
 
-    app_module._shot_baseline_cache = None
+    app_module._shot_baseline_cache.clear()
     _seed_qualified(env)
 
     body = client.get("/player/p-qual").text
@@ -172,7 +172,7 @@ def test_player_page_style_tags_are_balanced(client, env):
 def test_player_page_sub_threshold(client, env):
     from src.api import app as app_module
 
-    app_module._shot_baseline_cache = None
+    app_module._shot_baseline_cache.clear()
     _seed_sub_threshold(env)
 
     r = client.get("/player/p-sub")
@@ -189,7 +189,7 @@ def test_player_page_sub_threshold_team_is_deterministic_plurality(client, env):
     team (NY, 3 shots) after, so a `rows[0]`-based bug would show LV."""
     from src.api import app as app_module
 
-    app_module._shot_baseline_cache = None
+    app_module._shot_baseline_cache.clear()
     _seed_sub_threshold_traded(env)
 
     r = client.get("/player/p-traded")
@@ -202,14 +202,14 @@ def test_player_page_sub_threshold_team_is_deterministic_plurality(client, env):
 def test_player_page_unknown_404(client, env):
     from src.api import app as app_module
 
-    app_module._shot_baseline_cache = None
+    app_module._shot_baseline_cache.clear()
     assert client.get("/player/nobody").status_code == 404
 
 
 def test_player_page_renders_the_bridge_when_anchors_exist(client, env):
     from src.api import app as app_module
 
-    app_module._shot_baseline_cache = None
+    app_module._shot_baseline_cache.clear()
     _seed_qualified(env)
     session = get_session()
     q.upsert_shot_league_avg(session, 2026, avg_xpps=1.027, avg_pps=1.037, fga=25790)
@@ -225,7 +225,7 @@ def test_player_page_renders_the_bridge_when_anchors_exist(client, env):
 def test_player_page_omits_the_bridge_before_the_first_daily_run(client, env):
     from src.api import app as app_module
 
-    app_module._shot_baseline_cache = None
+    app_module._shot_baseline_cache.clear()
     _seed_qualified(env)  # no anchor row seeded
 
     html = client.get("/player/p-qual").text
@@ -243,7 +243,7 @@ def test_player_page_defines_the_bridge_label_minimum(client, env):
     none, so the coupling was unenforced on one of the two surfaces."""
     from src.api import app as app_module
 
-    app_module._shot_baseline_cache = None
+    app_module._shot_baseline_cache.clear()
     _seed_qualified(env)
     session = get_session()
     q.upsert_shot_league_avg(session, 2026, avg_xpps=1.027, avg_pps=1.037, fga=25790)

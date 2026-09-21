@@ -2043,8 +2043,7 @@ def _todays_espn_games():
 def _clear_live_odds_cache():
     import src.api.app as app_module
 
-    with app_module._live_odds_cache_lock:
-        app_module._live_odds_cache = None
+    app_module._live_odds_cache.clear()
 
 
 @pytest.fixture
