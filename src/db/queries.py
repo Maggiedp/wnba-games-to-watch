@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.constants import CURRENT_SEASON
+from src.constants import CURRENT_SEASON, NON_STANDINGS_COMPETITION_TYPES
 from src.db.schema import (
     DailyRanking,
     EloHistory,
@@ -121,6 +121,7 @@ def upsert_game(
     excitement_index: float | None = None,
     is_complete: bool | None = None,
     season_type: int | None = None,
+    competition_type: str | None = None,
     time_utc: str | None | _Unset = _UNSET,
     _retry: bool = False,
 ) -> Game:
@@ -193,6 +194,8 @@ def upsert_game(
             game.espn_id = espn_id
         if season_type is not None:
             game.season_type = season_type
+        if competition_type is not None:
+            game.competition_type = competition_type
         # If we matched by espn_id, the row's date/teams may differ
         # (reschedule, or ESPN correcting the matchup itself).
         old_key = (game.date, game.team_a_id, game.team_b_id)
@@ -263,6 +266,7 @@ def upsert_game(
         espn_id=espn_id,
         excitement_index=excitement_index,
         season_type=season_type,
+        competition_type=competition_type,
     )
     session.add(game)
     try:
@@ -288,6 +292,7 @@ def upsert_game(
             excitement_index=excitement_index,
             is_complete=is_complete,
             season_type=season_type,
+            competition_type=competition_type,
             time_utc=time_utc,
             _retry=True,
         )
@@ -455,12 +460,31 @@ def get_team_records(
     NOT the looser null-count-conditional filter `get_completed_games` uses
     (which keeps NULL rows for the completed *archive*); for a W-L record a
     stray preseason game would be a miscount.
+
+    Also excludes `NON_STANDINGS_COMPETITION_TYPES` — the Commissioner's Cup
+    Championship and the All-Star Game. ESPN tags both `season.type == 2`, so
+    the filter above keeps them; the WNBA does not count either in the
+    standings. This was live for the whole 2026 season: the Cup final gave New
+    York a phantom 27th win and Las Vegas a phantom 14th loss, which is enough
+    to move a seed in a race decided by half a game.
+
+    NULL `competition_type` COUNTS, deliberately. Every row predating the
+    column is NULL and the daily ingest window only reaches back one day
+    (`daily_fetch_window`), so it can never repopulate them — a strict
+    `== "STD"` filter would erase the season. The single row that must be
+    excluded is corrected by `scripts/refetch_games.py`.
     """
     games = (
         session.query(Game)
         .filter(Game.date.like(f"{season_year}-%"))
         .filter(Game.winner_id.isnot(None))
         .filter(Game.season_type == 2)
+        .filter(
+            or_(
+                Game.competition_type.is_(None),
+                Game.competition_type.notin_(NON_STANDINGS_COMPETITION_TYPES),
+            )
+        )
         .all()
     )
     records: dict[int, list[int]] = {}

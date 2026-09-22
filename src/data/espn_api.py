@@ -422,6 +422,14 @@ def _parse_event(event: dict) -> Optional[dict]:
         # ESPN season type: 1=preseason, 2=regular, 3=postseason
         season_type = event.get("season", {}).get("type", 2)
 
+        # Competition type abbreviation (STD, CC, ALLSTAR, RD16...). This is
+        # the only field that separates the Commissioner's Cup Championship
+        # and the All-Star Game from ordinary regular-season games — ESPN tags
+        # all three `season.type == 2`. Kept raw; the standings filter lives in
+        # NON_STANDINGS_COMPETITION_TYPES, so a new special event shows up as
+        # an unrecognised value rather than being silently reclassified here.
+        competition_type = (comp.get("type") or {}).get("abbreviation")
+
         dt_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
 
         # ESPN's `timeValid` flag is authoritative when explicitly
@@ -496,6 +504,7 @@ def _parse_event(event: dict) -> Optional[dict]:
             "broadcaster": broadcaster,
             "status": status,
             "season_type": season_type,
+            "competition_type": competition_type,
         }
     except (KeyError, ValueError, TypeError, IndexError) as e:
         logger.warning(f"Failed to parse event {event.get('id')}: {e}")

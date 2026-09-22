@@ -203,3 +203,27 @@ def test_a_game_returned_by_a_neighbouring_month_still_counts(monkeypatch):
 
     assert params == ["202609", "202610"]
     assert [g["date"] for g in games] == ["2026-09-30"]
+
+
+def test_parse_event_extracts_competition_type_abbreviation():
+    """ESPN tags special events with a competition type; carry it through.
+
+    The Commissioner's Cup Championship is `season.type == 2` (regular
+    season) but is NOT counted in the official standings. The only clean
+    discriminator ESPN publishes is `competitions[0].type.abbreviation`.
+    """
+    event = _base_event("2026-06-30T23:00:00Z")
+    event["competitions"][0]["type"] = {"id": "39", "abbreviation": "CC"}
+
+    result = _parse_event(event)
+
+    assert result is not None
+    assert result["competition_type"] == "CC"
+
+
+def test_parse_event_competition_type_none_when_espn_omits_it():
+    """A payload without the field parses to None, not a crash or a guess."""
+    result = _parse_event(_base_event("2026-05-21T23:00:00Z"))
+
+    assert result is not None
+    assert result["competition_type"] is None

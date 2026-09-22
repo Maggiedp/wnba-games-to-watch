@@ -249,9 +249,22 @@ def _warn_if_season_anchor_is_stale() -> None:
         )
 
 
-def fetch_and_store_games(session) -> list[dict]:
+def fetch_and_store_games(
+    session, window: tuple[date, date] | None = None
+) -> list[dict]:
+    """Ingest ESPN's schedule + results into the games table.
+
+    `window` overrides the default yesterday-through-season-end range. Only
+    `scripts/refetch_games.py` passes it: `daily_fetch_window` reaches back
+    exactly one day, so a night ESPN failed to serve falls out of range the
+    next morning and no later daily run can ever finalize those rows.
+    """
     logger.info("Fetching schedule and results from ESPN...")
-    games = fetch_schedule_and_results()
+    games = (
+        fetch_schedule_and_results()
+        if window is None
+        else fetch_games_for_range(*window)
+    )
     if not games:
         logger.warning("No games fetched from ESPN")
         return []
@@ -297,6 +310,7 @@ def fetch_and_store_games(session) -> list[dict]:
             espn_id=game.get("event_id"),
             is_complete=is_complete,
             season_type=game.get("season_type"),
+            competition_type=game.get("competition_type"),
         )
         stored += 1
 
