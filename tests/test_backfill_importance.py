@@ -769,3 +769,77 @@ def test_standings_as_of_excludes_non_standings_competition_types():
     assert (standings["Team A"]["wins"], standings["Team A"]["losses"]) == (1, 0)
     assert (standings["Team B"]["wins"], standings["Team B"]["losses"]) == (0, 1)
     assert standings["Team A"]["h2h"]["Team B"] == [1, 0]
+
+
+def test_rebuild_date_excludes_non_standings_games_from_the_remaining_universe(
+    env, monkeypatch
+):
+    """The archive rebuild's two halves must partition on the SAME rule.
+
+    `_standings_as_of` takes games strictly before the date; `remaining_rows`
+    takes the rest. Excluding the Cup from only the completed half leaves it
+    in the simulated half, so for any archive date before the Cup the sim
+    still awards a win the standings never record — and this path writes
+    importance_score back into the published archive.
+    """
+    import scripts.backfill_importance as bi
+
+    session = env.get_session()
+    a_id, b_id = _two_teams(session)
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-20",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        season_type=2,
+        espn_id="STD1",
+    )
+    upsert_daily_ranking(
+        session,
+        date="2026-06-20",
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=60.0,
+        importance_score=10.0,
+        overall_score=40.0,
+        broadcaster="ESPN",
+    )
+    session.commit()
+    session.close()
+
+    regular_season_games = [
+        {
+            "team_a": "Las Vegas Aces",
+            "team_b": "New York Liberty",
+            "date": "2026-06-20",
+            "event_id": "STD1",
+            "season_type": 2,
+            "competition_type": "STD",
+        },
+        {
+            "team_a": "Las Vegas Aces",
+            "team_b": "New York Liberty",
+            "date": "2026-06-30",
+            "event_id": "CUP1",
+            "season_type": 2,
+            "competition_type": "CC",
+        },
+    ]
+
+    seen = {}
+    real_mc = bi.run_monte_carlo_simulation
+
+    def capture(standings, remaining, **kwargs):
+        seen["remaining"] = list(remaining)
+        return real_mc(standings, remaining, **kwargs)
+
+    monkeypatch.setattr(bi, "run_monte_carlo_simulation", capture)
+
+    session = env.get_session()
+    rebuild_date(session, "2026-06-20", [], regular_season_games)
+    session.close()
+
+    # Only the STD game is simulated; the Cup final never enters the universe.
+    assert seen["remaining"] == [("Las Vegas Aces", "New York Liberty")]

@@ -227,8 +227,16 @@ def rebuild_date(
         # for the reschedule-accuracy tradeoff and the one real gap: a
         # still-unplayed game whose date is already in the past falls out
         # of both halves and is silently missing from this date's sim).
+        # Same non-standings exclusion as _standings_as_of applies here, or
+        # the two halves of the partition disagree: the Cup final would drop
+        # out of prior standings but stay in the simulated universe, awarding
+        # a win the real standings never record on every archive date before
+        # it was played.
         remaining_rows = [
-            g for g in regular_season_games if g.get("date", "") >= date_str
+            g
+            for g in regular_season_games
+            if g.get("date", "") >= date_str
+            and g.get("competition_type") not in NON_STANDINGS_COMPETITION_TYPES
         ]
         remaining = [(g["team_a"], g["team_b"]) for g in remaining_rows]
 

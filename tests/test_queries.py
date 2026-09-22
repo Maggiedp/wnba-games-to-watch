@@ -3467,6 +3467,9 @@ def test_daily_update_main_runs_legacy_espn_id_backfill_in_order(monkeypatch):
     monkeypatch.setattr(du, "fetch_and_store_games", record("games", ret=[]))
     monkeypatch.setattr(du, "backfill_legacy_espn_ids", record("espn_ids", ret=0))
     monkeypatch.setattr(du, "backfill_missing_season_types", record("season_types"))
+    monkeypatch.setattr(
+        du, "backfill_missing_competition_types", record("competition_types")
+    )
     monkeypatch.setattr(du, "backfill_legacy_preseason", record("preseason", ret=0))
     monkeypatch.setattr(
         du,
@@ -3488,6 +3491,11 @@ def test_daily_update_main_runs_legacy_espn_id_backfill_in_order(monkeypatch):
     assert "espn_ids" in calls
     assert calls.index("espn_ids") < calls.index("season_types")
     assert calls.index("espn_ids") < calls.index("excitement")
+    # competition_type must be populated BEFORE standings are computed —
+    # compute_standings reads that column to exclude the Commissioner's Cup,
+    # and a NULL there counts, so running it after would publish one more
+    # day of phantom-win standings on every deploy-day.
+    assert calls.index("competition_types") < calls.index("standings")
 
 
 def test_daily_update_rollback_clears_failed_backfill(session, team_ids):
