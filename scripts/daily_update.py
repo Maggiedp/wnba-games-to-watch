@@ -8,7 +8,12 @@ import random
 import sys
 from datetime import date, datetime, timedelta
 
-from src.constants import CURRENT_SEASON, UN_FINALIZE_STATUSES, GameStatus
+from src.constants import (
+    CURRENT_SEASON,
+    NON_STANDINGS_COMPETITION_TYPES,
+    UN_FINALIZE_STATUSES,
+    GameStatus,
+)
 from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
@@ -1167,10 +1172,16 @@ def compute_daily_scores(
 
     # Only regular-season (season_type == 2) games drive seeding. Postseason
     # games (3) are simulated by the bracket sim; including them here would
-    # double-count playoff wins into regular-season standings.
+    # double-count playoff wins into regular-season standings. ESPN also tags
+    # the Commissioner's Cup Championship and the All-Star Game season_type 2,
+    # and an unplayed one is indistinguishable from a regular-season fixture —
+    # simulating it would award a win the standings never record. Mirrors the
+    # same skip in build_sim_inputs (the live overlay's copy of this loop).
     remaining_games = []
     remaining_event_index: dict[str, int] = {}
     for g in games:
+        if g.get("competition_type") in NON_STANDINGS_COMPETITION_TYPES:
+            continue
         if g.get("status") != GameStatus.FINAL and g.get("season_type", 2) == 2:
             eid = g.get("event_id", "")
             if eid:

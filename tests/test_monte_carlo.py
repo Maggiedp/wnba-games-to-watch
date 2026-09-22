@@ -775,3 +775,56 @@ def test_override_branch_consumes_the_same_rng_draws_as_the_elo_branch(monkeypat
     with_overrides = count_draws(win_prob_overrides={0: 1.0, 1: 0.0})
 
     assert without == with_overrides
+
+
+def test_compute_daily_scores_excludes_unplayed_non_standings_games(monkeypatch):
+    """The daily run must not simulate a scheduled Commissioner's Cup final.
+
+    It arrives from ESPN as an unplayed `season_type == 2` game, identical in
+    shape to a regular-season fixture, so the remaining-schedule filter lets it
+    through and the Monte Carlo awards a win the real standings never record.
+    """
+    from scripts.daily_update import compute_daily_scores
+
+    real_names = _ALL_TEAMS
+    standings = {
+        n: {"wins": 10, "losses": 10, "bpi": 0.0, "elo": 1500, "h2h": {}}
+        for n in real_names
+    }
+    games = [
+        {
+            "team_a": real_names[0],
+            "team_b": real_names[1],
+            "date": "2026-06-20",
+            "status": "STATUS_SCHEDULED",
+            "season_type": 2,
+            "competition_type": "STD",
+            "event_id": "std1",
+        },
+        {
+            "team_a": real_names[0],
+            "team_b": real_names[1],
+            "date": "2026-06-30",
+            "status": "STATUS_SCHEDULED",
+            "season_type": 2,
+            "competition_type": "CC",
+            "event_id": "cup1",
+        },
+    ]
+
+    seen = {}
+
+    def fake_mc(standings_, remaining, **kwargs):
+        seen["remaining"] = list(remaining)
+        raise RuntimeError("stop after capturing the schedule")
+
+    monkeypatch.setattr(
+        "scripts.daily_update._build_current_bracket_state",
+        lambda session, standings: None,
+    )
+    monkeypatch.setattr("scripts.daily_update.run_monte_carlo_simulation", fake_mc)
+
+    with pytest.raises(RuntimeError):
+        compute_daily_scores(session=None, games=games, standings=standings)
+
+    assert seen["remaining"] == [(real_names[0], real_names[1])]

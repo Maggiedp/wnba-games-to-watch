@@ -727,3 +727,45 @@ def test_main_dry_run_does_not_call_rebuild_date(env, monkeypatch):
 
     assert bf.main() == 0
     assert calls["n"] == 0
+
+
+def test_standings_as_of_excludes_non_standings_competition_types():
+    """The archive rebuild must exclude the Cup from its as-of-date standings.
+
+    `_standings_as_of` mirrors compute_standings, so it inherits the same
+    defect: a completed `season_type == 2` Commissioner's Cup game counts a
+    win and an h2h result the real standings never recorded. This one writes
+    importance_score back to daily_rankings, so the error would be baked into
+    the published archive rather than just a live snapshot.
+    """
+    from scripts.backfill_importance import _standings_as_of
+
+    class T:
+        def __init__(self, name):
+            self.name = name
+
+    teams = [T("Team A"), T("Team B")]
+    games = [
+        {
+            "date": "2026-06-01",
+            "team_a": "Team A",
+            "team_b": "Team B",
+            "winner_team": "Team A",
+            "season_type": 2,
+            "competition_type": "STD",
+        },
+        {
+            "date": "2026-06-30",
+            "team_a": "Team A",
+            "team_b": "Team B",
+            "winner_team": "Team A",
+            "season_type": 2,
+            "competition_type": "CC",
+        },
+    ]
+
+    standings = _standings_as_of("2026-07-01", teams, [], games)
+
+    assert (standings["Team A"]["wins"], standings["Team A"]["losses"]) == (1, 0)
+    assert (standings["Team B"]["wins"], standings["Team B"]["losses"]) == (0, 1)
+    assert standings["Team A"]["h2h"]["Team B"] == [1, 0]

@@ -81,6 +81,7 @@ from scripts.daily_update import (
     _impute_missing_importance,
     _importance_detail_for_game,
 )
+from src.constants import NON_STANDINGS_COMPETITION_TYPES
 from src.data.espn_api import _SEASON_END, fetch_games_for_range
 from src.db.queries import get_all_teams, get_daily_rankings
 from src.db.schema import DailyRanking, Game, get_session, init_db
@@ -150,6 +151,13 @@ def _standings_as_of(
     }
     for g in regular_season_games:
         if g.get("date", "") >= date_str:
+            continue
+        # ESPN tags the Commissioner's Cup Championship and the All-Star Game
+        # season_type == 2, but neither counts in the WNBA standings. Mirrors
+        # the same skip in compute_standings — this path writes importance_score
+        # back to daily_rankings, so a phantom win would be baked into the
+        # published archive rather than just a live snapshot.
+        if g.get("competition_type") in NON_STANDINGS_COMPETITION_TYPES:
             continue
         winner = g.get("winner_team")
         team_a, team_b = g.get("team_a"), g.get("team_b")
