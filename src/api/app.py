@@ -1341,7 +1341,15 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
             else:
                 v["wins"], v["losses"] = None, None
         if records is not None:
-            view.sort(key=lambda v: (-(v["wins"] or 0), (v["losses"] or 0), v["team"]))
+            # Standings order is winning percentage, not raw wins: games played
+            # diverge mid-season, so 26-16 sits above 27-17 the way the league
+            # table has it. Wins break an exact-pct tie (21-21 over 20-20).
+            def _standings_key(v):
+                wins, losses = v["wins"] or 0, v["losses"] or 0
+                played = wins + losses
+                return (-(wins / played if played else 0.0), -wins, v["team"])
+
+            view.sort(key=_standings_key)
         else:
             view.sort(key=lambda v: v["team"])
         return {"season": season, "teams": view}

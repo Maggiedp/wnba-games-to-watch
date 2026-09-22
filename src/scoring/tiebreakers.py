@@ -4,7 +4,7 @@ Pure functions, no I/O. Operate on dicts of TeamStanding (defined in
 src.scoring.monte_carlo) and return new structures — never mutate input.
 
 Chain order (matches official WNBA rules):
-    1. wins (handled by caller as outer sort key)
+    1. winning percentage (handled by caller as outer sort key)
     2. head_to_head_winpct
     3. conference_playoff_winpct(same_conference=True)
     4. conference_playoff_winpct(same_conference=False)
@@ -106,12 +106,22 @@ def resolve_seeding(
     WNBA tiebreaker chain.
 
     Algorithm:
-        1. Provisional sort: wins desc, then H2H within each tied group.
+        1. Provisional sort: win% desc, then H2H within each tied group.
         2. Provisional top 8 = first 8 teams from provisional sort.
-        3. Final sort: full chain (wins → H2H → own-conf → other-conf → elo)
+        3. Final sort: full chain (win% → H2H → own-conf → other-conf → elo)
            using the provisional set for conference-record tiebreakers.
         4. If new top 8 != provisional top 8, repeat from step 2 with new set.
            Cap at 3 iterations.
+
+    Teams are ranked on winning percentage, NOT on raw wins: the league
+    standings are a win% table, and games played diverge whenever the
+    schedule is uneven mid-season (or a game is missing from our data).
+    Bucketing on wins alone silently invents a tie between, say, 27-15 and
+    27-17 and then breaks it on head-to-head — which can seat the wrong
+    team ahead. Float win% is an exact grouping key here: IEEE division is
+    correctly rounded, so equal rationals give bit-identical doubles, and
+    the closest distinct rationals at WNBA denominators (≤44 games) are
+    ~1/1936 apart — far above double precision.
 
     Caller is responsible for validating that every team has a known
     conference (see src.constants.assert_all_teams_have_conferences) — running
@@ -119,26 +129,26 @@ def resolve_seeding(
     """
     teams = list(standings.keys())
 
-    # Group by wins. Win counts don't change inside this function, so the
+    # Group by win%. Records don't change inside this function, so the
     # grouping (and per-group H2H) can be computed once and reused.
-    by_wins: dict[int, list[str]] = defaultdict(list)
+    by_pct: dict[float, list[str]] = defaultdict(list)
     for name in teams:
-        by_wins[standings[name].wins].append(name)
-    h2h_per_group: dict[int, dict[str, float]] = {
-        wins: head_to_head_winpct(group, standings)
-        for wins, group in by_wins.items()
+        by_pct[standings[name].win_pct].append(name)
+    h2h_per_group: dict[float, dict[str, float]] = {
+        pct: head_to_head_winpct(group, standings)
+        for pct, group in by_pct.items()
         if len(group) > 1
     }
 
-    # Provisional sort: wins + H2H only, no recursive conference dependency.
+    # Provisional sort: win% + H2H only, no recursive conference dependency.
     provisional = _sort_groups(
-        by_wins, standings, h2h_per_group, provisional_playoffs=None
+        by_pct, standings, h2h_per_group, provisional_playoffs=None
     )
     provisional_playoffs = set(provisional[:PLAYOFF_TEAMS])
 
     seeded = provisional
     for _ in range(_MAX_FIXED_POINT_ITERATIONS):
-        seeded = _sort_groups(by_wins, standings, h2h_per_group, provisional_playoffs)
+        seeded = _sort_groups(by_pct, standings, h2h_per_group, provisional_playoffs)
         new_playoffs = set(seeded[:PLAYOFF_TEAMS])
         if new_playoffs == provisional_playoffs:
             return seeded
@@ -152,22 +162,22 @@ def resolve_seeding(
 
 
 def _sort_groups(
-    by_wins: dict[int, list[str]],
+    by_pct: dict[float, list[str]],
     standings: dict[str, "TeamStanding"],
-    h2h_per_group: dict[int, dict[str, float]],
+    h2h_per_group: dict[float, dict[str, float]],
     provisional_playoffs: set[str] | None,
 ) -> list[str]:
-    """Sort each win-bucket by tiebreaker chain. `provisional_playoffs=None`
+    """Sort each win%-bucket by tiebreaker chain. `provisional_playoffs=None`
     short-circuits conference tiebreakers — used for the initial provisional
     sort, where conference record can't yet be computed."""
     final_order: list[str] = []
-    for wins in sorted(by_wins.keys(), reverse=True):
-        group = by_wins[wins]
+    for pct in sorted(by_pct.keys(), reverse=True):
+        group = by_pct[pct]
         if len(group) == 1:
             final_order.extend(group)
             continue
 
-        h2h = h2h_per_group[wins]
+        h2h = h2h_per_group[pct]
         if provisional_playoffs is None:
             own_conf = {n: 0.5 for n in group}
             other_conf = {n: 0.5 for n in group}

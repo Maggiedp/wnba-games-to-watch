@@ -289,3 +289,96 @@ def test_resolve_seeding_unknown_team_raises():
     standings["FakeTeam"] = _ts("FakeTeam", wins=15, losses=25, elo=1500)
     with pytest.raises(KeyError, match="FakeTeam"):
         resolve_seeding(standings)
+
+
+def test_resolve_seeding_ranks_on_win_pct_not_raw_wins():
+    """Uneven games played: 27-15 outranks 27-17 outright, no tiebreaker.
+
+    Real shape from 2026-09-22, when the league had played 42-44 games and
+    the published bracket read 5 Fever, 6 Mystics, 7 Liberty, 8 Wings:
+
+        Indiana Fever      27-15  .643
+        Washington Mystics 26-16  .619
+        New York Liberty   27-17  .614
+        Dallas Wings       26-17  .605
+
+    Bucketing on raw wins pairs Fever with Liberty (both 27) and Mystics
+    with Wings (both 26), then breaks each phantom tie on head-to-head —
+    here handing Liberty the higher seed over both Fever and Mystics.
+    Winning percentage separates all four with no tiebreaker at all.
+    """
+    standings = _full_13_team_standings(
+        {
+            "Indiana Fever": _ts(
+                "Indiana Fever",
+                wins=27,
+                losses=15,
+                elo=1600,
+                # Swept by the Liberty: would lose a wins-bucket tiebreak.
+                h2h={"New York Liberty": [0, 3]},
+            ),
+            "Washington Mystics": _ts(
+                "Washington Mystics",
+                wins=26,
+                losses=16,
+                elo=1580,
+                h2h={"Dallas Wings": [1, 2]},
+            ),
+            "New York Liberty": _ts(
+                "New York Liberty",
+                wins=27,
+                losses=17,
+                elo=1590,
+                h2h={"Indiana Fever": [3, 0]},
+            ),
+            "Dallas Wings": _ts(
+                "Dallas Wings",
+                wins=26,
+                losses=17,
+                elo=1570,
+                h2h={"Washington Mystics": [2, 1]},
+            ),
+        }
+    )
+    seeded = resolve_seeding(standings)
+    contenders = [
+        t
+        for t in seeded
+        if t
+        in {
+            "Indiana Fever",
+            "Washington Mystics",
+            "New York Liberty",
+            "Dallas Wings",
+        }
+    ]
+    assert contenders == [
+        "Indiana Fever",
+        "Washington Mystics",
+        "New York Liberty",
+        "Dallas Wings",
+    ]
+
+
+def test_resolve_seeding_equal_ratio_different_games_is_a_real_tie():
+    """21-21 and 20-20 are both .500 — same bucket, broken by the chain."""
+    standings = _full_13_team_standings(
+        {
+            "Connecticut Sun": _ts(
+                "Connecticut Sun",
+                wins=21,
+                losses=21,
+                elo=1560,
+                h2h={"Phoenix Mercury": [0, 2]},
+            ),
+            "Phoenix Mercury": _ts(
+                "Phoenix Mercury",
+                wins=20,
+                losses=20,
+                elo=1600,
+                h2h={"Connecticut Sun": [2, 0]},
+            ),
+        }
+    )
+    seeded = resolve_seeding(standings)
+    assert seeded.index("Phoenix Mercury") < seeded.index("Connecticut Sun")

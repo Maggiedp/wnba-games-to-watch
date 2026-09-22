@@ -382,12 +382,19 @@ def test_rebuild_date_as_of_date_boundary_is_strict(env):
 
     Deliberate-break-verified (manually, see task-6-report.md): flipping
     `_standings_as_of`'s `>= date_str: continue` to `> date_str: continue`
-    (leaking the on-date boundary game into "prior" standings) moved this
-    scenario's computed importance from ~14.17 to ~17.68 — clearly outside
-    the tolerance asserted below. Flipping `remaining_rows`'s `>= date_str`
+    (leaking the on-date boundary game into "prior" standings) moves this
+    scenario's computed importance to ~11.24 — clearly outside the
+    tolerance asserted below. Flipping `remaining_rows`'s `>= date_str`
     to `> date_str` (excluding date_str's own games from the sim universe)
     made the focal game unmatched, turning importance_score into None
     instead of a float — caught by the `is not None` assertion.
+
+    The correct value was ~14.17 while `resolve_seeding` bucketed teams by
+    raw wins; ranking on winning percentage re-measures it at ~22.85. This
+    scenario is exactly where that distinction bites — only four prior
+    results across eight teams, so games played are wildly uneven and a 1-0
+    team no longer sits level with a 1-1 one. Re-measured, not relaxed:
+    both deliberate breaks still fall outside the window.
     """
     session = env.get_session()
     date_str, ids, regular_season_games, elo_games = _eight_team_bubble_scenario(
@@ -409,9 +416,9 @@ def test_rebuild_date_as_of_date_boundary_is_strict(env):
         .one()
     )
     assert row.importance_score is not None
-    # Correct code reproducibly gives ~14.17 (fixed per-date MC seed); a
-    # `>=`-to-`>` leak in _standings_as_of measurably moves it to ~17.68.
-    assert 10.0 < row.importance_score < 16.0
+    # Correct code reproducibly gives ~22.85 (fixed per-date MC seed); a
+    # `>=`-to-`>` leak in _standings_as_of measurably moves it to ~11.24.
+    assert 18.0 < row.importance_score < 27.0
     session.close()
 
 
