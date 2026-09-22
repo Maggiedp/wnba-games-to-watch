@@ -10,7 +10,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date as date_cls
 from datetime import datetime, timedelta, timezone
 from secrets import compare_digest
@@ -582,29 +582,36 @@ class _SingleFlightTTLCache:
     Carlo — on a `--max-instances=1` container, where a stampede is the whole
     risk the cache exists to remove.
 
-    Two locks, deliberately:
-      * `_lock` is held only to read or replace the entry, never across a
-        build, so a slow build never serializes readers.
-      * `_build_lock` admits one builder. Waiters re-check under `_lock` once
-        they get it, so they reuse the winner's value instead of each starting
-        their own build.
+    Concurrent callers share the in-flight build through a Future, so they
+    observe the SAME outcome — value or exception — as the one builder.
+    Sharing the failure matters as much as sharing the success: the earlier
+    hand-rolled version stored nothing on a raise, so N waiters queued on the
+    build lock and each ran the same failing build in turn. Measured against
+    the pre-extraction code, five waiters on a 0.2s failing build produced
+    five sequential ESPN fetches and 1.02s of wall time where one shared
+    failure costs 0.2s. `/api/replay-live` is the caller that felt this: its
+    build raises HTTPException(502) on a scoreboard outage, so exactly the
+    moment ESPN is slow was the moment the cache multiplied the load.
 
-    A build that raises propagates to every waiter and stores nothing, so an
-    upstream failure is never sticky (`/api/replay-live` depends on this: its
-    502 must reach the client, not be served again for a whole TTL).
+    A failure is shared but NEVER cached: `_entry` is written only on success,
+    so the next INDEPENDENT request retries from cold. Concurrent waiters share
+    one failure; a later request is not served a stale error.
+
+    `_lock` is held only to read or replace state, never across a build, so a
+    slow build never serializes readers of a fresh entry.
 
     One entry rather than a dict: each caller has a single live key (one
     season, one slate), so a new key evicts instead of growing unbounded.
     Callers with nothing to key on pass `None`.
     """
 
-    __slots__ = ("_ttl_s", "_lock", "_build_lock", "_entry")
+    __slots__ = ("_ttl_s", "_lock", "_entry", "_inflight")
 
     def __init__(self, ttl_s: float) -> None:
         self._ttl_s = ttl_s
         self._lock = threading.Lock()
-        self._build_lock = threading.Lock()
         self._entry: tuple[float, object, object] | None = None
+        self._inflight: tuple[object, Future] | None = None
 
     def _hit(self, key: object) -> tuple[bool, object]:
         """Fresh value for `key` as `(found, value)`. Call under `_lock`.
@@ -618,20 +625,49 @@ class _SingleFlightTTLCache:
             return True, entry[2]
         return False, None
 
+    def _clear_inflight(self, future: Future) -> None:
+        """Release the in-flight slot, but only if it is still ours.
+
+        A caller for a DIFFERENT key may have replaced the slot while we built.
+        Clearing unconditionally would not strand its waiters — each holds its own
+        Future and is resolved by its own leader — but it WOULD drop that key's
+        in-flight marker, so the next caller for it would see nothing in flight and
+        start a redundant second build, losing the single-flight guarantee.
+        """
+        with self._lock:
+            if self._inflight is not None and self._inflight[1] is future:
+                self._inflight = None
+
     def get(self, key: object, build: Callable[[], object]) -> object:
         with self._lock:
             found, value = self._hit(key)
             if found:
                 return value
-        with self._build_lock:
-            with self._lock:
-                found, value = self._hit(key)
-                if found:
-                    return value  # another caller built it while we waited
+            inflight = self._inflight
+            if inflight is not None and inflight[0] == key:
+                future, leader = inflight[1], False
+            else:
+                future, leader = Future(), True
+                self._inflight = (key, future)
+
+        if not leader:
+            # Re-raises the leader's exception, so one upstream failure is seen
+            # once rather than retried per waiter.
+            return future.result()
+
+        try:
             value = build()
-            with self._lock:
-                self._entry = (time.monotonic() + self._ttl_s, key, value)
-            return value
+        except BaseException as exc:
+            # BaseException, not Exception: a KeyboardInterrupt or SystemExit in
+            # the leader must still release the waiters instead of hanging them.
+            self._clear_inflight(future)
+            future.set_exception(exc)
+            raise
+        with self._lock:
+            self._entry = (time.monotonic() + self._ttl_s, key, value)
+        self._clear_inflight(future)
+        future.set_result(value)
+        return value
 
     def clear(self) -> None:
         """Drop the cached entry. Used by tests to defeat the TTL."""
