@@ -5,6 +5,18 @@ from src.db.queries import upsert_shot_league_avg
 from src.db.schema import get_session
 
 
+@pytest.fixture(autouse=True)
+def _clear_shot_baseline_cache():
+    # _SHOT_BASELINE_TTL_S is 300s, far longer than the suite, so a leaked
+    # baseline makes these tests order-dependent. Reset around every test
+    # rather than per-test, so a new test cannot forget the line.
+    from src.api import app as app_module
+
+    app_module._shot_baseline_cache.clear()
+    yield
+    app_module._shot_baseline_cache.clear()
+
+
 def _seed(env):
     session = get_session()
     q.upsert_shot_making(
@@ -174,13 +186,11 @@ def _p(play_id, aid, name, x=25, y=4, made=True, pv=2, dist=3.0, stype="Layup Sh
 
 
 def test_player_shots_returns_chart_and_zones(client, monkeypatch):
-    from src.api import app as app_module
     from src.data import espn_api as espn_api_mod
     from src.db.queries import upsert_shots
     from src.db.schema import get_session
 
     monkeypatch.setattr(espn_api_mod, "today_et", lambda: "2026-07-28")
-    app_module._shot_baseline_cache = None  # clear TTL cache between tests
     session = get_session()
     payload = []
     for i in range(40):
@@ -225,11 +235,9 @@ def test_player_shots_returns_chart_and_zones(client, monkeypatch):
 
 
 def test_player_shots_unknown_athlete_is_empty_not_500(client, monkeypatch):
-    from src.api import app as app_module
     from src.data import espn_api as espn_api_mod
 
     monkeypatch.setattr(espn_api_mod, "today_et", lambda: "2026-07-28")
-    app_module._shot_baseline_cache = None
     r = client.get("/api/player-shots?athlete_id=nobody")
     assert r.status_code == 200
     data = r.json()
@@ -243,13 +251,11 @@ def test_player_shots_omits_team_and_total_for_traded_player(client, monkeypatch
     no ORDER BY); `points_added` is live-recomputed and would spuriously mismatch
     the daily `shot_making` leaderboard row during the 6 AM ingest→recompute window.
     Dropping them is the fix (Codex adversarial R2)."""
-    from src.api import app as app_module
     from src.data import espn_api as espn_api_mod
     from src.db.queries import upsert_shots
     from src.db.schema import get_session
 
     monkeypatch.setattr(espn_api_mod, "today_et", lambda: "2026-07-28")
-    app_module._shot_baseline_cache = None
     session = get_session()
 
     def shot(pid, team_id, abbr):

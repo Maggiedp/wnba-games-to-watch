@@ -1,8 +1,22 @@
 import json
 import re
 
+import pytest
+
 from src.db import queries as q
 from src.db.schema import get_session
+
+
+@pytest.fixture(autouse=True)
+def _clear_shot_baseline_cache():
+    # _SHOT_BASELINE_TTL_S is 300s, far longer than the suite, so a leaked
+    # baseline makes these tests order-dependent. Reset around every test
+    # rather than per-test, so a new test cannot forget the line.
+    from src.api import app as app_module
+
+    app_module._shot_baseline_cache.clear()
+    yield
+    app_module._shot_baseline_cache.clear()
 
 
 def _shot(
@@ -131,9 +145,6 @@ def _seed_sub_threshold_traded(env):
 
 
 def test_player_page_qualified(client, env):
-    from src.api import app as app_module
-
-    app_module._shot_baseline_cache = None
     _seed_qualified(env)
 
     r = client.get("/player/p-qual")
@@ -159,9 +170,6 @@ def test_player_page_style_tags_are_balanced(client, env):
     error-recovers by dropping the first rule (`main`, the layout container),
     which made the whole page render full-width and left-pinned. The
     structural invariant is balanced style tags + the `main` rule surviving."""
-    from src.api import app as app_module
-
-    app_module._shot_baseline_cache = None
     _seed_qualified(env)
 
     body = client.get("/player/p-qual").text
@@ -170,9 +178,6 @@ def test_player_page_style_tags_are_balanced(client, env):
 
 
 def test_player_page_sub_threshold(client, env):
-    from src.api import app as app_module
-
-    app_module._shot_baseline_cache = None
     _seed_sub_threshold(env)
 
     r = client.get("/player/p-sub")
@@ -187,9 +192,6 @@ def test_player_page_sub_threshold_team_is_deterministic_plurality(client, env):
     it must report the team the player took the most shots for. The seed puts
     the minority team (LV, 1 shot) FIRST in insertion order and the majority
     team (NY, 3 shots) after, so a `rows[0]`-based bug would show LV."""
-    from src.api import app as app_module
-
-    app_module._shot_baseline_cache = None
     _seed_sub_threshold_traded(env)
 
     r = client.get("/player/p-traded")
@@ -200,16 +202,10 @@ def test_player_page_sub_threshold_team_is_deterministic_plurality(client, env):
 
 
 def test_player_page_unknown_404(client, env):
-    from src.api import app as app_module
-
-    app_module._shot_baseline_cache = None
     assert client.get("/player/nobody").status_code == 404
 
 
 def test_player_page_renders_the_bridge_when_anchors_exist(client, env):
-    from src.api import app as app_module
-
-    app_module._shot_baseline_cache = None
     _seed_qualified(env)
     session = get_session()
     q.upsert_shot_league_avg(session, 2026, avg_xpps=1.027, avg_pps=1.037, fga=25790)
@@ -223,9 +219,6 @@ def test_player_page_renders_the_bridge_when_anchors_exist(client, env):
 
 
 def test_player_page_omits_the_bridge_before_the_first_daily_run(client, env):
-    from src.api import app as app_module
-
-    app_module._shot_baseline_cache = None
     _seed_qualified(env)  # no anchor row seeded
 
     html = client.get("/player/p-qual").text
@@ -241,9 +234,6 @@ def test_player_page_defines_the_bridge_label_minimum(client, env):
     fall back to `auto`, and the labels lose their track bounds — a browser-only
     failure. `/shot-making` has string-asserts over its own CSS; this page had
     none, so the coupling was unenforced on one of the two surfaces."""
-    from src.api import app as app_module
-
-    app_module._shot_baseline_cache = None
     _seed_qualified(env)
     session = get_session()
     q.upsert_shot_league_avg(session, 2026, avg_xpps=1.027, avg_pps=1.037, fga=25790)
