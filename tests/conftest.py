@@ -1,5 +1,7 @@
 """Shared test fixtures."""
 
+import threading
+from collections.abc import Callable
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -55,6 +57,55 @@ def make_wp_plays(anchors: list[float], n: int = 41) -> list[dict]:
             }
         )
     return plays
+
+
+def run_threads_concurrently(n: int, fn: Callable[[], object]) -> None:
+    """Run `fn` on `n` threads, started together and all joined before returning.
+
+    N callers must be in flight AT THE SAME TIME, so the leader's build is still
+    open when the others arrive. tests/test_conftest_helpers.py pins that
+    directly: a helper that ran serially would make every single-flight test
+    pass vacuously, since builds["n"] == 1 is what one serial caller produces.
+
+    Raw threads rather than ThreadPoolExecutor, and not by oversight -- the pool
+    reuses IDLE workers, so N submits of a fast callable run on fewer than N
+    threads (measured: 5 submits -> 2-3 threads, peak concurrency 1). It only
+    looks equivalent because every caller today holds its build open with a
+    sleep. Raw threads guarantee the overlap structurally instead of by luck.
+
+    Results are side-effect-only: callers close over their own list, because
+    what they capture differs (return values, caught exceptions, the identity of
+    a shared exception object). FAILURES are not -- a bare Thread swallows what
+    its target raises, so worker exceptions are collected and re-raised together
+    as an ExceptionGroup (Exception, not BaseException, so the group type is
+    correct). tests/test_conftest_helpers.py carries the measurement.
+
+    No join timeout, deliberately: a deadlocked build should hang visibly rather
+    than let the assertions run against half-finished state.
+    """
+    errors: list[Exception] = []
+    errors_lock = threading.Lock()
+
+    def guarded() -> None:
+        try:
+            fn()
+        except Exception as e:
+            with errors_lock:
+                errors.append(e)
+
+    threads = [threading.Thread(target=guarded) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if errors:
+        raise ExceptionGroup(f"{len(errors)} of {n} worker threads raised", errors)
+
+
+@pytest.fixture
+def run_concurrently():
+    """Factory fixture for the thread fan-out (see run_threads_concurrently)."""
+    return run_threads_concurrently
 
 
 @pytest.fixture

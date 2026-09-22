@@ -175,7 +175,9 @@ def test_replay_live_response_is_cached_within_ttl(client, monkeypatch):
     assert calls["n"] == after_first  # second call served from cache
 
 
-def test_replay_live_single_flights_concurrent_cold_builds(client, monkeypatch):
+def test_replay_live_single_flights_concurrent_cold_builds(
+    client, monkeypatch, run_concurrently
+):
     # Wiring test: the single-flight property itself is pinned on the primitive in
     # tests/test_single_flight_cache.py; this asserts get_replay_live is actually
     # routed THROUGH it, which a refactor could silently undo. Unrouted, all five
@@ -196,11 +198,7 @@ def test_replay_live_single_flights_concurrent_cold_builds(client, monkeypatch):
     monkeypatch.setattr(app, "fetch_today_game_statuses", slow_statuses)
     monkeypatch.setattr(app, "_get_known_espn_ids", lambda: frozenset())
 
-    threads = [threading.Thread(target=app.get_replay_live) for _ in range(5)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    run_concurrently(5, app.get_replay_live)
     assert builds["n"] == 1  # single-flight collapsed 5 cold calls into one build
 
 
