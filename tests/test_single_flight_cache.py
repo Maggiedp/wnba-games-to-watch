@@ -9,6 +9,8 @@ a plausible future "simplification" would silently remove.
 import threading
 import time
 
+import pytest
+
 import src.api.app as app
 
 Cache = app._SingleFlightTTLCache
@@ -46,24 +48,6 @@ def test_an_expired_entry_rebuilds():
     assert cache.get(None, lambda: 1) == 1
     time.sleep(0.08)
     assert cache.get(None, lambda: 2) == 2
-
-
-def test_a_raising_build_is_not_cached():
-    # /api/replay-live surfaces a scoreboard outage as a 502. If the raise were
-    # cached, one blip would darken the strip for a whole TTL; if it were cached
-    # as a value, the next caller would be handed an exception object as data.
-    cache = Cache(ttl_s=60)
-
-    def boom():
-        raise RuntimeError("scoreboard down")
-
-    for _ in range(2):
-        try:
-            cache.get(None, boom)
-            raise AssertionError("expected the build to propagate")
-        except RuntimeError:
-            pass
-    assert cache.get(None, lambda: "recovered") == "recovered"
 
 
 def test_concurrent_cold_callers_collapse_into_one_build():
@@ -111,7 +95,7 @@ def test_a_slow_build_does_not_block_readers_of_a_fresh_entry():
     builder = threading.Thread(target=lambda: cache.get("cold", slow_build))
     builder.start()
     started.wait(timeout=5)
-    # The builder holds _build_lock and is mid-build; a read must not block.
+    # The builder owns the in-flight slot and is mid-build; a read must not block.
     got = []
     reader = threading.Thread(
         target=lambda: got.append(cache.get("warm", lambda: "rebuilt"))
@@ -166,9 +150,11 @@ def test_concurrent_failing_builds_run_the_build_only_once():
 
 
 def test_a_failure_is_shared_but_not_cached():
-    # The two halves must hold together: concurrent waiters share one failure,
-    # yet the next INDEPENDENT request retries from cold rather than being served
-    # a stale error for the rest of the TTL. /api/replay-live needs both.
+    # The two halves must hold together: concurrent waiters share one failure (see
+    # the concurrency test below), yet the next INDEPENDENT request retries from
+    # cold rather than being served a stale error for the rest of the TTL.
+    # /api/replay-live needs both. pytest.raises also pins that the exception
+    # PROPAGATES rather than being returned as a cached value.
     cache = Cache(ttl_s=60)
     builds = {"n": 0}
 
@@ -177,10 +163,8 @@ def test_a_failure_is_shared_but_not_cached():
         raise RuntimeError("down")
 
     for _ in range(3):
-        try:
+        with pytest.raises(RuntimeError):
             cache.get(None, failing_build)
-        except RuntimeError:
-            pass
     assert builds["n"] == 3  # sequential calls each retried; no sticky error
     assert cache.get(None, lambda: "recovered") == "recovered"
 

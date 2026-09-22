@@ -176,9 +176,10 @@ def test_replay_live_response_is_cached_within_ttl(client, monkeypatch):
 
 
 def test_replay_live_single_flights_concurrent_cold_builds(client, monkeypatch):
-    # Concurrent cold requests must collapse into ONE slate build (single-flight),
-    # so viewers share one ESPN fetch instead of each fanning out. Without the
-    # build lock, all five threads would run _build_replay_live and count > 1.
+    # Wiring test: the single-flight property itself is pinned on the primitive in
+    # tests/test_single_flight_cache.py; this asserts get_replay_live is actually
+    # routed THROUGH it, which a refactor could silently undo. Unrouted, all five
+    # threads would run _build_replay_live and count > 1.
     import threading
     import time as _time
 

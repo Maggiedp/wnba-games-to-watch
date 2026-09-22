@@ -600,9 +600,12 @@ class _SingleFlightTTLCache:
     `_lock` is held only to read or replace state, never across a build, so a
     slow build never serializes readers of a fresh entry.
 
-    One entry rather than a dict: each caller has a single live key (one
-    season, one slate), so a new key evicts instead of growing unbounded.
-    Callers with nothing to key on pass `None`.
+    One entry rather than a dict: in practice each caller has one live key at a
+    time (one season, one slate), so a new key evicts instead of growing
+    unbounded. Callers with nothing to key on pass `None`. Two keys CAN briefly
+    overlap — a season rollover between two in-flight baseline builds — which is
+    why `_release_inflight` checks identity rather than clearing blindly; the
+    worst case it prevents is one redundant build, not a correctness failure.
     """
 
     __slots__ = ("_ttl_s", "_lock", "_entry", "_inflight")
@@ -613,20 +616,8 @@ class _SingleFlightTTLCache:
         self._entry: tuple[float, object, object] | None = None
         self._inflight: tuple[object, Future] | None = None
 
-    def _hit(self, key: object) -> tuple[bool, object]:
-        """Fresh value for `key` as `(found, value)`. Call under `_lock`.
-
-        Returns the flag separately because a cached value is routinely falsy —
-        the live-odds build returns `[]` for "live mode does not apply" — so
-        `if value:` would treat a valid hit as a miss and rebuild every request.
-        """
-        entry = self._entry
-        if entry is not None and entry[1] == key and entry[0] > time.monotonic():
-            return True, entry[2]
-        return False, None
-
-    def _clear_inflight(self, future: Future) -> None:
-        """Release the in-flight slot, but only if it is still ours.
+    def _release_inflight(self, future: Future) -> None:
+        """Give up the in-flight slot, but only if it is still ours. Call under `_lock`.
 
         A caller for a DIFFERENT key may have replaced the slot while we built.
         Clearing unconditionally would not strand its waiters — each holds its own
@@ -634,15 +625,18 @@ class _SingleFlightTTLCache:
         in-flight marker, so the next caller for it would see nothing in flight and
         start a redundant second build, losing the single-flight guarantee.
         """
-        with self._lock:
-            if self._inflight is not None and self._inflight[1] is future:
-                self._inflight = None
+        if self._inflight is not None and self._inflight[1] is future:
+            self._inflight = None
 
     def get(self, key: object, build: Callable[[], object]) -> object:
         with self._lock:
-            found, value = self._hit(key)
-            if found:
-                return value
+            entry = self._entry
+            # Presence, never truthiness: a cached value is routinely falsy (the
+            # live-odds build returns [] for "live mode does not apply"), so an
+            # `if value:` test would read a valid hit as a miss and rebuild every
+            # request — a ~1.2s Monte Carlo each time.
+            if entry is not None and entry[1] == key and entry[0] > time.monotonic():
+                return entry[2]
             inflight = self._inflight
             if inflight is not None and inflight[0] == key:
                 future, leader = inflight[1], False
@@ -660,17 +654,26 @@ class _SingleFlightTTLCache:
         except BaseException as exc:
             # BaseException, not Exception: a KeyboardInterrupt or SystemExit in
             # the leader must still release the waiters instead of hanging them.
-            self._clear_inflight(future)
+            with self._lock:
+                self._release_inflight(future)
             future.set_exception(exc)
+            # exc.__traceback__ references this frame, which holds `future`, which
+            # now holds exc — a cycle only the cyclic GC can break, and it pins
+            # every frame in the traceback, including build()'s partially-built
+            # data (a full season of shot dicts for the baseline). Dropping our
+            # reference breaks the largest link so refcounting can reclaim it.
+            future = None
             raise
         with self._lock:
             self._entry = (time.monotonic() + self._ttl_s, key, value)
-        self._clear_inflight(future)
+            self._release_inflight(future)
         future.set_result(value)
         return value
 
     def clear(self) -> None:
-        """Drop the cached entry. Used by tests to defeat the TTL."""
+        """Drop the cached entry so the next call rebuilds. Used by tests to
+        defeat the TTL. Leaves any in-flight build alone: its waiters are already
+        holding its Future and must still be resolved."""
         with self._lock:
             self._entry = None
 
@@ -922,8 +925,8 @@ def get_replay_live():
     per-game fetches run on the shared bounded pool. Sync def so the blocking
     work runs in FastAPI's threadpool.
     """
-    # _build_replay_live raises HTTPException(502) on a scoreboard failure; the
-    # cache stores nothing on a raise, so the error is not served for a whole TTL.
+    # _build_replay_live raises HTTPException(502) on a scoreboard failure; see
+    # _SingleFlightTTLCache for how a raise is shared but never cached.
     return _replay_live_cache.get(None, _build_replay_live)
 
 
@@ -1083,8 +1086,7 @@ def _cached_live_playoff_odds_rows(today: str) -> list[PlayoffOddsResponse]:
     Shares _SingleFlightTTLCache with `get_replay_live` and the shot baseline, so
     concurrent viewers wait on ONE ~1.2s Monte Carlo rather than each starting
     their own on a single-instance container. Returns [] when live mode does not
-    apply, which the caller reads as "fall through to the stored snapshot" — a
-    falsy value the cache stores and replays as a real hit.
+    apply, which the caller reads as "fall through to the stored snapshot".
     """
     # Keyed on None, not `today`: the pre-existing cache ignored its argument and
     # this extraction preserves that exactly. See the date-keying note in the
@@ -1106,7 +1108,6 @@ def get_playoff_odds(date: str = Query(default=None)):
     work (a 10k Monte Carlo plus the ESPN slate fetch) runs in FastAPI's
     threadpool instead of stalling the event loop for every other request.
     """
-    global _live_odds_cache
     today = today_et()
     explicit_date = date is not None
     if date is None:
