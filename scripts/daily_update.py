@@ -442,6 +442,49 @@ def backfill_missing_competition_types(session) -> None:
 STANDINGS_MISMATCH_ALERT = "Standings disagree with ESPN"
 
 
+def _standings_problems(
+    ours: dict[str, dict], espn: dict[str, tuple[int, int]], scheduled: set[str]
+) -> list[str]:
+    """Every disagreement between our standings and ESPN's, as readable lines.
+
+    Pure: three plain collections in, strings out. Split from the I/O shell so
+    the comparison policy is testable without a session or a patched fetch.
+
+    Two problem classes, both alerting:
+
+    * a record that differs, or a team ESPN reports that we do not carry.
+      Silently skipping an unjoinable team is how this check would go
+      vacuous -- still reporting OK after a rename upstream disabled it.
+    * a team on `scheduled` that ESPN omits. Keyed on schedule presence, NOT
+      on whether we hold a record: `compute_standings` seeds every known team
+      at 0-0 before applying results, so a team whose games all failed to
+      ingest sits at 0-0, and a "only teams with a real record" rule would
+      skip precisely the team whose data is missing. See
+      `get_team_names_with_games` for why the expected set is derived from
+      the schedule rather than from a team-count constant.
+    """
+    problems: list[str] = []
+    for name, (wins, losses) in sorted(espn.items()):
+        held = ours.get(name)
+        if held is None:
+            problems.append(f"{name}: ESPN has {wins}-{losses}, we have no such team")
+        elif (held["wins"], held["losses"]) != (wins, losses):
+            problems.append(
+                f"{name}: we have {held['wins']}-{held['losses']}, "
+                f"ESPN has {wins}-{losses}"
+            )
+    for name in sorted(scheduled - set(espn)):
+        held = ours.get(name)
+        record = (
+            f"we have {held['wins']}-{held['losses']}" if held else "no local record"
+        )
+        problems.append(
+            f"{name}: on the {CURRENT_SEASON} schedule but ESPN does not "
+            f"list it ({record})"
+        )
+    return problems
+
+
 def check_standings_against_espn(session, standings: dict[str, dict]) -> None:
     """Compare our derived W-L against ESPN's own published standings.
 
@@ -458,30 +501,36 @@ def check_standings_against_espn(session, standings: dict[str, dict]) -> None:
     must be the one that decides published seeds; a fix applied to the
     displayed record alone is exactly the half-fix Codex caught on PR #145.
 
-    Three outcomes, deliberately distinct:
+    This function is the I/O and log-policy shell; `_standings_problems`
+    holds the comparison. The policy is which failures page:
 
-    * disagreement -> ERROR carrying `STANDINGS_MISMATCH_ALERT`
-    * a team ESPN reports that we cannot join -> the SAME alert. Lost
-      evidence is not absent evidence: silently skipping an unjoinable team
-      is how this check would go vacuous, still reporting OK while a rename
-      upstream had disabled it.
-    * ESPN unreachable or its payload unusable -> WARNING, never the alert.
-      An ESPN outage must not page as a data defect. Accepted cost, stated
-      plainly: the oracle is then blind exactly when ingest is most likely
-      broken, so a divergence is caught the next day rather than instantly.
+    * anything `_standings_problems` returns -> ERROR carrying
+      `STANDINGS_MISMATCH_ALERT`, the string a GCP log-based metric keys on.
+    * ESPN unreachable, or a payload with no usable entries -> WARNING,
+      never the alert. An ESPN outage must not page as a data defect.
+      Accepted cost, stated plainly: the oracle is then blind exactly when
+      ingest is most likely broken, so a divergence is caught the next day
+      rather than instantly.
 
-    A well-formed but TRUNCATED rollup is the third case in disguise and is
-    treated as the first: a payload covering one team would otherwise log
-    "all 1 teams agree" while fourteen went unvalidated. Coverage is judged on
-    which teams are on this season's SCHEDULE, not on which we hold records
-    for — a team whose games all failed to ingest sits at 0-0, and keying on
-    "we have a real record" would skip precisely the team whose data is gone.
-    A TOTAL fetch failure still only warns; an incomplete one alerts, because it is indistinguishable
-    from every team name having stopped matching, and the cost is asymmetric —
-    a false page costs one email, silence costs the monitor its entire value.
+    A well-formed but TRUNCATED rollup is deliberately NOT the second case:
+    a payload covering one team would otherwise log "all 1 teams agree"
+    while fourteen went unvalidated. A total fetch failure warns; an
+    incomplete one alerts, because it is indistinguishable from every team
+    name having stopped matching, and the cost is asymmetric -- a false page
+    costs one email, silence costs the monitor its entire value.
 
-    Never raises. Called after the rankings and odds are already stored, so
-    a fault in the monitor can never block the user-visible write.
+    Only meaningful AFTER the day's ingest: our records are as-of the last
+    `fetch_and_store_games`, ESPN's are live. Measured 2026-09-22 at 21:39 ET
+    against a 06:00 snapshot -- it correctly flagged WSH and CON, whose 19:30
+    game had finished since. Harmless where it sits (the 06:00 run ingests
+    last night's finals first, and no WNBA game is in progress at 06:00 ET),
+    but don't call this from a request handler or a mid-evening probe and
+    read the result as a defect.
+
+    Runs after the rankings and odds are stored. It can still raise (a DB
+    fault in the coverage query, say); the caller's `try/except` is what
+    guarantees a fault here cannot block the user-visible write, so don't
+    remove that guard on the strength of this docstring.
     """
     try:
         espn = fetch_team_records_from_standings(CURRENT_SEASON)
@@ -489,42 +538,8 @@ def check_standings_against_espn(session, standings: dict[str, dict]) -> None:
         logger.warning(f"Standings check could not run (ESPN unavailable): {e}")
         return
 
-    problems: list[str] = []
-    for name, (wins, losses) in sorted(espn.items()):
-        ours = standings.get(name)
-        if ours is None:
-            problems.append(f"{name}: ESPN has {wins}-{losses}, we have no such team")
-        elif (ours["wins"], ours["losses"]) != (wins, losses):
-            problems.append(
-                f"{name}: we have {ours['wins']}-{ours['losses']}, "
-                f"ESPN has {wins}-{losses}"
-            )
-    # Coverage — the other half of the vacuousness guard. The parser only fails
-    # closed on an empty or malformed payload, so a well-formed but TRUNCATED
-    # rollup would otherwise be accepted and reported as a passing check while
-    # every omitted team went unvalidated.
-    #
-    # Keyed on SCHEDULE PRESENCE, not on whether we hold a record for the team.
-    # `compute_standings` seeds every known team at 0-0 before applying results,
-    # so a team whose games all failed to ingest sits at 0-0 locally — and a
-    # "only teams with a real record" rule would then skip exactly the team
-    # whose data is missing. Whatever our own record says, a team playing this
-    # season MUST appear in this season's rollup.
-    #
-    # Also deliberately NOT an expected-team-count constant: the league was 13
-    # teams, is 15, and is still expanding, so a literal goes stale the day it
-    # changes and then alerts nightly until someone edits it — the "trains the
-    # reader to mute it" failure this whole layer exists to remove. Schedule
-    # presence self-calibrates, and needs no expansion-team exception: a club
-    # counts from the moment its schedule drops, which is also when ESPN starts
-    # listing it at 0-0.
-    for name in sorted(get_team_names_with_games(session, CURRENT_SEASON) - set(espn)):
-        ours = standings.get(name)
-        held = f"we have {ours['wins']}-{ours['losses']}" if ours else "no local record"
-        problems.append(
-            f"{name}: on the {CURRENT_SEASON} schedule but ESPN does not "
-            f"list it ({held})"
-        )
+    scheduled = get_team_names_with_games(session, CURRENT_SEASON)
+    problems = _standings_problems(standings, espn, scheduled)
     if problems:
         logger.error(f"{STANDINGS_MISMATCH_ALERT}: " + "; ".join(problems))
     else:

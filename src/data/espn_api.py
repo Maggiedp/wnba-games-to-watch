@@ -389,24 +389,27 @@ def fetch_games_for_range(
     return all_games
 
 
-def _standings_entries(node) -> list:
-    """Every `standings.entries` list anywhere in the payload.
+def _standings_entries(node: dict) -> list:
+    """Entries from the two layouts ESPN actually serves, both verified live.
 
-    ESPN flattens to a single root-level block for `level=1` but nests the
-    same shape under `children` otherwise; walking for the shape rather than
-    a fixed path means a layout change doesn't silently return zero teams.
+        level=1   -> root `standings.entries` (15 teams), `children` empty
+        default   -> root `standings` absent, `children` = the two conferences
+        level=2   -> same as default
+
+    We pass `level=1`, so the first is the live path and the second is here
+    because it is one query-string change away, not as speculation.
+
+    Read as two explicit paths rather than a recursive shape-hunt, matching
+    this module's house rule that a payload we do not recognise should
+    surface rather than be silently absorbed. Nothing is lost by pinning:
+    an unrecognised layout yields zero entries, and the caller raises
+    `ESPNAPIError` on that, which the monitor already treats as "oracle
+    unusable" -- a handled outcome, not a silent one.
     """
-    found: list = []
-    if isinstance(node, dict):
-        standings = node.get("standings")
-        if isinstance(standings, dict) and isinstance(standings.get("entries"), list):
-            found.extend(standings["entries"])
-        for value in node.values():
-            found.extend(_standings_entries(value))
-    elif isinstance(node, list):
-        for value in node:
-            found.extend(_standings_entries(value))
-    return found
+    entries = list((node.get("standings") or {}).get("entries") or [])
+    for child in node.get("children") or []:
+        entries.extend((child.get("standings") or {}).get("entries") or [])
+    return entries
 
 
 def fetch_team_records_from_standings(
