@@ -45,6 +45,7 @@ from src.db.queries import (
     get_shots_for_season,
     shot_row_to_dict,
     get_team_abbrev_map,
+    get_team_names_with_games,
     get_team_by_name,
     get_team_style_season_counts,
     get_teams_by_ids,
@@ -441,7 +442,7 @@ def backfill_missing_competition_types(session) -> None:
 STANDINGS_MISMATCH_ALERT = "Standings disagree with ESPN"
 
 
-def check_standings_against_espn(standings: dict[str, dict]) -> None:
+def check_standings_against_espn(session, standings: dict[str, dict]) -> None:
     """Compare our derived W-L against ESPN's own published standings.
 
     The monitoring layer the other three cannot provide. The log alert keys
@@ -471,8 +472,11 @@ def check_standings_against_espn(standings: dict[str, dict]) -> None:
 
     A well-formed but TRUNCATED rollup is the third case in disguise and is
     treated as the first: a payload covering one team would otherwise log
-    "all 1 teams agree" while fourteen went unvalidated. A TOTAL fetch failure
-    still only warns; an incomplete one alerts, because it is indistinguishable
+    "all 1 teams agree" while fourteen went unvalidated. Coverage is judged on
+    which teams are on this season's SCHEDULE, not on which we hold records
+    for — a team whose games all failed to ingest sits at 0-0, and keying on
+    "we have a real record" would skip precisely the team whose data is gone.
+    A TOTAL fetch failure still only warns; an incomplete one alerts, because it is indistinguishable
     from every team name having stopped matching, and the cost is asymmetric —
     a false page costs one email, silence costs the monitor its entire value.
 
@@ -500,19 +504,27 @@ def check_standings_against_espn(standings: dict[str, dict]) -> None:
     # rollup would otherwise be accepted and reported as a passing check while
     # every omitted team went unvalidated.
     #
-    # Self-calibrating on purpose: every team we make a real claim about must be
-    # covered. Deliberately NOT an expected-team-count constant — the league was
-    # 13 teams, is 15, and is still expanding, so a literal goes stale the day it
-    # changes and then alerts nightly until someone edits it, which is the
-    # "trains the reader to mute it" failure this whole layer exists to remove.
-    # A brand-new club sitting at 0-0 before ESPN lists it is not a claim, so it
-    # stays silent.
-    for name, ours in sorted(standings.items()):
-        if name not in espn and (ours["wins"] or ours["losses"]):
-            problems.append(
-                f"{name}: we have {ours['wins']}-{ours['losses']}, "
-                f"ESPN does not list this team"
-            )
+    # Keyed on SCHEDULE PRESENCE, not on whether we hold a record for the team.
+    # `compute_standings` seeds every known team at 0-0 before applying results,
+    # so a team whose games all failed to ingest sits at 0-0 locally — and a
+    # "only teams with a real record" rule would then skip exactly the team
+    # whose data is missing. Whatever our own record says, a team playing this
+    # season MUST appear in this season's rollup.
+    #
+    # Also deliberately NOT an expected-team-count constant: the league was 13
+    # teams, is 15, and is still expanding, so a literal goes stale the day it
+    # changes and then alerts nightly until someone edits it — the "trains the
+    # reader to mute it" failure this whole layer exists to remove. Schedule
+    # presence self-calibrates, and needs no expansion-team exception: a club
+    # counts from the moment its schedule drops, which is also when ESPN starts
+    # listing it at 0-0.
+    for name in sorted(get_team_names_with_games(session, CURRENT_SEASON) - set(espn)):
+        ours = standings.get(name)
+        held = f"we have {ours['wins']}-{ours['losses']}" if ours else "no local record"
+        problems.append(
+            f"{name}: on the {CURRENT_SEASON} schedule but ESPN does not "
+            f"list it ({held})"
+        )
     if problems:
         logger.error(f"{STANDINGS_MISMATCH_ALERT}: " + "; ".join(problems))
     else:
@@ -1655,7 +1667,7 @@ def main() -> int:
             # wrong). Runs AFTER the write so a fault here cannot block
             # publishing, and swallows everything for the same reason.
             try:
-                check_standings_against_espn(standings)
+                check_standings_against_espn(session, standings)
             except Exception as e:
                 logger.warning(f"Standings check failed (non-fatal): {e}")
             # Persist the Elo trajectory for the transparency page. Non-fatal:

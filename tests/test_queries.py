@@ -4032,3 +4032,33 @@ def test_fetch_and_store_games_uses_an_explicit_window_when_given(
     stored = session.query(Game).filter(Game.espn_id == "401857190").one()
     assert stored.winner_id == a_id
     assert get_team_records(session, 2026) == {a_id: (1, 0), b_id: (0, 1)}
+
+
+def test_get_team_names_with_games_returns_both_slots_for_the_season(session, team_ids):
+    """The expected-coverage set for the ESPN standings check.
+
+    A team belongs to a season if it appears on that season's schedule —
+    played or not. Deriving it from data rather than a roster constant is
+    what lets the coverage rule survive expansion without going stale.
+    """
+    from src.db.queries import get_team_names_with_games
+
+    a_id, b_id = team_ids
+    session.add(Game(team_a_id=a_id, team_b_id=b_id, date="2026-06-01"))
+    session.add(Game(team_a_id=b_id, team_b_id=a_id, date="2025-06-01"))
+    session.commit()
+
+    assert get_team_names_with_games(session, 2026) == {"Team A", "Team B"}
+    assert get_team_names_with_games(session, 2024) == set()
+
+
+def test_get_team_names_with_games_counts_unplayed_games(session, team_ids):
+    """An expansion club with a schedule but no result yet still counts —
+    ESPN lists it at 0-0 from the moment its schedule drops."""
+    from src.db.queries import get_team_names_with_games
+
+    a_id, b_id = team_ids
+    session.add(Game(team_a_id=a_id, team_b_id=b_id, date="2026-06-01"))
+    session.commit()
+
+    assert get_team_names_with_games(session, 2026) == {"Team A", "Team B"}

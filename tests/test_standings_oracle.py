@@ -96,6 +96,26 @@ def test_raises_when_an_entry_is_missing_its_record(monkeypatch):
 # log-based metric keys on, so which branch emits it IS the contract.
 
 
+class _Schedule:
+    """Stand-in for the DB lookup of which teams are on this season's schedule."""
+
+    def __init__(self, names):
+        self.names = set(names)
+
+
+def _check(du, standings, scheduled=None):
+    """Call the check with an explicit expected-coverage set.
+
+    Defaults to every team we carry, which is the normal production state —
+    a test that wants the expansion-club case passes `scheduled` explicitly.
+    """
+    import unittest.mock as mock
+
+    names = set(standings) if scheduled is None else set(scheduled)
+    with mock.patch.object(du, "get_team_names_with_games", lambda *a, **k: names):
+        du.check_standings_against_espn(None, standings)
+
+
 def _standings(**records) -> dict:
     return {
         name: {"wins": w, "losses": lo, "bpi": 0.0, "elo": 1500, "h2h": {}}
@@ -113,9 +133,7 @@ def test_agreement_logs_no_error(monkeypatch, caplog):
     )
 
     with caplog.at_level("WARNING"):
-        du.check_standings_against_espn(
-            _standings(**{"Minnesota Lynx": (32, 10), "Seattle Storm": (8, 35)})
-        )
+        _check(du, _standings(**{"Minnesota Lynx": (32, 10), "Seattle Storm": (8, 35)}))
 
     assert du.STANDINGS_MISMATCH_ALERT not in caplog.text
 
@@ -130,10 +148,11 @@ def test_disagreement_emits_the_alert_string_and_names_the_teams(monkeypatch, ca
     )
 
     with caplog.at_level("ERROR"):
-        du.check_standings_against_espn(
+        _check(
+            du,
             # Exactly the 2026-09-22 defect: a phantom Cup win for NY, and a
             # phantom Cup loss plus a stranded game for LV.
-            _standings(**{"New York Liberty": (27, 17), "Las Vegas Aces": (28, 14)})
+            _standings(**{"New York Liberty": (27, 17), "Las Vegas Aces": (28, 14)}),
         )
 
     assert du.STANDINGS_MISMATCH_ALERT in caplog.text
@@ -157,7 +176,7 @@ def test_a_team_espn_has_that_we_do_not_is_alerted_not_skipped(monkeypatch, capl
     )
 
     with caplog.at_level("ERROR"):
-        du.check_standings_against_espn(_standings(**{"Minnesota Lynx": (32, 10)}))
+        _check(du, _standings(**{"Minnesota Lynx": (32, 10)}))
 
     assert du.STANDINGS_MISMATCH_ALERT in caplog.text
     assert "Portland Fire" in caplog.text
@@ -178,7 +197,7 @@ def test_oracle_unavailable_warns_and_does_not_alert(monkeypatch, caplog):
     monkeypatch.setattr(du, "fetch_team_records_from_standings", boom)
 
     with caplog.at_level("WARNING"):
-        du.check_standings_against_espn(_standings(**{"Minnesota Lynx": (32, 10)}))
+        _check(du, _standings(**{"Minnesota Lynx": (32, 10)}))
 
     assert du.STANDINGS_MISMATCH_ALERT not in caplog.text
     assert "could not run" in caplog.text.lower()
@@ -197,8 +216,10 @@ def test_teams_with_no_espn_row_are_ignored(monkeypatch, caplog):
     )
 
     with caplog.at_level("ERROR"):
-        du.check_standings_against_espn(
-            _standings(**{"Minnesota Lynx": (32, 10), "Future Expansion": (0, 0)})
+        _check(
+            du,
+            _standings(**{"Minnesota Lynx": (32, 10), "Future Expansion": (0, 0)}),
+            scheduled=["Minnesota Lynx"],  # the club has no games yet
         )
 
     assert du.STANDINGS_MISMATCH_ALERT not in caplog.text
@@ -224,14 +245,15 @@ def test_a_truncated_espn_payload_alerts_instead_of_reporting_success(
     )
 
     with caplog.at_level("ERROR"):
-        du.check_standings_against_espn(
+        _check(
+            du,
             _standings(
                 **{
                     "Minnesota Lynx": (32, 10),
                     "Las Vegas Aces": (29, 13),
                     "Seattle Storm": (8, 35),
                 }
-            )
+            ),
         )
 
     assert du.STANDINGS_MISMATCH_ALERT in caplog.text
@@ -262,8 +284,42 @@ def test_coverage_rule_is_self_calibrating_not_a_team_count(monkeypatch, caplog)
     )
 
     with caplog.at_level("ERROR"):
-        du.check_standings_against_espn(
-            _standings(**{"Minnesota Lynx": (32, 10), "Expansion Club": (0, 0)})
+        _check(
+            du,
+            _standings(**{"Minnesota Lynx": (32, 10), "Expansion Club": (0, 0)}),
+            scheduled=["Minnesota Lynx"],  # the club has no games yet
         )
 
     assert du.STANDINGS_MISMATCH_ALERT not in caplog.text
+
+
+def test_a_scheduled_team_omitted_by_espn_alerts_even_at_0_0(monkeypatch, caplog):
+    """The blind spot a non-zero-record rule leaves open.
+
+    `compute_standings` seeds every known team at 0-0 before applying results,
+    so a team whose games all failed to ingest sits at 0-0 locally. If ESPN's
+    rollup also omits it, a rule keyed on "we have a real record" never fires
+    and the check reports healthy with that team unvalidated — the same
+    vacuous-monitor failure, one layer deeper.
+
+    Keyed on schedule presence instead: a team with games this season MUST be
+    in this season's standings, whatever our own record for it says.
+    """
+    import scripts.daily_update as du
+
+    monkeypatch.setattr(
+        du,
+        "fetch_team_records_from_standings",
+        lambda season: {"Minnesota Lynx": (32, 10)},
+    )
+
+    with caplog.at_level("ERROR"):
+        _check(
+            du,
+            _standings(**{"Minnesota Lynx": (32, 10), "Seattle Storm": (0, 0)}),
+            scheduled=["Minnesota Lynx", "Seattle Storm"],
+        )
+
+    assert du.STANDINGS_MISMATCH_ALERT in caplog.text
+    assert "Seattle Storm" in caplog.text
+    assert "Standings check: all" not in caplog.text
