@@ -96,3 +96,48 @@ def test_build_sim_inputs_excludes_postseason_games_from_remaining(env):
 
     # Only regular-season games drive seeding; the bracket sim handles the rest.
     assert inputs.remaining_index_by_espn_id == {"401999002": 0}
+
+
+def test_build_sim_inputs_excludes_an_unplayed_non_standings_game_from_remaining(env):
+    """A scheduled-but-unplayed Commissioner's Cup final is not a seeding game.
+
+    It is `season_type == 2` and has no winner, so it looks exactly like a
+    regular-season fixture. Simulating it would award a win that the real
+    standings never record — live every season from the schedule dropping
+    until the Cup final is played.
+    """
+    from src.db.queries import set_team_elo_ratings, upsert_game, upsert_team
+    from src.scoring.sim_inputs import build_sim_inputs
+
+    session = env.get_session()
+    a = upsert_team(session, "Minnesota Lynx", bpi_rating=1.0, abbreviation="MIN")
+    b = upsert_team(session, "Indiana Fever", bpi_rating=2.0, abbreviation="IND")
+    set_team_elo_ratings(session, {"Minnesota Lynx": 1500.0, "Indiana Fever": 1500.0})
+
+    upsert_game(
+        session,
+        a.id,
+        b.id,
+        f"{CURRENT_SEASON}-06-20",
+        "19:00",
+        "ESPN",
+        espn_id="401999004",
+        season_type=2,
+        competition_type="STD",
+    )
+    upsert_game(
+        session,
+        a.id,
+        b.id,
+        f"{CURRENT_SEASON}-06-30",
+        "19:00",
+        "ESPN",
+        espn_id="401999005",
+        season_type=2,
+        competition_type="CC",
+    )
+
+    inputs = build_sim_inputs(session, f"{CURRENT_SEASON}-06-20")
+
+    assert inputs.remaining_index_by_espn_id == {"401999004": 0}
+    assert inputs.remaining_games == [("Minnesota Lynx", "Indiana Fever")]

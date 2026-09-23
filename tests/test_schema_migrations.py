@@ -164,3 +164,48 @@ def test_sqlite_migration_adds_shot_season_athlete_index_to_stale_shots(
     finally:
         schema._engine = None
         schema._session_factory = None
+
+
+def test_sqlite_migration_adds_competition_type_to_stale_games(tmp_path, monkeypatch):
+    """A pre-existing SQLite games table that predates competition_type must
+    gain it on init_db(), so the daily write (upsert_game) and the standings
+    read (get_team_records) don't hit a missing-column error."""
+    db_path = tmp_path / "stale.db"
+    raw = create_engine(f"sqlite:///{db_path}")
+    with raw.connect() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE games ("
+                "id INTEGER PRIMARY KEY, "
+                "team_a_id INTEGER NOT NULL, "
+                "team_b_id INTEGER NOT NULL, "
+                "date VARCHAR(10) NOT NULL, "
+                "time VARCHAR(20), "
+                "time_utc VARCHAR(40), "
+                "winner_id INTEGER, "
+                "final_score_a INTEGER, "
+                "final_score_b INTEGER, "
+                "excitement_index FLOAT, "
+                "excitement_last_attempt_at DATETIME, "
+                "excitement_computed_at DATETIME, "
+                "game_shape_last_attempt_at DATETIME, "
+                "broadcaster VARCHAR(50), "
+                "espn_id VARCHAR(20), "
+                "season_type INTEGER, "
+                "created_at DATETIME)"
+            )
+        )
+        conn.commit()
+    raw.dispose()
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    import src.db.schema as schema
+
+    monkeypatch.setattr(schema, "_engine", None, raising=False)
+    schema.init_db()
+
+    cols = {
+        c["name"]
+        for c in inspect(create_engine(f"sqlite:///{db_path}")).get_columns("games")
+    }
+    assert "competition_type" in cols

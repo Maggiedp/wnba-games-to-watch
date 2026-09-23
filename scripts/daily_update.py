@@ -8,7 +8,12 @@ import random
 import sys
 from datetime import date, datetime, timedelta
 
-from src.constants import CURRENT_SEASON, UN_FINALIZE_STATUSES, GameStatus
+from src.constants import (
+    CURRENT_SEASON,
+    NON_STANDINGS_COMPETITION_TYPES,
+    UN_FINALIZE_STATUSES,
+    GameStatus,
+)
 from src.data.espn_api import (
     ESPNAPIError,
     ESPNNotFoundError,
@@ -249,9 +254,22 @@ def _warn_if_season_anchor_is_stale() -> None:
         )
 
 
-def fetch_and_store_games(session) -> list[dict]:
+def fetch_and_store_games(
+    session, window: tuple[date, date] | None = None
+) -> list[dict]:
+    """Ingest ESPN's schedule + results into the games table.
+
+    `window` overrides the default yesterday-through-season-end range. Only
+    `scripts/refetch_games.py` passes it: `daily_fetch_window` reaches back
+    exactly one day, so a night ESPN failed to serve falls out of range the
+    next morning and no later daily run can ever finalize those rows.
+    """
     logger.info("Fetching schedule and results from ESPN...")
-    games = fetch_schedule_and_results()
+    games = (
+        fetch_schedule_and_results()
+        if window is None
+        else fetch_games_for_range(*window)
+    )
     if not games:
         logger.warning("No games fetched from ESPN")
         return []
@@ -297,6 +315,7 @@ def fetch_and_store_games(session) -> list[dict]:
             espn_id=game.get("event_id"),
             is_complete=is_complete,
             season_type=game.get("season_type"),
+            competition_type=game.get("competition_type"),
         )
         stored += 1
 
@@ -355,6 +374,65 @@ def backfill_missing_season_types(session) -> None:
             updated += 1
     session.commit()
     logger.info(f"Backfilled season_type for {updated} games")
+
+
+def backfill_missing_competition_types(session) -> None:
+    """Populate `competition_type` on rows stored before the column existed.
+
+    Probed on ITS OWN column, deliberately — NOT folded into
+    `backfill_missing_season_types`. That one short-circuits on
+    `season_type IS NULL`, which drains to 0 once its own backfill has run,
+    so extending it would silently never execute and leave every historical
+    row NULL forever. The two columns drain independently.
+
+    Without this the standings fix would depend on an operator remembering
+    to run `scripts/refetch_games.py` for 2026-06-30 — and a forgotten manual
+    step leaves production wrong on the exact case the filter exists for.
+    Rows outside `daily_fetch_window` are otherwise unreachable.
+
+    Idempotent and self-draining: a fast COUNT short-circuits once every
+    current-season row with an espn_id is populated. If ESPN ever stops
+    sending `competitions[0].type` for some event, that row stays NULL and
+    this pays one extra full-season fetch (5 requests) per run — the same
+    exposure `backfill_missing_season_types` carries, and logged below.
+    """
+    from src.db.schema import Game
+
+    null_count = (
+        session.query(Game)
+        .filter(Game.date.like(f"{CURRENT_SEASON}-%"))
+        .filter(Game.competition_type.is_(None))
+        .filter(Game.espn_id.isnot(None))
+        .count()
+    )
+    if null_count == 0:
+        return
+    logger.info(f"Backfilling competition_type for {null_count} legacy rows")
+    parsed = fetch_games_for_range(date(CURRENT_SEASON, 4, 1), _SEASON_END)
+    by_espn_id = {
+        g["event_id"]: g.get("competition_type")
+        for g in parsed
+        if g.get("event_id") and g.get("competition_type") is not None
+    }
+    updated = 0
+    for game in (
+        session.query(Game)
+        .filter(Game.date.like(f"{CURRENT_SEASON}-%"))
+        .filter(Game.competition_type.is_(None))
+        .filter(Game.espn_id.isnot(None))
+        .all()
+    ):
+        ct = by_espn_id.get(game.espn_id)
+        if ct is not None:
+            game.competition_type = ct
+            updated += 1
+    session.commit()
+    logger.info(f"Backfilled competition_type for {updated} games")
+    if updated < null_count:
+        logger.warning(
+            f"competition_type still NULL for {null_count - updated} row(s) — "
+            f"ESPN returned no type for them; this backfill will retry daily"
+        )
 
 
 DAILY_EXCITEMENT_RETRY_CAP = 50
@@ -1153,10 +1231,16 @@ def compute_daily_scores(
 
     # Only regular-season (season_type == 2) games drive seeding. Postseason
     # games (3) are simulated by the bracket sim; including them here would
-    # double-count playoff wins into regular-season standings.
+    # double-count playoff wins into regular-season standings. ESPN also tags
+    # the Commissioner's Cup Championship and the All-Star Game season_type 2,
+    # and an unplayed one is indistinguishable from a regular-season fixture —
+    # simulating it would award a win the standings never record. Mirrors the
+    # same skip in build_sim_inputs (the live overlay's copy of this loop).
     remaining_games = []
     remaining_event_index: dict[str, int] = {}
     for g in games:
+        if g.get("competition_type") in NON_STANDINGS_COMPETITION_TYPES:
+            continue
         if g.get("status") != GameStatus.FINAL and g.get("season_type", 2) == 2:
             eid = g.get("event_id", "")
             if eid:
@@ -1437,6 +1521,20 @@ def main() -> int:
                 # transaction or autoflush partially-staged mutations.
                 session.rollback()
                 logger.warning(f"season_type backfill failed (non-fatal): {e}")
+            # Same shape, its own column: populates competition_type so
+            # compute_standings can exclude the Commissioner's Cup / All-Star.
+            # MUST run before compute_standings — NULL counts in that filter,
+            # so a late run would publish one more day of phantom-win
+            # standings. Deliberately NOT folded into the call above: that one
+            # short-circuits on `season_type IS NULL`, which is already 0, so
+            # the work would silently never happen. Non-fatal for the same
+            # reason as its sibling — an ESPN outage must not block the
+            # user-visible ranking write.
+            try:
+                backfill_missing_competition_types(session)
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"competition_type backfill failed (non-fatal): {e}")
             # Reclassify pre-espn_id-column legacy rows as preseason. The
             # event_id-joined backfill above can't reach them (their espn_id
             # is NULL), so they stay NULL-season_type forever and leak into

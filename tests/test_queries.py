@@ -3467,6 +3467,9 @@ def test_daily_update_main_runs_legacy_espn_id_backfill_in_order(monkeypatch):
     monkeypatch.setattr(du, "fetch_and_store_games", record("games", ret=[]))
     monkeypatch.setattr(du, "backfill_legacy_espn_ids", record("espn_ids", ret=0))
     monkeypatch.setattr(du, "backfill_missing_season_types", record("season_types"))
+    monkeypatch.setattr(
+        du, "backfill_missing_competition_types", record("competition_types")
+    )
     monkeypatch.setattr(du, "backfill_legacy_preseason", record("preseason", ret=0))
     monkeypatch.setattr(
         du,
@@ -3488,6 +3491,11 @@ def test_daily_update_main_runs_legacy_espn_id_backfill_in_order(monkeypatch):
     assert "espn_ids" in calls
     assert calls.index("espn_ids") < calls.index("season_types")
     assert calls.index("espn_ids") < calls.index("excitement")
+    # competition_type must be populated BEFORE standings are computed —
+    # compute_standings reads that column to exclude the Commissioner's Cup,
+    # and a NULL there counts, so running it after would publish one more
+    # day of phantom-win standings on every deploy-day.
+    assert calls.index("competition_types") < calls.index("standings")
 
 
 def test_daily_update_rollback_clears_failed_backfill(session, team_ids):
@@ -3693,7 +3701,9 @@ def test_get_head_to_head_excludes_preseason_keeps_legacy_null(session, team_ids
     ]  # reg-season + legacy NULL, chronological
 
 
-def _add_completed_game(session, team_a_id, team_b_id, winner_id, season_type, date):
+def _add_completed_game(
+    session, team_a_id, team_b_id, winner_id, season_type, date, competition_type=None
+):
     session.add(
         Game(
             team_a_id=team_a_id,
@@ -3701,6 +3711,7 @@ def _add_completed_game(session, team_a_id, team_b_id, winner_id, season_type, d
             date=date,
             winner_id=winner_id,
             season_type=season_type,
+            competition_type=competition_type,
         )
     )
     session.commit()
@@ -3818,3 +3829,201 @@ def test_set_team_elo_ratings_updates_known_teams_and_ignores_unknown(session):
     assert updated == 2
     assert get_team_by_name(session, "Minnesota Lynx").elo_rating == 1611.25
     assert get_team_by_name(session, "Indiana Fever").elo_rating == 1544.0
+
+
+def test_get_team_records_excludes_commissioners_cup(session, team_ids):
+    """The Commissioner's Cup Championship must not count toward W-L.
+
+    ESPN tags it `season.type == 2`, so the season_type filter keeps it —
+    but the WNBA excludes it from the standings. Without this, the winner
+    carries a phantom extra win into the seeding simulation.
+    """
+    a_id, b_id = team_ids
+    _add_completed_game(
+        session,
+        a_id,
+        b_id,
+        winner_id=a_id,
+        season_type=2,
+        date="2026-05-20",
+        competition_type="STD",
+    )
+    _add_completed_game(
+        session,
+        a_id,
+        b_id,
+        winner_id=a_id,
+        season_type=2,
+        date="2026-06-30",
+        competition_type="CC",
+    )
+
+    records = get_team_records(session, 2026)
+    assert records[a_id] == (1, 0)
+    assert records[b_id] == (0, 1)
+
+
+def test_get_team_records_excludes_all_star_game(session, team_ids):
+    """All-Star is also season.type == 2 and also outside the standings.
+
+    Today it never reaches the DB because ESPN uses non-franchise
+    abbreviations for the two squads, so the non-WNBA-opponent guard drops
+    it. That is luck, not intent — real abbreviations would leak it in.
+    """
+    a_id, b_id = team_ids
+    _add_completed_game(
+        session,
+        a_id,
+        b_id,
+        winner_id=a_id,
+        season_type=2,
+        date="2026-07-26",
+        competition_type="ALLSTAR",
+    )
+
+    records = get_team_records(session, 2026)
+    assert a_id not in records
+    assert b_id not in records
+
+
+def test_get_team_records_counts_legacy_null_competition_type(session, team_ids):
+    """A row ingested before the column existed still counts.
+
+    Every pre-existing row is NULL here and the daily ingest window only
+    reaches back one day, so it can never repopulate them. Treating NULL as
+    "counts" keeps the season's record intact; the one row that must be
+    excluded is corrected by an explicit backfill.
+    """
+    a_id, b_id = team_ids
+    _add_completed_game(
+        session,
+        a_id,
+        b_id,
+        winner_id=a_id,
+        season_type=2,
+        date="2026-05-20",
+        competition_type=None,
+    )
+
+    records = get_team_records(session, 2026)
+    assert records[a_id] == (1, 0)
+    assert records[b_id] == (0, 1)
+
+
+def test_upsert_game_stores_competition_type(session, team_ids):
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-06-30",
+        time="7:00 PM ET",
+        broadcaster="",
+        espn_id="401857321",
+        competition_type="CC",
+    )
+
+    stored = session.query(Game).filter(Game.espn_id == "401857321").one()
+    assert stored.competition_type == "CC"
+
+
+def test_fetch_and_store_games_persists_competition_type(
+    session, team_ids, monkeypatch
+):
+    """The parsed competition type reaches the DB.
+
+    The parser and the standings filter are each tested on their own; this
+    pins the wire between them. Without it, `_parse_event` could emit the
+    field and the ingest could quietly drop it, leaving every stored row NULL
+    and the Cup exclusion permanently dead.
+    """
+    import scripts.daily_update as du
+
+    a_id, b_id = team_ids
+    names = {a_id: "Team A", b_id: "Team B"}
+
+    monkeypatch.setattr(
+        du,
+        "fetch_schedule_and_results",
+        lambda: [
+            {
+                "event_id": "401857321",
+                "team_a": names[a_id],
+                "team_b": names[b_id],
+                "date": "2026-06-30",
+                "time": "7:00 PM ET",
+                "time_utc": "2026-06-30T23:00:00+00:00",
+                "winner_team": names[a_id],
+                "final_score_a": 93,
+                "final_score_b": 85,
+                "broadcaster": "",
+                "status": "STATUS_FINAL",
+                "season_type": 2,
+                "competition_type": "CC",
+            }
+        ],
+    )
+    monkeypatch.setattr(du, "fetch_wnba_schedule_broadcasters", lambda _today: {})
+    monkeypatch.setattr(du, "enhance_games_with_broadcasters", lambda games, _b: games)
+
+    du.fetch_and_store_games(session)
+
+    stored = session.query(Game).filter(Game.espn_id == "401857321").one()
+    assert stored.competition_type == "CC"
+    # And the phantom win never reaches the standings.
+    assert get_team_records(session, 2026) == {}
+
+
+def test_fetch_and_store_games_uses_an_explicit_window_when_given(
+    session, team_ids, monkeypatch
+):
+    """`window` overrides the daily yesterday-forward range.
+
+    The repair path exists because `daily_fetch_window` reaches back exactly
+    one day: a night ESPN failed to serve is outside it from the day after
+    onward, so the daily job can never finalize those rows. Without a window
+    override there is no way to re-ingest them short of hand-writing SQL.
+    """
+    from datetime import date as date_cls
+
+    import scripts.daily_update as du
+
+    a_id, b_id = team_ids
+    names = {a_id: "Team A", b_id: "Team B"}
+    seen = {}
+
+    def fake_range(start, end):
+        seen["window"] = (start, end)
+        return [
+            {
+                "event_id": "401857190",
+                "team_a": names[a_id],
+                "team_b": names[b_id],
+                "date": "2026-09-17",
+                "time": "7:30 PM ET",
+                "time_utc": "2026-09-17T23:30:00+00:00",
+                "winner_team": names[a_id],
+                "final_score_a": 91,
+                "final_score_b": 84,
+                "broadcaster": "",
+                "status": "STATUS_FINAL",
+                "season_type": 2,
+                "competition_type": "STD",
+            }
+        ]
+
+    def boom():
+        raise AssertionError("must not fall back to the daily window")
+
+    monkeypatch.setattr(du, "fetch_games_for_range", fake_range)
+    monkeypatch.setattr(du, "fetch_schedule_and_results", boom)
+    monkeypatch.setattr(du, "fetch_wnba_schedule_broadcasters", lambda _today: {})
+    monkeypatch.setattr(du, "enhance_games_with_broadcasters", lambda games, _b: games)
+
+    window = (date_cls(2026, 9, 17), date_cls(2026, 9, 17))
+    du.fetch_and_store_games(session, window=window)
+
+    assert seen["window"] == window
+    stored = session.query(Game).filter(Game.espn_id == "401857190").one()
+    assert stored.winner_id == a_id
+    assert get_team_records(session, 2026) == {a_id: (1, 0), b_id: (0, 1)}

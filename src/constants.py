@@ -101,6 +101,22 @@ UN_FINALIZE_STATUSES = frozenset(
 )
 
 
+# ESPN `competitions[0].type.abbreviation` values that are NOT counted in the
+# official WNBA standings. Both of these are tagged `season.type == 2`
+# (regular season) by ESPN, so the season_type filter alone lets them through:
+# the 2026 Commissioner's Cup Championship (NY 93-85 LV, 2026-06-30) was
+# counted as a regular-season win for a full season, inflating New York's
+# record by a game and deflating Las Vegas's, which moved their simulated
+# seeds. Observed values across the 2026 feed: STD (337), CC (1), ALLSTAR (1),
+# RD16 (8, postseason).
+#
+# All-Star is currently dropped upstream anyway — ESPN names the two squads
+# with non-franchise abbreviations, which the non-WNBA-opponent guard in
+# `fetch_games_for_range` rejects. That is luck, not intent, so it is named
+# here too.
+NON_STANDINGS_COMPETITION_TYPES = frozenset({"CC", "ALLSTAR"})
+
+
 # Maps raw ESPN broadcast name (uppercased) → canonical display name.
 # ESPN uses abbreviations like "ESPN2", "NBCSN", "AMZN" in broadcast data.
 BROADCASTER_NORMALIZE: dict[str, str] = {

@@ -15,7 +15,7 @@ done here.
 import logging
 from dataclasses import dataclass
 
-from src.constants import CURRENT_SEASON
+from src.constants import CURRENT_SEASON, NON_STANDINGS_COMPETITION_TYPES
 from src.db.queries import get_all_teams, get_completed_games, get_upcoming_games
 from src.scoring.elo import INITIAL_RATING
 from src.scoring.tiebreakers import increment_h2h
@@ -78,6 +78,14 @@ def compute_standings(
         # before season_type tracking) — same conservative skip applies.
         if game.season_type is None:
             null_skipped += 1
+            continue
+        # ESPN tags the Commissioner's Cup Championship and the All-Star Game
+        # season_type == 2, so the check above lets them through — but neither
+        # counts in the WNBA standings. This is the path that decides seeding,
+        # so a phantom win here moves published playoff odds, and the h2h
+        # below feeds resolve_seeding's tiebreakers. NULL counts (legacy rows
+        # predate the column) — see get_team_records for why.
+        if game.competition_type in NON_STANDINGS_COMPETITION_TYPES:
             continue
         team_a = team_by_id.get(game.team_a_id)
         team_b = team_by_id.get(game.team_b_id)
@@ -142,6 +150,12 @@ def build_sim_inputs(session, since: str) -> SimInputs:
         # let the next daily run reclassify and recompute (see compute_standings
         # logging in this module).
         if game.season_type != 2:
+            continue
+        # An unplayed Cup final is season_type == 2 with no winner — shaped
+        # exactly like a regular-season fixture. Simulating it would award a
+        # win the standings never record, every season from the schedule
+        # dropping until the game is played.
+        if game.competition_type in NON_STANDINGS_COMPETITION_TYPES:
             continue
         team_a = team_by_id.get(game.team_a_id)
         team_b = team_by_id.get(game.team_b_id)
