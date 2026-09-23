@@ -412,6 +412,23 @@ def _standings_entries(node: dict) -> list:
     return entries
 
 
+def _team_name_from_entry(team: dict, id_map: dict[int, str]) -> str:
+    """Canonical team name for a standings entry: id first, display name after.
+
+    The fallback is deliberate and is NOT a silent degrade. An id we do not
+    carry must not silence the team: falling back leaves behaviour identical
+    to the pre-id version for that entry — the name either matches our
+    standings or it does not, and an unjoinable team is already an alerting
+    condition. Raising instead would let one unknown id take the whole oracle
+    down, which is the vacuousness hole this check keeps closing.
+    """
+    try:
+        resolved = id_map.get(int(team.get("id")))
+    except (TypeError, ValueError):
+        resolved = None
+    return resolved or _canonical_name(team.get("displayName") or "")
+
+
 def fetch_team_records_from_standings(
     season: int = CURRENT_SEASON,
 ) -> dict[str, tuple[int, int]]:
@@ -437,17 +454,26 @@ def fetch_team_records_from_standings(
         raise ESPNAPIError(
             f"ESPN standings for {season} carried no entries — payload reshaped?"
         )
+    # Resolve by team id through the SAME /teams map the teams table is built
+    # from, so the key matches our standings by construction. displayName
+    # capitalization varies between ESPN endpoints ("Connecticut SUN"), and a
+    # name that drifted here would mismatch every night — a false alert, which
+    # is the muting failure this check exists to avoid. See the PR #106 note in
+    # src/data/CLAUDE.md. Free here: /teams is lru_cached and already fetched
+    # by fetch_bpi_ratings earlier in the same daily run.
+    id_map = fetch_team_id_map()
     records: dict[str, tuple[int, int]] = {}
     for entry in entries:
-        name = (entry.get("team") or {}).get("displayName")
+        team = entry.get("team") or {}
         stats = {s.get("name"): s.get("value") for s in entry.get("stats", [])}
         wins, losses = stats.get("wins"), stats.get("losses")
+        name = _team_name_from_entry(team, id_map)
         if not name or wins is None or losses is None:
             raise ESPNAPIError(
                 f"ESPN standings entry missing name/record: {name!r} "
                 f"wins={wins!r} losses={losses!r}"
             )
-        records[_canonical_name(name)] = (int(wins), int(losses))
+        records[name] = (int(wins), int(losses))
     return records
 
 

@@ -12,9 +12,24 @@ import pytest
 from src.data.espn_api import ESPNAPIError, fetch_team_records_from_standings
 
 
-def _entry(display_name: str, wins: int, losses: int) -> dict:
+# The ids our own teams table is keyed from — patched in below so no test
+# reaches ESPN's /teams for them.
+_ID_MAP = {5: "Minnesota Lynx", 14: "Seattle Storm", 18: "Connecticut Sun"}
+
+
+@pytest.fixture(autouse=True)
+def _stub_team_id_map(monkeypatch):
+    monkeypatch.setattr("src.data.espn_api.fetch_team_id_map", lambda: dict(_ID_MAP))
+
+
+def _entry(
+    display_name: str, wins: int, losses: int, team_id: int | None = None
+) -> dict:
+    team: dict = {"displayName": display_name, "abbreviation": display_name[:3]}
+    if team_id is not None:
+        team["id"] = str(team_id)
     return {
-        "team": {"displayName": display_name, "abbreviation": display_name[:3]},
+        "team": team,
         "stats": [
             {"name": "wins", "value": float(wins), "displayValue": str(wins)},
             {"name": "losses", "value": float(losses), "displayValue": str(losses)},
@@ -25,6 +40,40 @@ def _entry(display_name: str, wins: int, losses: int) -> dict:
 
 def _payload(*entries: dict) -> dict:
     return {"standings": {"entries": list(entries)}}
+
+
+def test_resolves_team_names_by_id_not_by_display_name(monkeypatch):
+    """Join on `team.id` through the same /teams map our teams table is built
+    from, so the key matches by construction.
+
+    `src/data/CLAUDE.md` records that PR #106 moved cross-endpoint matching
+    OFF displayName precisely because capitalization varies by endpoint
+    ("Connecticut SUN"). A name that drifted here would mismatch every night
+    — a false alert, which is the muting failure this whole layer exists to
+    avoid. The display name below is deliberately wrong to prove the id wins.
+    """
+    monkeypatch.setattr(
+        "src.data.espn_api._get",
+        lambda url, **kw: _payload(_entry("MINNESOTA LYNX!!", 32, 10, team_id=5)),
+    )
+
+    assert fetch_team_records_from_standings(2026) == {"Minnesota Lynx": (32, 10)}
+
+
+def test_falls_back_to_the_display_name_when_the_id_does_not_resolve(monkeypatch):
+    """An id we do not carry must not silence the team.
+
+    Falling back keeps behaviour identical to the pre-id version for this
+    case: the name either matches our standings, or it does not and the
+    check reports an unjoinable team. Raising instead would let one
+    unknown id take the whole oracle down, which is a vacuousness hole.
+    """
+    monkeypatch.setattr(
+        "src.data.espn_api._get",
+        lambda url, **kw: _payload(_entry("Atlanta Dream", 29, 14, team_id=9999)),
+    )
+
+    assert fetch_team_records_from_standings(2026) == {"Atlanta Dream": (29, 14)}
 
 
 def test_parses_wins_and_losses_as_ints_keyed_by_team_name(monkeypatch):
