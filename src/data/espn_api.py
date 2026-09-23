@@ -30,6 +30,11 @@ CORE_API = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba"
 # Team season aggregates (own + opponent splits) — a THIRD ESPN host beyond
 # SITE_API / CORE_API. Feeds the /style fingerprints.
 STATS_API = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/wnba/statistics/byteam"
+# ESPN's own standings rollup — a FOURTH host path, and note it is /apis/v2,
+# NOT SITE_API's /apis/site/v2. This is the league's published aggregate of the
+# same W-L we derive ourselves from the scoreboard, which makes it the only
+# external oracle available for the daily standings check.
+STANDINGS_API = "https://site.api.espn.com/apis/v2/sports/basketball/wnba"
 
 ET = ZoneInfo("America/New_York")
 # Schedule fetch horizon. Must extend through the Finals — WNBA playoffs run
@@ -382,6 +387,65 @@ def fetch_games_for_range(
         cursor = next_month
 
     return all_games
+
+
+def _standings_entries(node) -> list:
+    """Every `standings.entries` list anywhere in the payload.
+
+    ESPN flattens to a single root-level block for `level=1` but nests the
+    same shape under `children` otherwise; walking for the shape rather than
+    a fixed path means a layout change doesn't silently return zero teams.
+    """
+    found: list = []
+    if isinstance(node, dict):
+        standings = node.get("standings")
+        if isinstance(standings, dict) and isinstance(standings.get("entries"), list):
+            found.extend(standings["entries"])
+        for value in node.values():
+            found.extend(_standings_entries(value))
+    elif isinstance(node, list):
+        for value in node:
+            found.extend(_standings_entries(value))
+    return found
+
+
+def fetch_team_records_from_standings(
+    season: int = CURRENT_SEASON,
+) -> dict[str, tuple[int, int]]:
+    """{canonical_team_name: (wins, losses)} from ESPN's published standings.
+
+    The oracle for the daily standings check. We derive W-L ourselves from
+    per-game scoreboard results; ESPN publishes its own rollup of the same
+    thing, so a disagreement is a defect signal that no internal consistency
+    check can produce. It is also the authority on what COUNTS: the 2026
+    Commissioner's Cup final is `season.type == 2` in the scoreboard but
+    absent from this rollup, which is how that bug was found.
+
+    Raises `ESPNAPIError` when the payload yields no usable entries, or when
+    any entry is missing its record. Both are the ORACLE being unusable, not
+    a disagreement — a half-parsed rollup would silently shrink the
+    comparison set and let a real mismatch through unexamined. The caller
+    must keep "the check could not run" distinct from "the check ran and
+    found nothing".
+    """
+    data = _get(f"{STANDINGS_API}/standings", season=season, level=1)
+    entries = _standings_entries(data)
+    if not entries:
+        raise ESPNAPIError(
+            f"ESPN standings for {season} carried no entries — payload reshaped?"
+        )
+    records: dict[str, tuple[int, int]] = {}
+    for entry in entries:
+        name = (entry.get("team") or {}).get("displayName")
+        stats = {s.get("name"): s.get("value") for s in entry.get("stats", [])}
+        wins, losses = stats.get("wins"), stats.get("losses")
+        if not name or wins is None or losses is None:
+            raise ESPNAPIError(
+                f"ESPN standings entry missing name/record: {name!r} "
+                f"wins={wins!r} losses={losses!r}"
+            )
+        records[_canonical_name(name)] = (int(wins), int(losses))
+    return records
 
 
 def daily_fetch_window(today: date) -> tuple[date, date]:

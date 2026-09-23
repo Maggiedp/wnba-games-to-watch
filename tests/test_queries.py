@@ -3479,6 +3479,7 @@ def test_daily_update_main_runs_legacy_espn_id_backfill_in_order(monkeypatch):
     monkeypatch.setattr(du, "compute_standings", record("standings", ret={}))
     monkeypatch.setattr(du, "compute_daily_scores", record("scores", ret=([], None)))
     monkeypatch.setattr(du, "store_daily_rankings", record("store_rankings"))
+    monkeypatch.setattr(du, "check_standings_against_espn", record("standings_check"))
     monkeypatch.setattr(du, "today_et", lambda: "2026-06-02")
     monkeypatch.setattr(du, "store_playoff_probabilities", record("store_odds"))
     monkeypatch.setattr(du, "store_elo_history", record("elo_history"))
@@ -3496,6 +3497,10 @@ def test_daily_update_main_runs_legacy_espn_id_backfill_in_order(monkeypatch):
     # and a NULL there counts, so running it after would publish one more
     # day of phantom-win standings on every deploy-day.
     assert calls.index("competition_types") < calls.index("standings")
+    # The ESPN standings check runs AFTER the user-visible write, so a fault
+    # in the monitor (or a slow oracle) can never block publishing.
+    assert calls.index("store_rankings") < calls.index("standings_check")
+    assert calls.index("store_odds") < calls.index("standings_check")
 
 
 def test_daily_update_rollback_clears_failed_backfill(session, team_ids):

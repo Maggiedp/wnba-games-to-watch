@@ -22,6 +22,7 @@ from src.data.espn_api import (
     fetch_bpi_ratings,
     fetch_games_for_range,
     fetch_live_win_probability,
+    fetch_team_records_from_standings,
     fetch_schedule_and_results,
     fetch_shots,
     fetch_team_details,
@@ -433,6 +434,67 @@ def backfill_missing_competition_types(session) -> None:
             f"competition_type still NULL for {null_count - updated} row(s) — "
             f"ESPN returned no type for them; this backfill will retry daily"
         )
+
+
+# The string a GCP log-based metric keys on. Changing it silently disarms the
+# alert policy, so it lives here as a named constant rather than inline.
+STANDINGS_MISMATCH_ALERT = "Standings disagree with ESPN"
+
+
+def check_standings_against_espn(standings: dict[str, dict]) -> None:
+    """Compare our derived W-L against ESPN's own published standings.
+
+    The monitoring layer the other three cannot provide. The log alert keys
+    on a crash, and both uptime checks key on a response being fresh and
+    well-formed -- but the 2026-09-16, -09-17 and -09-22 incidents all
+    produced data that was fresh, well-formed and WRONG, and none of them
+    raised anything. ESPN publishes the same aggregate we derive
+    independently from per-game results, which makes disagreement the one
+    defect signal no internal consistency check can generate.
+
+    Checks `compute_standings`' output specifically -- the dict that seeds
+    the Monte Carlo -- not `get_team_records`. If only one can be watched it
+    must be the one that decides published seeds; a fix applied to the
+    displayed record alone is exactly the half-fix Codex caught on PR #145.
+
+    Three outcomes, deliberately distinct:
+
+    * disagreement -> ERROR carrying `STANDINGS_MISMATCH_ALERT`
+    * a team ESPN reports that we cannot join -> the SAME alert. Lost
+      evidence is not absent evidence: silently skipping an unjoinable team
+      is how this check would go vacuous, still reporting OK while a rename
+      upstream had disabled it.
+    * ESPN unreachable or its payload unusable -> WARNING, never the alert.
+      An ESPN outage must not page as a data defect. Accepted cost, stated
+      plainly: the oracle is then blind exactly when ingest is most likely
+      broken, so a divergence is caught the next day rather than instantly.
+
+    Never raises. Called after the rankings and odds are already stored, so
+    a fault in the monitor can never block the user-visible write.
+    """
+    try:
+        espn = fetch_team_records_from_standings(CURRENT_SEASON)
+    except ESPNAPIError as e:
+        logger.warning(f"Standings check could not run (ESPN unavailable): {e}")
+        return
+
+    problems: list[str] = []
+    for name, (wins, losses) in sorted(espn.items()):
+        ours = standings.get(name)
+        if ours is None:
+            problems.append(f"{name}: ESPN has {wins}-{losses}, we have no such team")
+        elif (ours["wins"], ours["losses"]) != (wins, losses):
+            problems.append(
+                f"{name}: we have {ours['wins']}-{ours['losses']}, "
+                f"ESPN has {wins}-{losses}"
+            )
+    # Teams present for us but absent from ESPN are NOT compared: our
+    # standings seed every known team at 0-0, including an expansion club
+    # ESPN has not started listing yet.
+    if problems:
+        logger.error(f"{STANDINGS_MISMATCH_ALERT}: " + "; ".join(problems))
+    else:
+        logger.info(f"Standings check: all {len(espn)} teams agree with ESPN")
 
 
 DAILY_EXCITEMENT_RETRY_CAP = 50
@@ -1564,6 +1626,16 @@ def main() -> int:
             store_daily_rankings(session, scored)
             today = today_et()
             store_playoff_probabilities(session, round_probs, today)
+            # Assert our derived standings against ESPN's own published
+            # rollup — the only external oracle available, and the layer the
+            # other three monitors cannot provide (they watch for a crash or
+            # for staleness; this class of defect is fresh, well-formed and
+            # wrong). Runs AFTER the write so a fault here cannot block
+            # publishing, and swallows everything for the same reason.
+            try:
+                check_standings_against_espn(standings)
+            except Exception as e:
+                logger.warning(f"Standings check failed (non-fatal): {e}")
             # Persist the Elo trajectory for the transparency page. Non-fatal:
             # a failure here must not block the user-visible ranking write.
             try:
