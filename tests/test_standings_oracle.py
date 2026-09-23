@@ -202,3 +202,68 @@ def test_teams_with_no_espn_row_are_ignored(monkeypatch, caplog):
         )
 
     assert du.STANDINGS_MISMATCH_ALERT not in caplog.text
+
+
+def test_a_truncated_espn_payload_alerts_instead_of_reporting_success(
+    monkeypatch, caplog
+):
+    """A well-formed but PARTIAL rollup must not read as a passing check.
+
+    The parser only fails closed on zero entries or a malformed one, so a
+    degraded ESPN response carrying a single valid team would otherwise be
+    accepted and logged as "all 1 teams agree" — leaving fourteen teams
+    unvalidated while the monitor reported healthy. Same vacuous-monitor
+    failure as an unjoinable team, approached from the other side.
+    """
+    import scripts.daily_update as du
+
+    monkeypatch.setattr(
+        du,
+        "fetch_team_records_from_standings",
+        lambda season: {"Minnesota Lynx": (32, 10)},
+    )
+
+    with caplog.at_level("ERROR"):
+        du.check_standings_against_espn(
+            _standings(
+                **{
+                    "Minnesota Lynx": (32, 10),
+                    "Las Vegas Aces": (29, 13),
+                    "Seattle Storm": (8, 35),
+                }
+            )
+        )
+
+    assert du.STANDINGS_MISMATCH_ALERT in caplog.text
+    assert "Las Vegas Aces" in caplog.text
+    assert "Seattle Storm" in caplog.text
+    # And it must not simultaneously claim success. Matched on the success
+    # log's own prefix, not on "agree with ESPN" — that is a substring of
+    # "disagree with ESPN" and the assertion would fire on the alert itself.
+    assert "Standings check: all" not in caplog.text
+
+
+def test_coverage_rule_is_self_calibrating_not_a_team_count(monkeypatch, caplog):
+    """No expected-team-count constant.
+
+    A hardcoded league size goes stale the day the league expands and then
+    alerts every night until someone edits it — the exact "trains the reader
+    to mute it" failure this layer exists to avoid. The rule keys on whether
+    ESPN covers the teams we actually make claims about, so a brand-new club
+    sitting at 0-0 before ESPN lists it stays silent while a real record
+    going uncovered does not.
+    """
+    import scripts.daily_update as du
+
+    monkeypatch.setattr(
+        du,
+        "fetch_team_records_from_standings",
+        lambda season: {"Minnesota Lynx": (32, 10)},
+    )
+
+    with caplog.at_level("ERROR"):
+        du.check_standings_against_espn(
+            _standings(**{"Minnesota Lynx": (32, 10), "Expansion Club": (0, 0)})
+        )
+
+    assert du.STANDINGS_MISMATCH_ALERT not in caplog.text

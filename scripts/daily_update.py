@@ -469,6 +469,13 @@ def check_standings_against_espn(standings: dict[str, dict]) -> None:
       plainly: the oracle is then blind exactly when ingest is most likely
       broken, so a divergence is caught the next day rather than instantly.
 
+    A well-formed but TRUNCATED rollup is the third case in disguise and is
+    treated as the first: a payload covering one team would otherwise log
+    "all 1 teams agree" while fourteen went unvalidated. A TOTAL fetch failure
+    still only warns; an incomplete one alerts, because it is indistinguishable
+    from every team name having stopped matching, and the cost is asymmetric —
+    a false page costs one email, silence costs the monitor its entire value.
+
     Never raises. Called after the rankings and odds are already stored, so
     a fault in the monitor can never block the user-visible write.
     """
@@ -488,9 +495,24 @@ def check_standings_against_espn(standings: dict[str, dict]) -> None:
                 f"{name}: we have {ours['wins']}-{ours['losses']}, "
                 f"ESPN has {wins}-{losses}"
             )
-    # Teams present for us but absent from ESPN are NOT compared: our
-    # standings seed every known team at 0-0, including an expansion club
-    # ESPN has not started listing yet.
+    # Coverage — the other half of the vacuousness guard. The parser only fails
+    # closed on an empty or malformed payload, so a well-formed but TRUNCATED
+    # rollup would otherwise be accepted and reported as a passing check while
+    # every omitted team went unvalidated.
+    #
+    # Self-calibrating on purpose: every team we make a real claim about must be
+    # covered. Deliberately NOT an expected-team-count constant — the league was
+    # 13 teams, is 15, and is still expanding, so a literal goes stale the day it
+    # changes and then alerts nightly until someone edits it, which is the
+    # "trains the reader to mute it" failure this whole layer exists to remove.
+    # A brand-new club sitting at 0-0 before ESPN lists it is not a claim, so it
+    # stays silent.
+    for name, ours in sorted(standings.items()):
+        if name not in espn and (ours["wins"] or ours["losses"]):
+            problems.append(
+                f"{name}: we have {ours['wins']}-{ours['losses']}, "
+                f"ESPN does not list this team"
+            )
     if problems:
         logger.error(f"{STANDINGS_MISMATCH_ALERT}: " + "; ".join(problems))
     else:
