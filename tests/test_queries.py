@@ -3479,6 +3479,7 @@ def test_daily_update_main_runs_legacy_espn_id_backfill_in_order(monkeypatch):
     monkeypatch.setattr(du, "compute_standings", record("standings", ret={}))
     monkeypatch.setattr(du, "compute_daily_scores", record("scores", ret=([], None)))
     monkeypatch.setattr(du, "store_daily_rankings", record("store_rankings"))
+    monkeypatch.setattr(du, "check_standings_against_espn", record("standings_check"))
     monkeypatch.setattr(du, "today_et", lambda: "2026-06-02")
     monkeypatch.setattr(du, "store_playoff_probabilities", record("store_odds"))
     monkeypatch.setattr(du, "store_elo_history", record("elo_history"))
@@ -3496,6 +3497,10 @@ def test_daily_update_main_runs_legacy_espn_id_backfill_in_order(monkeypatch):
     # and a NULL there counts, so running it after would publish one more
     # day of phantom-win standings on every deploy-day.
     assert calls.index("competition_types") < calls.index("standings")
+    # The ESPN standings check runs AFTER the user-visible write, so a fault
+    # in the monitor (or a slow oracle) can never block publishing.
+    assert calls.index("store_rankings") < calls.index("standings_check")
+    assert calls.index("store_odds") < calls.index("standings_check")
 
 
 def test_daily_update_rollback_clears_failed_backfill(session, team_ids):
@@ -4027,3 +4032,26 @@ def test_fetch_and_store_games_uses_an_explicit_window_when_given(
     stored = session.query(Game).filter(Game.espn_id == "401857190").one()
     assert stored.winner_id == a_id
     assert get_team_records(session, 2026) == {a_id: (1, 0), b_id: (0, 1)}
+
+
+def test_get_team_names_with_games_returns_both_slots_for_the_season(session, team_ids):
+    """The expected-coverage set for the ESPN standings check.
+
+    A team belongs to a season if it appears on that season's schedule —
+    played or not. The rows seeded here carry no `winner_id`, so this also
+    pins that an expansion club with a schedule but no result yet counts;
+    ESPN lists it at 0-0 from the moment its schedule drops, and waiting for
+    a result would leave a real team unvalidated all preseason.
+
+    Deriving the set from data rather than a roster constant is what lets
+    the coverage rule survive expansion without going stale.
+    """
+    from src.db.queries import get_team_names_with_games
+
+    a_id, b_id = team_ids
+    session.add(Game(team_a_id=a_id, team_b_id=b_id, date="2026-06-01"))
+    session.add(Game(team_a_id=b_id, team_b_id=a_id, date="2025-06-01"))
+    session.commit()
+
+    assert get_team_names_with_games(session, 2026) == {"Team A", "Team B"}
+    assert get_team_names_with_games(session, 2024) == set()

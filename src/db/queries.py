@@ -496,6 +496,38 @@ def get_team_records(
     return {tid: (w, losses) for tid, (w, losses) in records.items()}
 
 
+def get_team_names_with_games(
+    session: Session, season_year: int = CURRENT_SEASON
+) -> set[str]:
+    """Names of every team appearing on `season_year`'s schedule, played or not.
+
+    The expected-coverage set for the daily ESPN standings check: a team with
+    games on this season's schedule MUST appear in this season's standings
+    rollup, so its absence means the oracle is truncated and cannot validate
+    that team.
+
+    Derived from data rather than a roster constant on purpose. A literal team
+    count goes stale the day the league expands — it was 13, is 15, and is
+    still growing — and then alerts nightly until someone edits it, which is
+    the "trains the reader to mute it" failure the standings check exists to
+    remove. Schedule presence self-calibrates: an expansion club counts from
+    the moment its schedule drops, and a defunct franchise stops counting
+    without anyone touching a list.
+
+    Unplayed games count. ESPN lists a team at 0-0 as soon as its schedule
+    exists, so waiting for a result would leave a real team unvalidated for
+    the whole preseason.
+    """
+    rows = (
+        session.query(Team.name)
+        .join(Game, or_(Game.team_a_id == Team.id, Game.team_b_id == Team.id))
+        .filter(Game.date.like(f"{season_year}-%"))
+        .distinct()
+        .all()
+    )
+    return {name for (name,) in rows}
+
+
 def get_completed_postseason_games(
     session: Session, season_year: int = CURRENT_SEASON
 ) -> list[Game]:

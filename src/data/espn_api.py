@@ -30,6 +30,11 @@ CORE_API = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba"
 # Team season aggregates (own + opponent splits) — a THIRD ESPN host beyond
 # SITE_API / CORE_API. Feeds the /style fingerprints.
 STATS_API = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/wnba/statistics/byteam"
+# ESPN's own standings rollup — a FOURTH host path, and note it is /apis/v2,
+# NOT SITE_API's /apis/site/v2. This is the league's published aggregate of the
+# same W-L we derive ourselves from the scoreboard, which makes it the only
+# external oracle available for the daily standings check.
+STANDINGS_API = "https://site.api.espn.com/apis/v2/sports/basketball/wnba"
 
 ET = ZoneInfo("America/New_York")
 # Schedule fetch horizon. Must extend through the Finals — WNBA playoffs run
@@ -382,6 +387,94 @@ def fetch_games_for_range(
         cursor = next_month
 
     return all_games
+
+
+def _standings_entries(node: dict) -> list:
+    """Entries from the two layouts ESPN actually serves, both verified live.
+
+        level=1   -> root `standings.entries` (15 teams), `children` empty
+        default   -> root `standings` absent, `children` = the two conferences
+        level=2   -> same as default
+
+    We pass `level=1`, so the first is the live path and the second is here
+    because it is one query-string change away, not as speculation.
+
+    Read as two explicit paths rather than a recursive shape-hunt, matching
+    this module's house rule that a payload we do not recognise should
+    surface rather than be silently absorbed. Nothing is lost by pinning:
+    an unrecognised layout yields zero entries, and the caller raises
+    `ESPNAPIError` on that, which the monitor already treats as "oracle
+    unusable" -- a handled outcome, not a silent one.
+    """
+    entries = list((node.get("standings") or {}).get("entries") or [])
+    for child in node.get("children") or []:
+        entries.extend((child.get("standings") or {}).get("entries") or [])
+    return entries
+
+
+def _team_name_from_entry(team: dict, id_map: dict[int, str]) -> str:
+    """Canonical team name for a standings entry: id first, display name after.
+
+    The fallback is deliberate and is NOT a silent degrade. An id we do not
+    carry must not silence the team: falling back leaves behaviour identical
+    to the pre-id version for that entry — the name either matches our
+    standings or it does not, and an unjoinable team is already an alerting
+    condition. Raising instead would let one unknown id take the whole oracle
+    down, which is the vacuousness hole this check keeps closing.
+    """
+    try:
+        resolved = id_map.get(int(team.get("id")))
+    except (TypeError, ValueError):
+        resolved = None
+    return resolved or _canonical_name(team.get("displayName") or "")
+
+
+def fetch_team_records_from_standings(
+    season: int = CURRENT_SEASON,
+) -> dict[str, tuple[int, int]]:
+    """{canonical_team_name: (wins, losses)} from ESPN's published standings.
+
+    The oracle for the daily standings check. We derive W-L ourselves from
+    per-game scoreboard results; ESPN publishes its own rollup of the same
+    thing, so a disagreement is a defect signal that no internal consistency
+    check can produce. It is also the authority on what COUNTS: the 2026
+    Commissioner's Cup final is `season.type == 2` in the scoreboard but
+    absent from this rollup, which is how that bug was found.
+
+    Raises `ESPNAPIError` when the payload yields no usable entries, or when
+    any entry is missing its record. Both are the ORACLE being unusable, not
+    a disagreement — a half-parsed rollup would silently shrink the
+    comparison set and let a real mismatch through unexamined. The caller
+    must keep "the check could not run" distinct from "the check ran and
+    found nothing".
+    """
+    data = _get(f"{STANDINGS_API}/standings", season=season, level=1)
+    entries = _standings_entries(data)
+    if not entries:
+        raise ESPNAPIError(
+            f"ESPN standings for {season} carried no entries — payload reshaped?"
+        )
+    # Resolve by team id through the SAME /teams map the teams table is built
+    # from, so the key matches our standings by construction. displayName
+    # capitalization varies between ESPN endpoints ("Connecticut SUN"), and a
+    # name that drifted here would mismatch every night — a false alert, which
+    # is the muting failure this check exists to avoid. See the PR #106 note in
+    # src/data/CLAUDE.md. Free here: /teams is lru_cached and already fetched
+    # by fetch_bpi_ratings earlier in the same daily run.
+    id_map = fetch_team_id_map()
+    records: dict[str, tuple[int, int]] = {}
+    for entry in entries:
+        team = entry.get("team") or {}
+        stats = {s.get("name"): s.get("value") for s in entry.get("stats", [])}
+        wins, losses = stats.get("wins"), stats.get("losses")
+        name = _team_name_from_entry(team, id_map)
+        if not name or wins is None or losses is None:
+            raise ESPNAPIError(
+                f"ESPN standings entry missing name/record: {name!r} "
+                f"wins={wins!r} losses={losses!r}"
+            )
+        records[name] = (int(wins), int(losses))
+    return records
 
 
 def daily_fetch_window(today: date) -> tuple[date, date]:
