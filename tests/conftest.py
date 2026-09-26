@@ -62,27 +62,15 @@ def make_wp_plays(anchors: list[float], n: int = 41) -> list[dict]:
 def run_threads_concurrently(n: int, fn: Callable[[], object]) -> None:
     """Run `fn` on `n` threads, started together and all joined before returning.
 
-    N callers must be in flight AT THE SAME TIME, so the leader's build is still
-    open when the others arrive. tests/test_conftest_helpers.py pins that
-    directly: a helper that ran serially would make every single-flight test
-    pass vacuously, since builds["n"] == 1 is what one serial caller produces.
-
-    Raw threads rather than ThreadPoolExecutor, and not by oversight -- the pool
-    reuses IDLE workers, so N submits of a fast callable run on fewer than N
-    threads (measured: 5 submits -> 2-3 threads, peak concurrency 1). It only
-    looks equivalent because every caller today holds its build open with a
-    sleep. Raw threads guarantee the overlap structurally instead of by luck.
-
-    Results are side-effect-only: callers close over their own list, because
-    what they capture differs (return values, caught exceptions, the identity of
-    a shared exception object). FAILURES are not -- a bare Thread swallows what
-    its target raises, so worker exceptions are collected and re-raised together
-    as an ExceptionGroup (Exception, not BaseException, so the group type is
-    correct). tests/test_conftest_helpers.py carries the measurement.
-
-    No join timeout, deliberately: a deadlocked build should hang visibly rather
-    than let the assertions run against half-finished state.
+    Worker exceptions are re-raised together as an ExceptionGroup. Results are
+    side-effect-only: callers close over their own list, since what they capture
+    differs (return values, caught exceptions, a shared exception's identity).
+    tests/test_conftest_helpers.py pins both overlap and the re-raise.
     """
+    # Not redundant with pytest.ini's PytestUnhandledThreadExceptionWarning
+    # filter (measured on pytest 7.4.3): that path reports only the LAST of N
+    # worker exceptions, only after the test body finishes, and its error
+    # replaces the test's own assertion failure. This fails at the call site.
     errors: list[Exception] = []
     errors_lock = threading.Lock()
 
@@ -93,9 +81,14 @@ def run_threads_concurrently(n: int, fn: Callable[[], object]) -> None:
             with errors_lock:
                 errors.append(e)
 
+    # Raw threads, not ThreadPoolExecutor: the pool reuses IDLE workers, so N
+    # submits of a fast callable ran on 2-3 threads at peak concurrency 1
+    # (measured). A serial run makes every single-flight test pass vacuously.
     threads = [threading.Thread(target=guarded) for _ in range(n)]
     for t in threads:
         t.start()
+    # No join timeout: a deadlocked build should hang visibly, not let the
+    # assertions run against half-finished state.
     for t in threads:
         t.join()
     if errors:
