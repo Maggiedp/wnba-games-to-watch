@@ -442,6 +442,10 @@ def backfill_missing_competition_types(session) -> None:
 # alert policy, so it lives here as a named constant rather than inline.
 STANDINGS_MISMATCH_ALERT = "Standings disagree with ESPN"
 
+# Same contract: GCP log metric `daily-update-failure` (alert policy
+# 3847624768262173145) matches textPayload=~"Daily update job failed".
+DAILY_UPDATE_FAILED_ALERT = "Daily update job failed"
+
 
 def _standings_problems(
     ours: dict[str, dict], espn: dict[str, tuple[int, int]], scheduled: set[str]
@@ -1721,7 +1725,7 @@ def main() -> int:
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Daily update job failed: {e}", exc_info=True)
+        logger.error(f"{DAILY_UPDATE_FAILED_ALERT}: {e}", exc_info=True)
         return 1
 
 
