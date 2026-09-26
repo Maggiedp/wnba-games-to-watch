@@ -626,3 +626,34 @@ def test_player_og_cache_control_matches_ttl(env, client):
 def test_player_og_unknown_404(client):
     r = client.get("/player/nobody/og.png")
     assert r.status_code == 404
+
+
+_TOP_RIGHT = (700, 40, 1180, 100)  # opposite the wordmark
+
+
+def test_if_necessary_card_draws_a_top_right_label():
+    tagged = _open(render_game_card("A", "B", 92.0, "2026-10-01", "ESPN", if_necessary=True))
+    plain = _open(render_game_card("A", "B", 92.0, "2026-10-01", "ESPN"))
+    assert tagged.crop(_TOP_RIGHT).tobytes() != plain.crop(_TOP_RIGHT).tobytes()
+
+
+def test_render_game_card_png_reads_if_necessary_from_the_game(session, team_ids):
+    a_id, b_id = team_ids
+
+    def seed(flag):
+        upsert_game(
+            session,
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-10-01",
+            time="7:00 PM ET",
+            broadcaster="ESPN",
+            espn_id="401900",
+            if_necessary=flag,
+        )
+
+    seed(True)
+    tagged = _open(render_game_card_png(session, "401900"))
+    seed(False)
+    plain = _open(render_game_card_png(session, "401900"))
+    assert tagged.crop(_TOP_RIGHT).tobytes() != plain.crop(_TOP_RIGHT).tobytes()

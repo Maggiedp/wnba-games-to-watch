@@ -877,6 +877,8 @@ def _detail_meta_line(game) -> str:
     broadcaster = (game.broadcaster or "").strip()
     if broadcaster and broadcaster.upper() != "TBD":
         line += f" · {escape_html(broadcaster)}"
+    if game.if_necessary:
+        line += " · If necessary"
     return line
 
 
@@ -1187,6 +1189,9 @@ def _render_game_detail_html(game, team_a, team_b, ranking, h2h, shape) -> str:
             f"{ranking.overall_score:.0f} out of 100 overall — "
             "60% matchup quality, 40% playoff importance."
         )
+    if game.if_necessary:
+        # summary also feeds og:description, so shared link previews carry it.
+        summary = f"Played only if the series is still going. {summary}"
 
     return _jinja_env.get_template("game_detail.html").render(
         title=title,

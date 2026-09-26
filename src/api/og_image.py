@@ -224,9 +224,17 @@ def render_game_card(
     overall: float | None,
     date_str: str,
     broadcaster: str,
+    if_necessary: bool = False,
 ) -> bytes:
     """Render the 1200x630 social card as PNG bytes."""
     img, draw = _draw_base()
+
+    if if_necessary:
+        # Top right, opposite the wordmark: a postseason game that may not be played.
+        label = "IF NECESSARY"
+        label_font = _load_font(30, 600.0)
+        lw = draw.textlength(label, font=label_font)
+        draw.text((WIDTH - 60 - lw, 56), label, font=label_font, fill=_MUTED)
 
     # --- Matchup, centered, shrink-to-fit ---
     # Use a plain ASCII slash: Fraunces has no U+2571 box-drawing glyph (the
@@ -286,6 +294,7 @@ def render_game_card_png(session: Session, espn_id: str) -> bytes | None:
         overall=overall,
         date_str=game.date,
         broadcaster=game.broadcaster or "",
+        if_necessary=bool(game.if_necessary),
     )
 
 
