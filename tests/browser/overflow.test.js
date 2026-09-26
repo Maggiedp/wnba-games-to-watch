@@ -269,7 +269,10 @@ const PAGES = [
     // The seed puts this row's PPS mark at ~98% of track (see smoke_server.py),
     // so this page renders the vs-league chart's tightest label geometry at
     // every walked width — the case whose label escaped the track by 100.8px.
-    extraAssert: assertBridgeLabels,
+    extraAssert: async (page, label) => {
+      await assertBridgeLabels(page, label);
+      await assertZoneTable(page, label);
+    },
   },
   // NOT 'main' (server-rendered, resolves instantly): under `load` that would
   // measure the page before the WP chart hydrates. The chart is painted from
@@ -595,8 +598,61 @@ async function assertPanelDoesNotWidenTheTable(page, label) {
 // panel re-flows, it never overflows), so the desktop layout gets a scoped
 // geometry assert: the bridge spans the panel, and chart + zones share a row.
 // Verified by deliberate break — deleting the grid-column rule fails this.
+// Mirrors the `@container zones (max-width: 299.98px)` rule in BOTH templates.
+const ZONES_FG_MIN = 300;
+
+// The zone table's tightest content is not in the smoke seed (rim + three only,
+// 2-digit FGA), so append a worst-case row -- the longest label, 3-digit FGA,
+// 100% and the widest signed +pts -- and measure THAT. Checks the three ways a
+// too-narrow table fails without overflowing: the label wraps (a grid track
+// wraps before it overflows), neighbouring numbers touch, and FG% shows at a
+// width where the column rule should have dropped it (or vice versa).
+async function assertZoneTable(page, label) {
+  const m = await page.evaluate(() => {
+    const z = document.querySelector('.shot-zones');
+    const row = z.querySelector('.zr').cloneNode(true);
+    const cells = [...row.children];
+    const swatch = cells[0].querySelector('i');
+    cells[0].replaceChildren(swatch, 'Mid-range');
+    ['612', '100%', '1.24', '1.16', '−17.0'].forEach((v, k) => { cells[k + 1].textContent = v; });
+    z.appendChild(row);
+    const ink = (el) => {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      return r.getBoundingClientRect();
+    };
+    const shown = cells.filter((c) => getComputedStyle(c).display !== 'none');
+    const inks = shown.map(ink);
+    const out = {
+      width: z.clientWidth,
+      fgShown: getComputedStyle(cells[2]).display !== 'none',
+      labelHeight: ink(cells[0]).height,
+      numHeight: inks[1].height,
+      minGap: Math.min(...inks.slice(1).map((b, i) => b.left - inks[i].right)),
+    };
+    row.remove();
+    return out;
+  });
+  assert.strictEqual(
+    m.fgShown, m.width >= ZONES_FG_MIN,
+    `${label}: zone table is ${m.width}px; FG% should be `
+    + `${m.width >= ZONES_FG_MIN ? 'shown' : 'hidden'} (limit ${ZONES_FG_MIN}px)`,
+  );
+  assert.ok(
+    m.labelHeight <= m.numHeight + 1,
+    `${label}: "Mid-range" wrapped in a ${m.width}px zone table `
+    + `(${m.labelHeight}px tall vs ${m.numHeight}px) — label track lost max-content?`,
+  );
+  assert.ok(
+    m.minGap >= 4,
+    `${label}: zone-table numbers are ${m.minGap.toFixed(1)}px apart in a `
+    + `${m.width}px table — too tight to read as separate columns`,
+  );
+}
+
 async function assertShotPanelLayout(page, label, width) {
   await assertBridgeLabels(page, label);
+  await assertZoneTable(page, label);
   // .shot-panel collapses to a single column at the card breakpoint, where the
   // zones legitimately sit below the chart — this invariant is desktop-only.
   // Below it, the panel's job is to fit the screen instead. Kept as an

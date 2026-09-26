@@ -173,13 +173,19 @@ def compute_player_shot_chart(player_shots: list[dict], baseline: dict) -> dict:
     total_added = 0.0
     for s in player_shots:
         pv = _point_value(s)
-        added = (s.get("points") or 0) - expected_pps(s, baseline)
+        points = s.get("points") or 0
+        expected = expected_pps(s, baseline)
+        added = points - expected
         total_added += added
         fam = _family_label(s, pv)
-        z = zones.setdefault(fam, {"fga": 0, "made": 0, "added": 0.0})
+        z = zones.setdefault(
+            fam, {"fga": 0, "made": 0, "added": 0.0, "points": 0, "expected": 0.0}
+        )
         z["fga"] += 1
         z["made"] += 1 if s.get("made") else 0
         z["added"] += added
+        z["points"] += points
+        z["expected"] += expected
         cx, cy = s.get("coord_x"), s.get("coord_y")
         if cx is None or cy is None:
             continue
@@ -208,6 +214,8 @@ def compute_player_shot_chart(player_shots: list[dict], baseline: dict) -> dict:
             "family": fam,
             "fga": zones[fam]["fga"],
             "fg_pct": round(zones[fam]["made"] / zones[fam]["fga"], 3),
+            "pps": round(zones[fam]["points"] / zones[fam]["fga"], 2),
+            "xpps": round(zones[fam]["expected"] / zones[fam]["fga"], 2),
             "added": round(zones[fam]["added"], 2),
         }
         for fam in _ZONE_ORDER

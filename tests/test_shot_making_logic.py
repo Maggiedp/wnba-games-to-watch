@@ -363,3 +363,33 @@ def test_chart_dot_added_carries_enough_precision_to_be_summed():
         "precision is too low to aggregate"
     )
     assert abs(summed - out["points_added"]) < 0.01
+
+
+def test_chart_zone_pps_and_xpps():
+    """Each zone carries her realized PPS and the league-expected xPPS from her
+    own shot spots in that zone, so (pps - xpps) * fga reproduces the zone's
+    +pts. Uses the 27/64 rim league (xPPS 0.84375), not _league(), whose clean
+    1.0 would hide a rounding slip."""
+    league = [
+        _shot_chart(aid=f"g{i}", made=(i < 27), pv=2, dist=3.0, stype="Layup Shot")
+        for i in range(64)
+    ] + [
+        _shot_chart(
+            aid=f"h{i}", made=(i < 22), pv=3, dist=24.0, x=2, y=2, stype="Jump Shot"
+        )
+        for i in range(64)
+    ]
+    baseline = build_baseline(league)
+    player = [_shot_chart(made=(i < 2)) for i in range(3)] + [
+        _shot_chart(made=(i < 1), pv=3, dist=24.0, x=2, y=2, stype="Jump Shot")
+        for i in range(4)
+    ]
+    out = compute_player_shot_chart(player, baseline)
+    rim = next(z for z in out["zones"] if z["family"] == "rim")
+    three = next(z for z in out["zones"] if z["family"] == "three")
+    assert rim["pps"] == 1.33  # 4 pts / 3 FGA
+    assert rim["xpps"] == 0.84  # 0.84375
+    assert three["pps"] == 0.75  # 3 pts / 4 FGA
+    assert three["xpps"] == 1.03  # 22/64 * 3 = 1.03125
+    for z in out["zones"]:
+        assert abs((z["pps"] - z["xpps"]) * z["fga"] - z["added"]) <= 0.01 * z["fga"]

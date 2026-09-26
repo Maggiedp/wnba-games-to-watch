@@ -194,3 +194,18 @@ def test_shot_chart_caption_is_identical_in_both_templates():
     # The two things a reader needs to decode a mark.
     assert "more attempts" in a
     assert "points added" in a
+
+
+def test_zone_table_headers_match_in_both_renderers():
+    """/player renders the zone table in Python and /shot-making's panel renders
+    it in JS, so a column added to one can silently miss the other. Compare the
+    header rows, including the `fg` class the narrow-width CSS hides."""
+    import re
+
+    from src.api.routes import _load_template, _player_zones_html
+
+    py = re.search(r'<div class="zt">(.*?)</div>', _player_zones_html([])).group(1)
+    js_src = _load_template("shot_making.html")
+    js = re.search(r'<div class="zt">(.*?)</div>', js_src).group(1)
+    assert py == js
+    assert '<span class="fg">FG%</span><span>PPS</span><span>xPPS</span>' in py
