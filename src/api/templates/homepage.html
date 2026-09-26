@@ -104,8 +104,8 @@
             .final-sep {
                 color: var(--navy-3);
             }
-            .final-tag {
-                margin-left: 4px;
+            .final-tag { margin-left: 4px; }
+            .final-tag, .if-necessary-tag {
                 font-size: 11px;
                 text-transform: uppercase;
                 letter-spacing: 0.06em;
@@ -235,6 +235,11 @@
                 width: 28px;
                 height: 1.5px;
                 background: var(--orange);
+            }
+            .if-necessary-tag {
+                display: inline-block;
+                margin-bottom: 6px;
+                align-self: flex-start;
             }
             .top-pick-badge {
                 display: inline-block;
@@ -1461,6 +1466,10 @@
                     // A game that finished mid-session must not be promoted to the
                     // "Top pick" hero (it has left the forward-looking list).
                     if (isFinalStatus(g.game_status)) return false;
+                    // An "if necessary" playoff game scores near the ceiling
+                    // (it is decisive IF played) but may never be played, so
+                    // it must not be the hero. It stays in the list, tagged.
+                    if (g.if_necessary) return false;
                     const d = localDateISO(g);
                     return d >= anchor && d <= weekOut;
                 });
@@ -1922,6 +1931,12 @@
                 return `<span class="live-pill${live}" data-live-id="${escapeHtml(game.espn_id)}"><span class="live-dot" aria-hidden="true"></span>LIVE</span>`;
             }
 
+            function ifNecessaryTag(game) {
+                return game.if_necessary
+                    ? '<div class="if-necessary-tag" title="Played only if the series is still going">If necessary</div>'
+                    : '';
+            }
+
             function renderGameRow(game, isTopPick, scoreHeader) {
                 const cls = primaryScoreClass(game, scoreHeader);
                 const impTitle = game.importance_score == null ? 'Not simulated' : '';
@@ -1933,6 +1948,7 @@
                         <td class="score-cell"><div class="score-stack">${game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${escapeHtml(game.espn_id)}"></span>` : ''}<span class="score-num ${cls}">${primaryScore(game, scoreHeader)}</span>${game.espn_id ? '<span class="shape-mini"></span>' : ''}</div></td>
                         <td>
                             ${badge}
+                            ${ifNecessaryTag(game)}
                             <div class="matchup">
                                 <div>
                                     ${renderTeam(game.team_a, game.team_a_logo)}
@@ -1970,6 +1986,7 @@
                             ${game.espn_id ? `<span class="excitement-eyebrow" data-wp-id="${escapeHtml(game.espn_id)}"></span>` : ''}
                             ${game.espn_id ? '<span class="shape-mini"></span>' : ''}
                             ${eyebrow}
+                            ${ifNecessaryTag(game)}
                             <div class="games-card-matchup">
                                 <div>
                                     ${renderTeam(game.team_a, game.team_a_logo)}

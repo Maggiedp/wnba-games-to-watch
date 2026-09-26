@@ -77,6 +77,10 @@ class Game(Base):
     # existed. The W-L record path treats NULL as "counts" — see
     # get_team_records and NON_STANDINGS_COMPETITION_TYPES.
     competition_type = Column(String(12), nullable=True)
+    # Postseason game ESPN lists but the series may end before ("Game 3 If
+    # Necessary"). Display-only; the scores are untouched. NULL on rows
+    # ingested before this column existed — read as False.
+    if_necessary = Column(Boolean, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     __table_args__ = (
@@ -509,6 +513,7 @@ def init_db():
                 "ALTER TABLE games ADD COLUMN season_type INTEGER",
                 "ALTER TABLE games ADD COLUMN time_utc VARCHAR(40)",
                 "ALTER TABLE games ADD COLUMN competition_type VARCHAR(12)",
+                "ALTER TABLE games ADD COLUMN if_necessary BOOLEAN",
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_semis_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN reach_finals_prob FLOAT",
                 "ALTER TABLE playoff_probabilities ADD COLUMN win_championship_prob FLOAT",
@@ -624,6 +629,9 @@ def init_db():
                     "ALTER TABLE games ADD COLUMN IF NOT EXISTS "
                     "competition_type VARCHAR(12)"
                 )
+            )
+            conn.execute(
+                text("ALTER TABLE games ADD COLUMN IF NOT EXISTS if_necessary BOOLEAN")
             )
             conn.execute(
                 text(

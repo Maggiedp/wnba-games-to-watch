@@ -4055,3 +4055,23 @@ def test_get_team_names_with_games_returns_both_slots_for_the_season(session, te
 
     assert get_team_names_with_games(session, 2026) == {"Team A", "Team B"}
     assert get_team_names_with_games(session, 2024) == set()
+
+
+def test_upsert_game_updates_if_necessary_and_none_preserves_it(session, team_ids):
+    """The flag must clear when the series reaches 1-1 (True -> False), and an
+    omitted value must not blank a stored one."""
+    a_id, b_id = team_ids
+    kw = dict(
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-10-01",
+        time="7:00 PM ET",
+        broadcaster="ESPN",
+        espn_id="401918021",
+    )
+    game = upsert_game(session, if_necessary=True, **kw)
+    assert game.if_necessary is True
+    game = upsert_game(session, **kw)
+    assert game.if_necessary is True
+    game = upsert_game(session, if_necessary=False, **kw)
+    assert game.if_necessary is False

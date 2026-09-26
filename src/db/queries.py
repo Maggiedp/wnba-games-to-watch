@@ -122,6 +122,7 @@ def upsert_game(
     is_complete: bool | None = None,
     season_type: int | None = None,
     competition_type: str | None = None,
+    if_necessary: bool | None = None,
     time_utc: str | None | _Unset = _UNSET,
     _retry: bool = False,
 ) -> Game:
@@ -196,6 +197,8 @@ def upsert_game(
             game.season_type = season_type
         if competition_type is not None:
             game.competition_type = competition_type
+        if if_necessary is not None:
+            game.if_necessary = if_necessary
         # If we matched by espn_id, the row's date/teams may differ
         # (reschedule, or ESPN correcting the matchup itself).
         old_key = (game.date, game.team_a_id, game.team_b_id)
@@ -267,6 +270,7 @@ def upsert_game(
         excitement_index=excitement_index,
         season_type=season_type,
         competition_type=competition_type,
+        if_necessary=if_necessary,
     )
     session.add(game)
     try:
@@ -293,6 +297,7 @@ def upsert_game(
             is_complete=is_complete,
             season_type=season_type,
             competition_type=competition_type,
+            if_necessary=if_necessary,
             time_utc=time_utc,
             _retry=True,
         )
@@ -356,6 +361,7 @@ class GameFields:
     final_score_b: int | None
     excitement_index: float | None
     broadcaster: str
+    if_necessary: bool
 
 
 def get_game_fields(
@@ -385,6 +391,7 @@ def get_game_fields(
             final_score_b=g.final_score_b,
             excitement_index=g.excitement_index,
             broadcaster=g.broadcaster or "",
+            if_necessary=bool(g.if_necessary),
         )
         for g in games
         if (g.date, g.team_a_id, g.team_b_id) in wanted

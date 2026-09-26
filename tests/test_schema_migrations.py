@@ -209,3 +209,4 @@ def test_sqlite_migration_adds_competition_type_to_stale_games(tmp_path, monkeyp
         for c in inspect(create_engine(f"sqlite:///{db_path}")).get_columns("games")
     }
     assert "competition_type" in cols
+    assert "if_necessary" in cols

@@ -504,6 +504,36 @@ def fetch_schedule_and_results() -> list[dict]:
     return games
 
 
+_IF_NECESSARY_NOTE = re.compile(r"\bGame (\d+) If Necessary$", re.IGNORECASE)
+
+
+def _parse_if_necessary(comp: dict) -> bool:
+    """True when ESPN lists this postseason game but the series can still end
+    before it is played ("First Round - Game 3 If Necessary").
+
+    ESPN's note alone is not trusted to clear: when the note carries a game
+    number and the event carries the live series score, the game is optional
+    only if the series can end before it — earliest end = games played +
+    wins the leader still needs. So a Game 3 at 1-1 reads False even if ESPN
+    never rewrites the note.
+    """
+    game_num = None
+    for note in comp.get("notes") or []:
+        m = _IF_NECESSARY_NOTE.search((note.get("headline") or "").strip())
+        if m:
+            game_num = int(m.group(1))
+            break
+    if game_num is None:
+        return False
+    series = comp.get("series") or {}
+    total = series.get("totalCompetitions")
+    wins = [c.get("wins") for c in series.get("competitors") or []]
+    if len(wins) != 2 or not all(isinstance(n, int) for n in (total, *wins)):
+        return True
+    earliest_end = sum(wins) + (total // 2 + 1) - max(wins)
+    return game_num > earliest_end
+
+
 def _parse_event(event: dict) -> Optional[dict]:
     """Parse a single scoreboard event into a flat game dict."""
     try:
@@ -522,6 +552,7 @@ def _parse_event(event: dict) -> Optional[dict]:
         # NON_STANDINGS_COMPETITION_TYPES, so a new special event shows up as
         # an unrecognised value rather than being silently reclassified here.
         competition_type = (comp.get("type") or {}).get("abbreviation")
+        if_necessary = _parse_if_necessary(comp)
 
         dt_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
 
@@ -598,6 +629,7 @@ def _parse_event(event: dict) -> Optional[dict]:
             "status": status,
             "season_type": season_type,
             "competition_type": competition_type,
+            "if_necessary": if_necessary,
         }
     except (KeyError, ValueError, TypeError, IndexError) as e:
         logger.warning(f"Failed to parse event {event.get('id')}: {e}")

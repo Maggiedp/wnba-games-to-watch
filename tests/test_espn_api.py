@@ -227,3 +227,55 @@ def test_parse_event_competition_type_none_when_espn_omits_it():
 
     assert result is not None
     assert result["competition_type"] is None
+
+
+def _postseason_event(headline: str, total=3, wins=(0, 0)) -> dict:
+    event = _base_event("2026-10-01T23:00:00Z")
+    comp = event["competitions"][0]
+    comp["notes"] = [{"type": "event", "headline": headline}]
+    if total is not None:
+        comp["series"] = {
+            "type": "playoff",
+            "totalCompetitions": total,
+            "competitors": [{"id": "8", "wins": wins[0]}, {"id": "9", "wins": wins[1]}],
+        }
+    return event
+
+
+def test_if_necessary_game_is_flagged_while_the_series_can_end_before_it():
+    """Shape measured from ESPN on 2026-09-26: first-round Game 3s are
+    published before Game 1 tips, noted "Game 3 If Necessary"."""
+    result = _parse_event(_postseason_event("First Round - Game 3 If Necessary"))
+    assert result["if_necessary"] is True
+
+
+def test_if_necessary_clears_at_one_one_even_if_espn_keeps_the_note():
+    """At 1-1 Game 3 is certain. The series score decides, so a stale note
+    cannot keep a decisive game out of the Top pick."""
+    event = _postseason_event("First Round - Game 3 If Necessary", wins=(1, 1))
+    assert _parse_event(event)["if_necessary"] is False
+
+
+def test_if_necessary_stays_set_after_a_sweep():
+    event = _postseason_event("First Round - Game 3 If Necessary", wins=(2, 0))
+    assert _parse_event(event)["if_necessary"] is True
+
+
+def test_if_necessary_in_a_best_of_five():
+    """Semis at 2-1: Game 4 is certain, Game 5 is not."""
+    g4 = _postseason_event("Semifinals - Game 4 If Necessary", total=5, wins=(2, 1))
+    g5 = _postseason_event("Semifinals - Game 5 If Necessary", total=5, wins=(2, 1))
+    assert _parse_event(g4)["if_necessary"] is False
+    assert _parse_event(g5)["if_necessary"] is True
+
+
+def test_if_necessary_trusts_the_note_when_espn_omits_the_series():
+    event = _postseason_event("First Round - Game 3 If Necessary", total=None)
+    assert _parse_event(event)["if_necessary"] is True
+
+
+def test_if_necessary_false_for_a_plain_game_note_or_no_note():
+    assert (
+        _parse_event(_postseason_event("First Round - Game 1"))["if_necessary"] is False
+    )
+    assert _parse_event(_base_event("2026-06-30T23:00:00Z"))["if_necessary"] is False
