@@ -936,25 +936,26 @@ def test_render_game_detail_shows_blurbs_and_h2h_empty_state(session, team_ids):
 
 def test_render_game_detail_tags_an_if_necessary_game(session, team_ids):
     a_id, b_id = team_ids
-    # Different dates: upsert_game treats a same-pair same-date row as one game.
-    for espn_id, date, flag in (
-        ("401900", "2026-10-01", True),
-        ("401901", "2026-10-02", False),
-    ):
+
+    def seed(flag):
         upsert_game(
             session,
             team_a_id=a_id,
             team_b_id=b_id,
-            date=date,
+            date="2026-10-01",
             time="7:00 PM ET",
             broadcaster="ESPN",
-            espn_id=espn_id,
+            espn_id="401900",
             if_necessary=flag,
         )
-    session.commit()
 
+    seed(True)
+    session.commit()
     tagged = render_game_detail(session, "401900")
-    plain = render_game_detail(session, "401901")
+    # The series reached 1-1: the next ingest clears the flag on the same row.
+    seed(False)
+    session.commit()
+    plain = render_game_detail(session, "401900")
 
     # Eyebrow tag on the page, and a note in the summary that also feeds
     # og:description, so a shared link preview carries it too.
