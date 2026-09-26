@@ -50,7 +50,7 @@ def test_an_expired_entry_rebuilds():
     assert cache.get(None, lambda: 2) == 2
 
 
-def test_concurrent_cold_callers_collapse_into_one_build():
+def test_concurrent_cold_callers_collapse_into_one_build(run_concurrently):
     # The whole point on --max-instances=1: N viewers must wait on ONE build,
     # not start N. Without the build lock this counts 5.
     cache = Cache(ttl_s=60)
@@ -64,14 +64,7 @@ def test_concurrent_cold_callers_collapse_into_one_build():
         return "value"
 
     results = []
-    threads = [
-        threading.Thread(target=lambda: results.append(cache.get(None, slow_build)))
-        for _ in range(5)
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    run_concurrently(5, lambda: results.append(cache.get(None, slow_build)))
 
     assert builds["n"] == 1
     assert results == ["value"] * 5  # every waiter got the winner's value
@@ -115,7 +108,7 @@ def test_clear_drops_the_entry():
     assert cache.get(None, lambda: "second") == "second"
 
 
-def test_concurrent_failing_builds_run_the_build_only_once():
+def test_concurrent_failing_builds_run_the_build_only_once(run_concurrently):
     # The adversarial-review finding. A raising build used to store nothing and
     # release the build lock, so every waiter re-entered and ran the same failing
     # build in turn: 5 waiters meant 5 sequential ESPN fetches during exactly the
@@ -138,11 +131,7 @@ def test_concurrent_failing_builds_run_the_build_only_once():
         except RuntimeError as e:
             errors.append(e)
 
-    threads = [threading.Thread(target=call) for _ in range(5)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    run_concurrently(5, call)
 
     assert builds["n"] == 1  # one build, not one per waiter
     assert len(errors) == 5  # ...but every caller still sees the failure

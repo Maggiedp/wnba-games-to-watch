@@ -146,7 +146,7 @@ def test_currently_lopsided_game_no_send(env, client, monkeypatch):
     assert r.json()["alerted"] == 0 and sends == []
 
 
-def test_concurrent_polls_send_once(env, client, monkeypatch):
+def test_concurrent_polls_send_once(env, client, monkeypatch, run_concurrently):
     """Two overlapping polls on the same live game must send exactly once and
     neither must 500 on the unique-constraint race (Finding 1)."""
     _seed_live_game(env, "401700030")
@@ -169,11 +169,7 @@ def test_concurrent_polls_send_once(env, client, monkeypatch):
     def run():
         results.append(app_module._run_thriller_poll())
 
-    t1, t2 = threading.Thread(target=run), threading.Thread(target=run)
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
+    run_concurrently(2, run)
 
     assert len(sends) == 1
     assert sum(r["alerted"] for r in results) == 1
