@@ -934,6 +934,36 @@ def test_render_game_detail_shows_blurbs_and_h2h_empty_state(session, team_ids):
     assert "First meeting of the season" in html  # no completed H2H yet
 
 
+def test_render_game_detail_tags_an_if_necessary_game(session, team_ids):
+    a_id, b_id = team_ids
+    # Different dates: upsert_game treats a same-pair same-date row as one game.
+    for espn_id, date, flag in (
+        ("401900", "2026-10-01", True),
+        ("401901", "2026-10-02", False),
+    ):
+        upsert_game(
+            session,
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date=date,
+            time="7:00 PM ET",
+            broadcaster="ESPN",
+            espn_id=espn_id,
+            if_necessary=flag,
+        )
+    session.commit()
+
+    tagged = render_game_detail(session, "401900")
+    plain = render_game_detail(session, "401901")
+
+    # Eyebrow tag on the page, and a note in the summary that also feeds
+    # og:description, so a shared link preview carries it too.
+    assert "· If necessary</p>" in tagged
+    assert 'content="Played only if the series is still going.' in tagged
+    assert "If necessary" not in plain
+    assert "only if the series" not in plain
+
+
 def test_render_game_detail_not_simulated_when_no_ranking(session, team_ids):
     a_id, b_id = team_ids
     date = today_et()

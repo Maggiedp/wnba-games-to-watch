@@ -626,3 +626,34 @@ def test_player_og_cache_control_matches_ttl(env, client):
 def test_player_og_unknown_404(client):
     r = client.get("/player/nobody/og.png")
     assert r.status_code == 404
+
+
+_TOP_RIGHT = (700, 40, 1180, 100)  # opposite the wordmark
+
+
+def test_if_necessary_card_draws_a_top_right_label():
+    tagged = _open(render_game_card("A", "B", 92.0, "2026-10-01", "ESPN", if_necessary=True))
+    plain = _open(render_game_card("A", "B", 92.0, "2026-10-01", "ESPN"))
+    assert tagged.crop(_TOP_RIGHT).tobytes() != plain.crop(_TOP_RIGHT).tobytes()
+
+
+def test_render_game_card_png_reads_if_necessary_from_the_game(session, team_ids):
+    a_id, b_id = team_ids
+    # Different dates: upsert_game treats a same-pair same-date row as one game.
+    for espn_id, date, flag in (
+        ("401900", "2026-10-01", True),
+        ("401901", "2026-10-02", False),
+    ):
+        upsert_game(
+            session,
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date=date,
+            time="7:00 PM ET",
+            broadcaster="ESPN",
+            espn_id=espn_id,
+            if_necessary=flag,
+        )
+    tagged = _open(render_game_card_png(session, "401900"))
+    plain = _open(render_game_card_png(session, "401901"))
+    assert tagged.crop(_TOP_RIGHT).tobytes() != plain.crop(_TOP_RIGHT).tobytes()
