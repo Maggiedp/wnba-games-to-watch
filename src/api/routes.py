@@ -101,6 +101,9 @@ class GameResponse(BaseModel):
     final_score_a: int | None = None
     final_score_b: int | None = None
     excitement_index: float | None = None
+    # Postseason game the series may end before ("Game 3 If Necessary").
+    # Display-only: the homepage tags it and keeps it out of the Top pick.
+    if_necessary: bool = False
     # Winner-oriented WP "fever line" [[t_sec, home_pct], ...] for the homepage
     # completed-section mini; only populated when include_shapes=True and a
     # game_shapes row exists. None otherwise (incl. upcoming games).
@@ -230,6 +233,7 @@ def format_games_response(
                 final_score_a=final_score_a,
                 final_score_b=final_score_b,
                 excitement_index=excitement_index,
+                if_necessary=gf.if_necessary if gf else False,
             )
         )
 

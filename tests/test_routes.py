@@ -2463,3 +2463,44 @@ def test_a_settled_final_moves_elo_sensitive_odds_before_the_daily_run(
         "replaying the settled final's Elo must change the published odds — "
         "otherwise the overlay is still rating teams as of this morning"
     )
+
+
+def test_upcoming_endpoint_exposes_if_necessary(env, client, monkeypatch):
+    """The homepage keeps an "if necessary" game out of the Top pick using
+    this field, so it must reach the payload. Legacy NULL reads as False."""
+    monkeypatch.setattr("src.api.app.today_et", lambda: "2026-09-26")
+    monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-09-26")
+    session = env.get_session()
+    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
+    upsert_team(session, name="Fever", abbreviation="IND", logo_url="", bpi_rating=0.0)
+    a = session.query(env.Team).filter_by(name="Aces").one().id
+    b = session.query(env.Team).filter_by(name="Fever").one().id
+    for date, flag in (("2026-09-27", None), ("2026-10-01", True)):
+        session.add(
+            Game(
+                team_a_id=a,
+                team_b_id=b,
+                date=date,
+                time="10:00 PM ET",
+                broadcaster="ESPN",
+                espn_id=f"g{date}",
+                if_necessary=flag,
+            )
+        )
+        upsert_daily_ranking(
+            session,
+            date=date,
+            team_a_id=a,
+            team_b_id=b,
+            quality_score=50.0,
+            importance_score=50.0,
+            overall_score=50.0,
+            broadcaster="ESPN",
+        )
+    session.commit()
+    session.close()
+
+    resp = client.get("/api/games/upcoming")
+    assert resp.status_code == 200
+    by_date = {r["date"]: r["if_necessary"] for r in resp.json()}
+    assert by_date == {"2026-09-27": False, "2026-10-01": True}

@@ -318,6 +318,7 @@ def fetch_and_store_games(
             is_complete=is_complete,
             season_type=game.get("season_type"),
             competition_type=game.get("competition_type"),
+            if_necessary=game.get("if_necessary"),
         )
         stored += 1
 
