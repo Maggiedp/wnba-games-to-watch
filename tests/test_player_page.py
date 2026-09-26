@@ -249,7 +249,6 @@ def test_player_page_zone_table_shows_pps_and_xpps(client, env):
 
     html = client.get("/player/p-qual").text
     table = html[html.index('<div class="shot-zones">') :]
-    assert "<span>PPS</span><span>xPPS</span>" in table
     # Her one rim attempt is a make: 2 points on 1 FGA.
     rim = re.search(r"Rim</span>(.*?)</div>", table, re.S).group(1)
     assert '<span class="fg">100%</span><span>2.00</span>' in rim

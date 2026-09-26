@@ -591,13 +591,6 @@ async function assertPanelDoesNotWidenTheTable(page, label) {
   );
 }
 
-// Regression (PR #121): .shot-panel is a `1.4fr 1fr` grid and the bridge is a
-// THIRD child, so without `grid-column: 1 / -1` auto-placement puts it in
-// column 1 — squeezing the chart into the narrow column and dropping the zones
-// to row 2. The page-level scrollWidth assert CANNOT see this at any width (the
-// panel re-flows, it never overflows), so the desktop layout gets a scoped
-// geometry assert: the bridge spans the panel, and chart + zones share a row.
-// Verified by deliberate break — deleting the grid-column rule fails this.
 // Mirrors the `@container zones (max-width: 299.98px)` rule in BOTH templates.
 const ZONES_FG_MIN = 300;
 
@@ -612,8 +605,8 @@ async function assertZoneTable(page, label) {
     const z = document.querySelector('.shot-zones');
     const row = z.querySelector('.zr').cloneNode(true);
     const cells = [...row.children];
-    const swatch = cells[0].querySelector('i');
-    cells[0].replaceChildren(swatch, 'Mid-range');
+    if (cells.length !== 6) return { columns: cells.length };
+    cells[0].replaceChildren(cells[0].querySelector('i'), 'Mid-range');
     ['612', '100%', '1.24', '1.16', '−17.0'].forEach((v, k) => { cells[k + 1].textContent = v; });
     z.appendChild(row);
     const ink = (el) => {
@@ -624,15 +617,19 @@ async function assertZoneTable(page, label) {
     const shown = cells.filter((c) => getComputedStyle(c).display !== 'none');
     const inks = shown.map(ink);
     const out = {
+      columns: cells.length,
       width: z.clientWidth,
-      fgShown: getComputedStyle(cells[2]).display !== 'none',
-      labelHeight: ink(cells[0]).height,
+      fgShown: shown.includes(cells[2]),
+      labelHeight: inks[0].height,
       numHeight: inks[1].height,
       minGap: Math.min(...inks.slice(1).map((b, i) => b.left - inks[i].right)),
     };
     row.remove();
     return out;
   });
+  // The worst-case values are written by position, so a new column would keep
+  // seed text and pass silently. Fail instead, and update the row above.
+  assert.strictEqual(m.columns, 6, `${label}: zone table has ${m.columns} columns, expected 6`);
   assert.strictEqual(
     m.fgShown, m.width >= ZONES_FG_MIN,
     `${label}: zone table is ${m.width}px; FG% should be `
@@ -650,6 +647,13 @@ async function assertZoneTable(page, label) {
   );
 }
 
+// Regression (PR #121): .shot-panel is a `1.4fr 1fr` grid and the bridge is a
+// THIRD child, so without `grid-column: 1 / -1` auto-placement puts it in
+// column 1 — squeezing the chart into the narrow column and dropping the zones
+// to row 2. The page-level scrollWidth assert CANNOT see this at any width (the
+// panel re-flows, it never overflows), so the desktop layout gets a scoped
+// geometry assert: the bridge spans the panel, and chart + zones share a row.
+// Verified by deliberate break — deleting the grid-column rule fails this.
 async function assertShotPanelLayout(page, label, width) {
   await assertBridgeLabels(page, label);
   await assertZoneTable(page, label);

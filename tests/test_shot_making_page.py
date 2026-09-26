@@ -209,3 +209,20 @@ def test_zone_table_headers_match_in_both_renderers():
     js = re.search(r'<div class="zt">(.*?)</div>', js_src).group(1)
     assert py == js
     assert '<span class="fg">FG%</span><span>PPS</span><span>xPPS</span>' in py
+
+
+def _zones_narrow_css(template_name: str) -> str:
+    from src.api.routes import _load_template
+
+    src = _load_template(template_name)
+    start = src.index("/* ZONES-NARROW-START")
+    return src[start : src.index("/* ZONES-NARROW-END */", start)]
+
+
+def test_zone_table_narrow_rule_is_identical_in_both_templates():
+    """The rule that drops FG% below 300px is copied into both templates, and
+    the browser walk's ZONES_FG_MIN mirrors its limit. Catch a drift here,
+    before the walk has to."""
+    a = _zones_narrow_css("shot_making.html")
+    assert a == _zones_narrow_css("player.html")
+    assert "@container zones (max-width: 299.98px)" in a
