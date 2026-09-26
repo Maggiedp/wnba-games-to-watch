@@ -528,9 +528,7 @@ def _parse_if_necessary(comp: dict) -> bool:
     series = comp.get("series") or {}
     total = series.get("totalCompetitions")
     wins = [c.get("wins") for c in series.get("competitors") or []]
-    if not isinstance(total, int) or len(wins) != 2:
-        return True
-    if not all(isinstance(w, int) for w in wins):
+    if len(wins) != 2 or not all(isinstance(n, int) for n in (total, *wins)):
         return True
     earliest_end = sum(wins) + (total // 2 + 1) - max(wins)
     return game_num > earliest_end

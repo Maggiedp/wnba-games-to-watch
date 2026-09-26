@@ -361,7 +361,7 @@ class GameFields:
     final_score_b: int | None
     excitement_index: float | None
     broadcaster: str
-    if_necessary: bool = False
+    if_necessary: bool
 
 
 def get_game_fields(
