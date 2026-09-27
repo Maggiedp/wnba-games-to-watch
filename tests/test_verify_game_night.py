@@ -764,3 +764,43 @@ def test_wp_check_fails_when_ids_are_missing_or_blank(missing):
     for row in s["winprobability"]:
         row["playId"] = missing
     assert check_wp_matches_plays({"401": s}).status == FAIL
+
+
+# --- the one-refetch retry ------------------------------------------------
+# One payload can catch ESPN mid-update: on 2026-09-27 a halftime fetch had
+# WP two samples ahead of its plays (187/185, 2 orphans), and a fetch 25s
+# later was 187/187. A race clears on a second fetch; a real outage does not.
+
+
+def _never(event_id):
+    raise AssertionError(f"refetched an aligned game: {event_id}")
+
+
+def test_wp_check_passes_when_a_race_clears_on_refetch():
+    r = check_wp_matches_plays(
+        {"401": _summary(187, orphan=True)}, refetch=lambda _: _summary(187)
+    )
+    assert r.status == PASS
+    assert "187/187" in r.detail and "retry" in r.detail
+
+
+def test_wp_check_fails_when_the_mismatch_persists_on_refetch():
+    r = check_wp_matches_plays(
+        {"401": _summary(116, n_wp=0)}, refetch=lambda _: _summary(120, n_wp=0)
+    )
+    assert r.status == FAIL
+
+
+def test_wp_check_fails_when_the_refetch_is_lost():
+    r = check_wp_matches_plays({"401": _summary(89, n_wp=88)}, refetch=lambda _: None)
+    assert r.status == FAIL
+
+
+def test_wp_check_retries_a_lost_first_fetch():
+    r = check_wp_matches_plays({"401": None}, refetch=lambda _: _summary(89))
+    assert r.status == PASS
+
+
+def test_wp_check_does_not_refetch_an_aligned_game():
+    r = check_wp_matches_plays({"401": _summary(89)}, refetch=_never)
+    assert r.status == PASS

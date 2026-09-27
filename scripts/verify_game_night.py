@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import time
 from datetime import date as date_cls, timedelta
-from typing import Iterable, NamedTuple
+from typing import Callable, Iterable, NamedTuple
 
 import requests
 
@@ -99,6 +99,11 @@ _POSTSEASON_OPENER_CEILING = 75.0
 # A WNBA postseason runs about a month (2024: 09-22 to 10-20), so this covers
 # it from either end when looking up which matchups have already played.
 _POSTSEASON_LOOKBACK_DAYS = 40
+
+# Wait before the one refetch of a game whose WP and plays disagree. The one
+# race observed (2026-09-27) had cleared 25s later; 5s is a guess at how long
+# ESPN takes to publish both halves of one update, NOT a measured value.
+_WP_REFETCH_DELAY_S = 5
 
 # How far back to look for the newest stored snapshot. Covers a missed daily run
 # or two without letting a long outage silently diff against ancient standings.
@@ -222,13 +227,40 @@ def live_wp_sample_counts(games: list[dict]) -> dict[str, int]:
     return counts
 
 
-def check_wp_matches_plays(summaries: dict[str, dict | None]) -> CheckResult:
+def _wp_alignment(data: dict | None) -> tuple[str | None, bool]:
+    """(label, aligned) for one raw /summary payload; label None if no play yet."""
+    if data is None:
+        return "fetch failed", False
+    plays = data.get("plays") or []
+    wp = data.get("winprobability") or []
+    if not plays:
+        return None, True
+    # Index only truthy ids, as fetch_live_win_probability does: str(None)
+    # is "None" on both sides, so an id-less feed would otherwise pass as
+    # fully aligned. A missing or blank playId then cannot match.
+    ids = {str(p["id"]) for p in plays if p.get("id")}
+    orphans = sum(str(w.get("playId")) not in ids for w in wp)
+    label = f"{len(wp)}/{len(plays)}" + (f" ({orphans} orphan)" if orphans else "")
+    return label, len(wp) == len(plays) and not orphans
+
+
+def check_wp_matches_plays(
+    summaries: dict[str, dict | None],
+    refetch: Callable[[str], dict | None] | None = None,
+) -> CheckResult:
     """Every live game's raw WP series lines up 1:1 with its plays.
 
     `summaries` is {event_id: raw ESPN /summary payload, or None if the fetch
     failed}, for the live games only. ESPN sends one WP sample per play from
     the opening tip (measured 2026-09-20), so the equality is the test, not
     the magnitude — a low count early is fine, a count off the plays is not.
+
+    One payload can catch ESPN mid-update: on 2026-09-27 a halftime fetch had
+    WP two samples ahead of its plays (187/185, 2 orphans) and a fetch 25s
+    later was 187/187. So a game that fails is fetched once more via
+    `refetch`, and only the second payload decides. A race clears; the
+    2026-09-17 outage (no WP deep into a game) and id drift do not. The
+    detail keeps both results, so a race stays visible.
 
     Runs on every night class, postseason included: the live overlay is off
     in the postseason, but the thriller alerts and /replay's Live-now strip
@@ -238,23 +270,13 @@ def check_wp_matches_plays(summaries: dict[str, dict | None]) -> CheckResult:
     name = "ESPN live WP matches plays"
     bad, good = [], []
     for event_id, data in sorted(summaries.items()):
-        if data is None:
-            bad.append(f"{event_id}=fetch failed")
+        label, aligned = _wp_alignment(data)
+        if not aligned and refetch is not None:
+            retry_label, aligned = _wp_alignment(refetch(event_id))
+            label = f"{label} -> retry {retry_label or 'no plays'}"
+        if label is None:
             continue
-        plays = data.get("plays") or []
-        wp = data.get("winprobability") or []
-        if not plays:
-            continue
-        # Index only truthy ids, as fetch_live_win_probability does: str(None)
-        # is "None" on both sides, so an id-less feed would otherwise pass as
-        # fully aligned. A missing or blank playId then cannot match.
-        ids = {str(p["id"]) for p in plays if p.get("id")}
-        orphans = sum(str(w.get("playId")) not in ids for w in wp)
-        shown = f"{event_id}={len(wp)}/{len(plays)}"
-        if len(wp) != len(plays) or orphans:
-            bad.append(f"{shown} ({orphans} orphan)" if orphans else shown)
-        else:
-            good.append(shown)
+        (good if aligned else bad).append(f"{event_id}={label}")
     if bad:
         return CheckResult(name, FAIL, "wp/plays: " + "  ".join(bad))
     if not good:
@@ -739,18 +761,24 @@ def _fetch_live_summaries(games: list[dict]) -> dict[str, dict | None]:
     Raw on purpose: `fetch_live_win_probability` sanitizes, so a count from it
     cannot tell "ESPN sent none" from "our parser dropped them".
     """
-    summaries: dict[str, dict | None] = {}
-    for g in games:
-        if not is_live_status(g.get("status")):
-            continue
-        event_id = g.get("event_id") or ""
-        try:
-            summaries[event_id] = _get(
-                f"{SITE_API}/summary", timeout=_HTTP_TIMEOUT, event=event_id
-            )
-        except ESPNAPIError:
-            summaries[event_id] = None
-    return summaries
+    return {
+        g.get("event_id") or "": _fetch_summary(g.get("event_id") or "")
+        for g in games
+        if is_live_status(g.get("status"))
+    }
+
+
+def _fetch_summary(event_id: str) -> dict | None:
+    try:
+        return _get(f"{SITE_API}/summary", timeout=_HTTP_TIMEOUT, event=event_id)
+    except ESPNAPIError:
+        return None
+
+
+def _refetch_summary(event_id: str) -> dict | None:
+    """A second look at a game whose first payload failed the WP check."""
+    time.sleep(_WP_REFETCH_DELAY_S)
+    return _fetch_summary(event_id)
 
 
 def main() -> int:
@@ -850,7 +878,9 @@ def main() -> int:
     # gains no SKIP line.
     live_summaries = _fetch_live_summaries(games)
     if live_summaries:
-        night_results.append(check_wp_matches_plays(live_summaries))
+        night_results.append(
+            check_wp_matches_plays(live_summaries, refetch=_refetch_summary)
+        )
 
     # Repeatability needs a second sample. Past the TTL the server runs a fresh
     # Monte Carlo; that is a determinism test only on a settled slate, where the
