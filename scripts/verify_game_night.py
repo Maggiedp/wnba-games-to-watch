@@ -231,21 +231,24 @@ def live_wp_sample_counts(games: list[dict]) -> dict[str, int]:
     return counts
 
 
-def _wp_alignment(data: dict | None) -> tuple[str | None, bool]:
-    """(label, aligned) for one raw /summary payload; label None if no play yet."""
+def _wp_alignment(data: dict | None) -> tuple[str | None, str]:
+    """(label, status) for one raw /summary payload; label None if no play yet.
+
+    LOST if the payload is missing, SKIP if it has no plays, else PASS/FAIL.
+    """
     if data is None:
-        return "fetch failed", False
+        return "fetch failed", LOST
     plays = data.get("plays") or []
     wp = data.get("winprobability") or []
     if not plays:
-        return None, True
+        return None, SKIP
     # Index only truthy ids, as fetch_live_win_probability does: str(None)
     # is "None" on both sides, so an id-less feed would otherwise pass as
     # fully aligned. A missing or blank playId then cannot match.
     ids = {str(p["id"]) for p in plays if p.get("id")}
     orphans = sum(str(w.get("playId")) not in ids for w in wp)
     label = f"{len(wp)}/{len(plays)}" + (f" ({orphans} orphan)" if orphans else "")
-    return label, len(wp) == len(plays) and not orphans
+    return label, PASS if len(wp) == len(plays) and not orphans else FAIL
 
 
 def check_wp_matches_plays(
@@ -272,29 +275,20 @@ def check_wp_matches_plays(
     FAIL: ESPN did not show us a defect, we just could not look.
     """
     name = "ESPN live WP matches plays"
-    bad, lost, good = [], [], []
+    found: dict[str, list[str]] = {PASS: [], FAIL: [], LOST: []}
     for event_id, data in sorted(summaries.items()):
-        label, aligned = _wp_alignment(data)
-        was_lost = data is None
-        if not aligned and refetch is not None:
-            retry = refetch(event_id)
-            retry_label, aligned = _wp_alignment(retry)
+        label, status = _wp_alignment(data)
+        if status in (FAIL, LOST) and refetch is not None:
+            retry_label, status_retry = _wp_alignment(refetch(event_id))
             label = f"{label} -> retry {retry_label or 'no plays'}"
-            was_lost = retry is None
-            if retry_label is None and data is not None:
-                # The first payload had plays; one with none cannot clear it.
-                aligned, was_lost = False, True
-            elif retry_label is None:
-                # Lost, then no plays: the game may not have tipped. Nothing
-                # to judge, so it must not count as a match either.
-                label = None
-        if label is None:
+            # The retry decides, but a payload with no plays cannot clear a
+            # game whose first payload had some. After a lost first fetch it
+            # can: the game may not have tipped.
+            status = LOST if status_retry == SKIP and data is not None else status_retry
+        if status == SKIP:
             continue
-        entry = f"{event_id}={label}"
-        if aligned:
-            good.append(entry)
-        else:
-            (lost if was_lost else bad).append(entry)
+        found[status].append(f"{event_id}={label}")
+    bad, lost, good = found[FAIL], found[LOST], found[PASS]
     if bad:
         return CheckResult(name, FAIL, "wp/plays: " + "  ".join(bad + lost))
     if lost:
