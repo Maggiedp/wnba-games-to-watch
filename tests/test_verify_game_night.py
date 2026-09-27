@@ -809,6 +809,21 @@ def test_wp_check_is_lost_when_the_refetch_is_lost():
     assert r.status == LOST
 
 
+@pytest.mark.parametrize("retry", [{"plays": [], "winprobability": []}, {}])
+def test_an_empty_retry_cannot_clear_a_mismatch(retry):
+    # A readable payload with no plays is not evidence about a game that
+    # already had 89 of them.
+    r = check_wp_matches_plays({"401": _summary(89, n_wp=88)}, refetch=lambda _: retry)
+    assert r.status == LOST
+    assert "retry no plays" in r.detail
+
+
+def test_a_lost_first_fetch_that_retries_to_no_plays_is_not_judged():
+    # The game may genuinely not have tipped: nothing to judge, not lost.
+    r = check_wp_matches_plays({"401": None}, refetch=lambda _: _summary(0))
+    assert r.status == SKIP
+
+
 def test_wp_check_fails_when_a_lost_first_fetch_retries_into_a_mismatch():
     r = check_wp_matches_plays({"401": None}, refetch=lambda _: _summary(89, n_wp=0))
     assert r.status == FAIL

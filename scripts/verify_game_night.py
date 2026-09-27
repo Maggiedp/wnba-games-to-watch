@@ -281,6 +281,13 @@ def check_wp_matches_plays(
             retry_label, aligned = _wp_alignment(retry)
             label = f"{label} -> retry {retry_label or 'no plays'}"
             was_lost = retry is None
+            if retry_label is None and data is not None:
+                # The first payload had plays; one with none cannot clear it.
+                aligned, was_lost = False, True
+            elif retry_label is None:
+                # Lost, then no plays: the game may not have tipped. Nothing
+                # to judge, so it must not count as a match either.
+                label = None
         if label is None:
             continue
         entry = f"{event_id}={label}"
