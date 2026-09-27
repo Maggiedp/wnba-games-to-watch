@@ -24,13 +24,15 @@ import shutil
 import subprocess
 import time
 from datetime import date as date_cls, timedelta
-from typing import Iterable, NamedTuple
+from typing import Callable, Iterable, NamedTuple
 
 import requests
 
 from src.constants import GameStatus, is_live_status
 from src.data.espn_api import (
     ESPNAPIError,
+    SITE_API,
+    _get,
     fetch_games_for_range,
     fetch_live_win_probability,
     today_et,
@@ -98,6 +100,11 @@ _POSTSEASON_OPENER_CEILING = 75.0
 # it from either end when looking up which matchups have already played.
 _POSTSEASON_LOOKBACK_DAYS = 40
 
+# Wait before the one refetch of a game whose WP and plays disagree. The one
+# race observed (2026-09-27) had cleared 25s later; 5s is a guess at how long
+# ESPN takes to publish both halves of one update, NOT a measured value.
+_WP_REFETCH_DELAY_S = 5
+
 # How far back to look for the newest stored snapshot. Covers a missed daily run
 # or two without letting a long outage silently diff against ancient standings.
 _BASELINE_LOOKBACK_DAYS = 4
@@ -156,7 +163,9 @@ def probed_games(games: list[dict]) -> list[dict]:
     ]
 
 
-def candidate_baseline_dates(today: str, back: int = _BASELINE_LOOKBACK_DAYS) -> list[str]:
+def candidate_baseline_dates(
+    today: str, back: int = _BASELINE_LOOKBACK_DAYS
+) -> list[str]:
     """Dates to try for the baseline snapshot, newest first, bounded at `today`.
 
     The overlay perturbs whatever the LAST daily run stored, so the baseline is
@@ -216,6 +225,63 @@ def live_wp_sample_counts(games: list[dict]) -> dict[str, int]:
         except ESPNAPIError:
             counts[event_id] = 0
     return counts
+
+
+def _wp_alignment(data: dict | None) -> tuple[str | None, bool]:
+    """(label, aligned) for one raw /summary payload; label None if no play yet."""
+    if data is None:
+        return "fetch failed", False
+    plays = data.get("plays") or []
+    wp = data.get("winprobability") or []
+    if not plays:
+        return None, True
+    # Index only truthy ids, as fetch_live_win_probability does: str(None)
+    # is "None" on both sides, so an id-less feed would otherwise pass as
+    # fully aligned. A missing or blank playId then cannot match.
+    ids = {str(p["id"]) for p in plays if p.get("id")}
+    orphans = sum(str(w.get("playId")) not in ids for w in wp)
+    label = f"{len(wp)}/{len(plays)}" + (f" ({orphans} orphan)" if orphans else "")
+    return label, len(wp) == len(plays) and not orphans
+
+
+def check_wp_matches_plays(
+    summaries: dict[str, dict | None],
+    refetch: Callable[[str], dict | None] | None = None,
+) -> CheckResult:
+    """Every live game's raw WP series lines up 1:1 with its plays.
+
+    `summaries` is {event_id: raw ESPN /summary payload, or None if the fetch
+    failed}, for the live games only. ESPN sends one WP sample per play from
+    the opening tip (measured 2026-09-20), so the equality is the test, not
+    the magnitude — a low count early is fine, a count off the plays is not.
+
+    One payload can catch ESPN mid-update: on 2026-09-27 a halftime fetch had
+    WP two samples ahead of its plays (187/185, 2 orphans) and a fetch 25s
+    later was 187/187. So a game that fails is fetched once more via
+    `refetch`, and only the second payload decides. A race clears; the
+    2026-09-17 outage (no WP deep into a game) and id drift do not. The
+    detail keeps both results, so a race stays visible.
+
+    Runs on every night class, postseason included: the live overlay is off
+    in the postseason, but the thriller alerts and /replay's Live-now strip
+    read the same feed. A lost fetch is FAIL, not SKIP, so it cannot hide
+    behind a sibling check's PASS in main's verdict.
+    """
+    name = "ESPN live WP matches plays"
+    bad, good = [], []
+    for event_id, data in sorted(summaries.items()):
+        label, aligned = _wp_alignment(data)
+        if not aligned and refetch is not None:
+            retry_label, aligned = _wp_alignment(refetch(event_id))
+            label = f"{label} -> retry {retry_label or 'no plays'}"
+        if label is None:
+            continue
+        (good if aligned else bad).append(f"{event_id}={label}")
+    if bad:
+        return CheckResult(name, FAIL, "wp/plays: " + "  ".join(bad))
+    if not good:
+        return CheckResult(name, SKIP, "no live game has a play yet")
+    return CheckResult(name, PASS, "wp/plays: " + "  ".join(good))
 
 
 def playoffs_column_is_dead(odds: list[dict]) -> bool:
@@ -418,10 +484,7 @@ def played_postseason_pairs(history: list[dict]) -> set[frozenset[str]]:
 def _score_label(game: dict) -> str:
     """`MINvDAL=46.8` — how a scored game is named in every line this check
     emits, healthy or not."""
-    return (
-        f"{game['team_a_abbr']}v{game['team_b_abbr']}="
-        f"{game['importance_score']:.1f}"
-    )
+    return f"{game['team_a_abbr']}v{game['team_b_abbr']}={game['importance_score']:.1f}"
 
 
 # The detail page renders each team at stake as one <li> inside this block.
@@ -692,6 +755,32 @@ def _fetch_detail_pages(base: str, games: list[dict]) -> dict[str, str | None]:
     return pages
 
 
+def _fetch_live_summaries(games: list[dict]) -> dict[str, dict | None]:
+    """`event_id -> raw ESPN /summary payload` for the live games, None if unreadable.
+
+    Raw on purpose: `fetch_live_win_probability` sanitizes, so a count from it
+    cannot tell "ESPN sent none" from "our parser dropped them".
+    """
+    return {
+        g.get("event_id") or "": _fetch_summary(g.get("event_id") or "")
+        for g in games
+        if is_live_status(g.get("status"))
+    }
+
+
+def _fetch_summary(event_id: str) -> dict | None:
+    try:
+        return _get(f"{SITE_API}/summary", timeout=_HTTP_TIMEOUT, event=event_id)
+    except ESPNAPIError:
+        return None
+
+
+def _refetch_summary(event_id: str) -> dict | None:
+    """A second look at a game whose first payload failed the WP check."""
+    time.sleep(_WP_REFETCH_DELAY_S)
+    return _fetch_summary(event_id)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base-url", default=_BASE_URL)
@@ -771,12 +860,27 @@ def main() -> int:
             print(f"  (postseason history unavailable: {e})")
 
     night_results = checks_for_night(
-        night, odds, snapshot, playing, games=today_games,
-        wp_available=wp_available, played_pairs=played_pairs,
+        night,
+        odds,
+        snapshot,
+        playing,
+        games=today_games,
+        wp_available=wp_available,
+        played_pairs=played_pairs,
         detail_pages=(
             _fetch_detail_pages(base, today_games) if night == "postseason" else {}
         ),
     )
+
+    # Not gated on the night class: the thriller alerts and /replay's Live-now
+    # strip read ESPN's WP feed on postseason nights too, where the overlay
+    # checks above do not run. Added only when a game is live, so an off night
+    # gains no SKIP line.
+    live_summaries = _fetch_live_summaries(games)
+    if live_summaries:
+        night_results.append(
+            check_wp_matches_plays(live_summaries, refetch=_refetch_summary)
+        )
 
     # Repeatability needs a second sample. Past the TTL the server runs a fresh
     # Monte Carlo; that is a determinism test only on a settled slate, where the
