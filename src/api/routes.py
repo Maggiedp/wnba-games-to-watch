@@ -1496,14 +1496,17 @@ def _player_zones_html(zones) -> str:
     rows = "".join(
         f'<div class="zr"><span><i class="sw diet-{z["family"]}"></i>'
         f"{label.get(z['family'], z['family'])}</span>"
-        f"<span>{z['fga']}</span><span>{round(z['fg_pct'] * 100)}%</span>"
+        f"<span>{z['fga']}</span>"
+        f'<span class="fg">{round(z["fg_pct"] * 100)}%</span>'
+        f"<span>{z['pps']:.2f}</span><span>{z['xpps']:.2f}</span>"
         f'<span class="{"pos" if z["added"] >= 0 else "neg"}">'
         f"{_fmt_signed(z['added'])}</span></div>"
         for z in zones
     )
     return (
         '<div class="shot-zones"><div class="zt"><span>Zone</span><span>FGA</span>'
-        "<span>FG%</span><span>+pts</span></div>" + rows + "</div>"
+        '<span class="fg">FG%</span><span>PPS</span><span>xPPS</span>'
+        "<span>+pts</span></div>" + rows + "</div>"
     )
 
 

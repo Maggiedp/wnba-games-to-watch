@@ -242,3 +242,13 @@ def test_player_page_defines_the_bridge_label_minimum(client, env):
     html = client.get("/player/p-qual").text
     assert "--lab-min: 9em" in html
     assert "100% - var(--lab-min)" in html  # the clamp actually reached the page
+
+
+def test_player_page_zone_table_shows_pps_and_xpps(client, env):
+    _seed_qualified(env)
+
+    html = client.get("/player/p-qual").text
+    table = html[html.index('<div class="shot-zones">') :]
+    # Her one rim attempt is a make: 2 points on 1 FGA.
+    rim = re.search(r"Rim</span>(.*?)</div>", table, re.S).group(1)
+    assert '<span class="fg">100%</span><span>2.00</span>' in rim
