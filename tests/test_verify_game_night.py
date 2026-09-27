@@ -29,6 +29,7 @@ from scripts.verify_game_night import (
     check_repeatability,
     checks_for_night,
     check_seed_movement,
+    check_wp_matches_plays,
     classify_night,
     playoffs_column_is_dead,
     seed_movement,
@@ -332,9 +333,7 @@ def test_seed_movement_still_fails_when_live_but_frozen():
 def test_live_night_without_wp_reports_nothing_verified():
     """End to end: the whole night must not read as a pass, nor as a failure."""
     odds = [_odds("A", "A", 1.0, {}, live=False)]
-    results = checks_for_night(
-        "live", odds, odds, {"Dallas Wings"}, wp_available=False
-    )
+    results = checks_for_night("live", odds, odds, {"Dallas Wings"}, wp_available=False)
     assert not any(r.status == FAIL for r in results)
     assert any(r.status == SKIP for r in results)
 
@@ -469,7 +468,9 @@ def test_a_decisive_later_game_in_the_nineties_still_passes():
 @pytest.mark.parametrize("value", [40.37, 51.36, 32.82, 37.09, 27.37, 30.93])
 def test_measured_openers_pass_against_the_opener_ceiling(value):
     """Every opener value actually measured must clear the ceiling."""
-    assert check_postseason_importance([_post(value)], played_pairs=set()).status == PASS
+    assert (
+        check_postseason_importance([_post(value)], played_pairs=set()).status == PASS
+    )
 
 
 def test_unknown_series_history_does_not_manufacture_a_failure():
@@ -536,7 +537,9 @@ def _rendered(*movers):
     }
     return (
         "<html><body><h1>game</h1>"
-        + _importance_movers_html(SimpleNamespace(importance_detail=json.dumps(payload)))
+        + _importance_movers_html(
+            SimpleNamespace(importance_detail=json.dumps(payload))
+        )
         + "</body></html>"
     )
 
@@ -549,9 +552,7 @@ def test_movers_count_is_none_when_the_block_is_absent():
 def test_two_teams_at_stake_rules_out_the_fallback():
     game = _post(46.8, espn_id="401900001")
     html = _rendered((_MIN, 0.61, 0.28), (_DAL, 0.22, 0.55))
-    assert (
-        check_postseason_movers([game], ({"401900001": html})).status == PASS
-    )
+    assert check_postseason_movers([game], ({"401900001": html})).status == PASS
 
 
 def test_a_missing_block_on_a_scored_game_fails():
@@ -566,9 +567,7 @@ def test_one_mover_still_proves_the_slot_matched():
     still rendered, which is the thing being tested."""
     game = _post(46.8, espn_id="401900001")
     html = _rendered((_MIN, 0.61, 0.28))
-    assert (
-        check_postseason_movers([game], ({"401900001": html})).status == PASS
-    )
+    assert check_postseason_movers([game], ({"401900001": html})).status == PASS
 
 
 # Only the two participants can move on a bracket game, so any other name
@@ -651,7 +650,9 @@ def test_the_missing_block_is_exactly_the_production_fallback_condition():
 
     unmatchable = {"team_a": _MIN, "team_b": _DAL, "season_type": 3, "event_id": "x"}
     assert _importance_for_game(unmatchable, [], {}, 1.0, bracket_state=None) == 100.0
-    assert _importance_detail_for_game(unmatchable, [], [], {}, bracket_state=None) is None
+    assert (
+        _importance_detail_for_game(unmatchable, [], [], {}, bracket_state=None) is None
+    )
 
     assert _importance_movers_html(SimpleNamespace(importance_detail=None)) == ""
 
@@ -678,7 +679,10 @@ def test_a_postseason_night_without_any_pages_fails_the_structural_check():
     no special cases: on a scored postseason slate, unable to read is a
     failure however it arose."""
     results = checks_for_night(
-        "postseason", odds=[], snapshot=[], playing=set(),
+        "postseason",
+        odds=[],
+        snapshot=[],
+        playing=set(),
         games=[_post(46.8, espn_id="401900001")],
     )
     structural = [r for r in results if "structural" in r.name]
@@ -691,3 +695,65 @@ def test_mover_teams_reads_the_names_not_the_percentages():
     the first is a team name."""
     html = _rendered((_MIN, 0.61, 0.28), (_DAL, 0.22, 0.55))
     assert mover_teams(html) == [_MIN, _DAL]
+
+
+# --- check_wp_matches_plays -----------------------------------------------
+# ESPN sends one WP sample per play from the opening tip (measured 2026-09-20,
+# re-confirmed on postseason night one 2026-09-27). The equality is the test,
+# not the magnitude: a low count early is fine, a count off the plays is not.
+
+
+def _summary(n_plays, n_wp=None, orphan=False):
+    plays = [{"id": str(100 + i)} for i in range(n_plays)]
+    wp = [{"playId": p["id"], "homeWinPercentage": 0.5} for p in plays]
+    if n_wp is not None:
+        wp = wp[:n_wp]
+    if orphan:
+        wp[-1] = {"playId": "999999", "homeWinPercentage": 0.5}
+    return {"plays": plays, "winprobability": wp}
+
+
+def test_wp_check_passes_when_every_play_has_a_sample():
+    r = check_wp_matches_plays({"401": _summary(89), "402": _summary(12)})
+    assert r.status == PASS
+    assert "401=89/89" in r.detail
+
+
+def test_wp_check_fails_when_espn_sends_no_wp_deep_into_a_game():
+    # The 2026-09-17 shape: 116-193 plays, winprobability == [].
+    r = check_wp_matches_plays({"401": _summary(116, n_wp=0)})
+    assert r.status == FAIL
+    assert "401" in r.detail
+
+
+def test_wp_check_fails_on_a_count_mismatch():
+    r = check_wp_matches_plays({"401": _summary(89, n_wp=88)})
+    assert r.status == FAIL
+
+
+def test_wp_check_fails_on_a_sample_that_names_no_real_play():
+    r = check_wp_matches_plays({"401": _summary(89, orphan=True)})
+    assert r.status == FAIL
+
+
+def test_wp_check_fails_when_a_live_game_could_not_be_fetched():
+    # A lost fetch is lost evidence; a SKIP here would hide behind a
+    # sibling check's PASS in main's verdict.
+    r = check_wp_matches_plays({"401": _summary(89), "402": None})
+    assert r.status == FAIL
+    assert "402" in r.detail
+
+
+def test_wp_check_names_only_the_bad_game_among_good_ones():
+    r = check_wp_matches_plays({"401": _summary(89), "402": _summary(50, n_wp=0)})
+    assert r.status == FAIL
+    assert "402" in r.detail and "401" not in r.detail
+
+
+def test_wp_check_skips_when_no_live_game_has_a_play_yet():
+    r = check_wp_matches_plays({"401": _summary(0)})
+    assert r.status == SKIP
+
+
+def test_wp_check_skips_with_no_live_games():
+    assert check_wp_matches_plays({}).status == SKIP

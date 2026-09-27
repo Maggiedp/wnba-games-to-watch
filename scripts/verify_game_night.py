@@ -31,6 +31,7 @@ import requests
 from src.constants import GameStatus, is_live_status
 from src.data.espn_api import (
     ESPNAPIError,
+    SITE_API,
     fetch_games_for_range,
     fetch_live_win_probability,
     today_et,
@@ -156,7 +157,9 @@ def probed_games(games: list[dict]) -> list[dict]:
     ]
 
 
-def candidate_baseline_dates(today: str, back: int = _BASELINE_LOOKBACK_DAYS) -> list[str]:
+def candidate_baseline_dates(
+    today: str, back: int = _BASELINE_LOOKBACK_DAYS
+) -> list[str]:
     """Dates to try for the baseline snapshot, newest first, bounded at `today`.
 
     The overlay perturbs whatever the LAST daily run stored, so the baseline is
@@ -216,6 +219,45 @@ def live_wp_sample_counts(games: list[dict]) -> dict[str, int]:
         except ESPNAPIError:
             counts[event_id] = 0
     return counts
+
+
+def check_wp_matches_plays(summaries: dict[str, dict | None]) -> CheckResult:
+    """Every live game's raw WP series lines up 1:1 with its plays.
+
+    `summaries` is {event_id: raw ESPN /summary payload, or None if the fetch
+    failed}, for the live games only. ESPN sends one WP sample per play from
+    the opening tip (measured 2026-09-20), so the equality is the test, not
+    the magnitude — a low count early is fine, a count off the plays is not.
+
+    Runs on every night class, postseason included: the live overlay is off
+    in the postseason, but the thriller alerts and /replay's Live-now strip
+    read the same feed. A lost fetch is FAIL, not SKIP, so it cannot hide
+    behind a sibling check's PASS in main's verdict.
+    """
+    name = "ESPN live WP matches plays"
+    if not summaries:
+        return CheckResult(name, SKIP, "no live game")
+    bad, good = [], []
+    for event_id, data in sorted(summaries.items()):
+        if data is None:
+            bad.append(f"{event_id}=fetch failed")
+            continue
+        plays = data.get("plays") or []
+        wp = data.get("winprobability") or []
+        if not plays:
+            continue
+        ids = {str(p.get("id")) for p in plays}
+        orphans = sum(1 for w in wp if str(w.get("playId")) not in ids)
+        shown = f"{event_id}={len(wp)}/{len(plays)}"
+        if len(wp) != len(plays) or orphans:
+            bad.append(f"{shown} ({orphans} orphan)" if orphans else shown)
+        else:
+            good.append(shown)
+    if bad:
+        return CheckResult(name, FAIL, "wp/plays: " + "  ".join(bad))
+    if not good:
+        return CheckResult(name, SKIP, "no live game has a play yet")
+    return CheckResult(name, PASS, "wp/plays: " + "  ".join(good))
 
 
 def playoffs_column_is_dead(odds: list[dict]) -> bool:
@@ -418,10 +460,7 @@ def played_postseason_pairs(history: list[dict]) -> set[frozenset[str]]:
 def _score_label(game: dict) -> str:
     """`MINvDAL=46.8` — how a scored game is named in every line this check
     emits, healthy or not."""
-    return (
-        f"{game['team_a_abbr']}v{game['team_b_abbr']}="
-        f"{game['importance_score']:.1f}"
-    )
+    return f"{game['team_a_abbr']}v{game['team_b_abbr']}={game['importance_score']:.1f}"
 
 
 # The detail page renders each team at stake as one <li> inside this block.
@@ -692,6 +731,28 @@ def _fetch_detail_pages(base: str, games: list[dict]) -> dict[str, str | None]:
     return pages
 
 
+def _fetch_live_summaries(games: list[dict]) -> dict[str, dict | None]:
+    """`event_id -> raw ESPN /summary payload` for the live games, None if unreadable.
+
+    Raw on purpose: `fetch_live_win_probability` sanitizes, so a count from it
+    cannot tell "ESPN sent none" from "our parser dropped them".
+    """
+    summaries: dict[str, dict | None] = {}
+    for g in games:
+        if not is_live_status(g.get("status")):
+            continue
+        event_id = g.get("event_id") or ""
+        try:
+            r = requests.get(
+                f"{SITE_API}/summary", params={"event": event_id}, timeout=_HTTP_TIMEOUT
+            )
+            r.raise_for_status()
+            summaries[event_id] = r.json()
+        except (requests.RequestException, ValueError):
+            summaries[event_id] = None
+    return summaries
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base-url", default=_BASE_URL)
@@ -727,8 +788,10 @@ def main() -> int:
         night = "consumed"
 
     # Does the overlay have anything to condition on? Decides whether a
-    # stood-down overlay is our defect or an upstream gap.
-    wp_counts = live_wp_sample_counts(games) if night == "live" else {}
+    # stood-down overlay is our defect or an upstream gap. Counted on EVERY
+    # night with a live game, not only "live": a postseason night has live
+    # games too, and the count is printed as INFO beside the raw WP check.
+    wp_counts = live_wp_sample_counts(games)
     wp_available = any(n > 0 for n in wp_counts.values()) if wp_counts else True
 
     upcoming = _get_json(base, "/api/games/upcoming") if night == "postseason" else []
@@ -771,12 +834,25 @@ def main() -> int:
             print(f"  (postseason history unavailable: {e})")
 
     night_results = checks_for_night(
-        night, odds, snapshot, playing, games=today_games,
-        wp_available=wp_available, played_pairs=played_pairs,
+        night,
+        odds,
+        snapshot,
+        playing,
+        games=today_games,
+        wp_available=wp_available,
+        played_pairs=played_pairs,
         detail_pages=(
             _fetch_detail_pages(base, today_games) if night == "postseason" else {}
         ),
     )
+
+    # Not gated on the night class: the thriller alerts and /replay's Live-now
+    # strip read ESPN's WP feed on postseason nights too, where the overlay
+    # checks above do not run. Added only when a game is live, so an off night
+    # gains no SKIP line.
+    live_summaries = _fetch_live_summaries(games)
+    if live_summaries:
+        night_results.append(check_wp_matches_plays(live_summaries))
 
     # Repeatability needs a second sample. Past the TTL the server runs a fresh
     # Monte Carlo; that is a determinism test only on a settled slate, where the
