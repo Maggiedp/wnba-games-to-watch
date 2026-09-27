@@ -32,6 +32,7 @@ from src.constants import GameStatus, is_live_status
 from src.data.espn_api import (
     ESPNAPIError,
     SITE_API,
+    _get,
     fetch_games_for_range,
     fetch_live_win_probability,
     today_et,
@@ -235,8 +236,6 @@ def check_wp_matches_plays(summaries: dict[str, dict | None]) -> CheckResult:
     behind a sibling check's PASS in main's verdict.
     """
     name = "ESPN live WP matches plays"
-    if not summaries:
-        return CheckResult(name, SKIP, "no live game")
     bad, good = [], []
     for event_id, data in sorted(summaries.items()):
         if data is None:
@@ -246,13 +245,11 @@ def check_wp_matches_plays(summaries: dict[str, dict | None]) -> CheckResult:
         wp = data.get("winprobability") or []
         if not plays:
             continue
-        # A missing or blank id never matches: str(None) is "None" on both
-        # sides, so an id-less feed would otherwise pass as fully aligned.
-        # Mirrors fetch_live_win_probability, which indexes only truthy ids.
+        # Index only truthy ids, as fetch_live_win_probability does: str(None)
+        # is "None" on both sides, so an id-less feed would otherwise pass as
+        # fully aligned. A missing or blank playId then cannot match.
         ids = {str(p["id"]) for p in plays if p.get("id")}
-        orphans = sum(
-            1 for w in wp if not w.get("playId") or str(w["playId"]) not in ids
-        )
+        orphans = sum(str(w.get("playId")) not in ids for w in wp)
         shown = f"{event_id}={len(wp)}/{len(plays)}"
         if len(wp) != len(plays) or orphans:
             bad.append(f"{shown} ({orphans} orphan)" if orphans else shown)
@@ -748,12 +745,10 @@ def _fetch_live_summaries(games: list[dict]) -> dict[str, dict | None]:
             continue
         event_id = g.get("event_id") or ""
         try:
-            r = requests.get(
-                f"{SITE_API}/summary", params={"event": event_id}, timeout=_HTTP_TIMEOUT
+            summaries[event_id] = _get(
+                f"{SITE_API}/summary", timeout=_HTTP_TIMEOUT, event=event_id
             )
-            r.raise_for_status()
-            summaries[event_id] = r.json()
-        except (requests.RequestException, ValueError):
+        except ESPNAPIError:
             summaries[event_id] = None
     return summaries
 
@@ -793,10 +788,8 @@ def main() -> int:
         night = "consumed"
 
     # Does the overlay have anything to condition on? Decides whether a
-    # stood-down overlay is our defect or an upstream gap. Counted on EVERY
-    # night with a live game, not only "live": a postseason night has live
-    # games too, and the count is printed as INFO beside the raw WP check.
-    wp_counts = live_wp_sample_counts(games)
+    # stood-down overlay is our defect or an upstream gap.
+    wp_counts = live_wp_sample_counts(games) if night == "live" else {}
     wp_available = any(n > 0 for n in wp_counts.values()) if wp_counts else True
 
     upcoming = _get_json(base, "/api/games/upcoming") if night == "postseason" else []

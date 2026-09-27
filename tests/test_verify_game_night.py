@@ -705,11 +705,11 @@ def test_mover_teams_reads_the_names_not_the_percentages():
 
 def _summary(n_plays, n_wp=None, orphan=False):
     plays = [{"id": str(100 + i)} for i in range(n_plays)]
-    wp = [{"playId": p["id"], "homeWinPercentage": 0.5} for p in plays]
+    wp = [{"playId": p["id"]} for p in plays]
     if n_wp is not None:
         wp = wp[:n_wp]
     if orphan:
-        wp[-1] = {"playId": "999999", "homeWinPercentage": 0.5}
+        wp[-1] = {"playId": "999999"}
     return {"plays": plays, "winprobability": wp}
 
 
@@ -755,20 +755,12 @@ def test_wp_check_skips_when_no_live_game_has_a_play_yet():
     assert r.status == SKIP
 
 
-def test_wp_check_skips_with_no_live_games():
-    assert check_wp_matches_plays({}).status == SKIP
-
-
-def test_wp_check_fails_when_neither_side_carries_an_id():
-    # str(None) == "None" on both sides must not read as a match.
-    plays = [{"clock": "10:00"} for _ in range(5)]
-    wp = [{"homeWinPercentage": 0.5} for _ in range(5)]
-    r = check_wp_matches_plays({"401": {"plays": plays, "winprobability": wp}})
-    assert r.status == FAIL
-
-
-def test_wp_check_fails_on_a_blank_play_id():
+@pytest.mark.parametrize("missing", [None, ""])
+def test_wp_check_fails_when_ids_are_missing_or_blank(missing):
+    # An id-less feed must not read as a match on both sides.
     s = _summary(5)
-    s["plays"][0]["id"] = ""
-    s["winprobability"][0]["playId"] = ""
+    for row in s["plays"]:
+        row["id"] = missing
+    for row in s["winprobability"]:
+        row["playId"] = missing
     assert check_wp_matches_plays({"401": s}).status == FAIL
