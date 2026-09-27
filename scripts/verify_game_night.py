@@ -246,8 +246,13 @@ def check_wp_matches_plays(summaries: dict[str, dict | None]) -> CheckResult:
         wp = data.get("winprobability") or []
         if not plays:
             continue
-        ids = {str(p.get("id")) for p in plays}
-        orphans = sum(1 for w in wp if str(w.get("playId")) not in ids)
+        # A missing or blank id never matches: str(None) is "None" on both
+        # sides, so an id-less feed would otherwise pass as fully aligned.
+        # Mirrors fetch_live_win_probability, which indexes only truthy ids.
+        ids = {str(p["id"]) for p in plays if p.get("id")}
+        orphans = sum(
+            1 for w in wp if not w.get("playId") or str(w["playId"]) not in ids
+        )
         shown = f"{event_id}={len(wp)}/{len(plays)}"
         if len(wp) != len(plays) or orphans:
             bad.append(f"{shown} ({orphans} orphan)" if orphans else shown)

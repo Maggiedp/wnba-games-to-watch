@@ -757,3 +757,18 @@ def test_wp_check_skips_when_no_live_game_has_a_play_yet():
 
 def test_wp_check_skips_with_no_live_games():
     assert check_wp_matches_plays({}).status == SKIP
+
+
+def test_wp_check_fails_when_neither_side_carries_an_id():
+    # str(None) == "None" on both sides must not read as a match.
+    plays = [{"clock": "10:00"} for _ in range(5)]
+    wp = [{"homeWinPercentage": 0.5} for _ in range(5)]
+    r = check_wp_matches_plays({"401": {"plays": plays, "winprobability": wp}})
+    assert r.status == FAIL
+
+
+def test_wp_check_fails_on_a_blank_play_id():
+    s = _summary(5)
+    s["plays"][0]["id"] = ""
+    s["winprobability"][0]["playId"] = ""
+    assert check_wp_matches_plays({"401": s}).status == FAIL
