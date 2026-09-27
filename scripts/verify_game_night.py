@@ -12,6 +12,10 @@ A check with no data to judge reports SKIP, never PASS. An off-day run that
 printed all-green would be indistinguishable from a working live path, which
 is the whole failure mode this exists to rule out.
 
+A check that could not READ its input reports LOST, which is not a SKIP:
+"nothing to judge" and "the evidence was lost" are different facts, and only
+the check knows which one it has. The verdict fails the run on any LOST.
+
 Run from the repo root with the venv active:
     python -m scripts.verify_game_night [--base-url URL] [--no-logs]
 """
@@ -39,7 +43,7 @@ from src.data.espn_api import (
     yesterday_et,
 )
 
-PASS, FAIL, SKIP, INFO = "PASS", "FAIL", "SKIP", "INFO"
+PASS, FAIL, SKIP, LOST, INFO = "PASS", "FAIL", "SKIP", "LOST", "INFO"
 
 _BASE_URL = "https://wumbers.com"
 _PROJECT = "wnba-games-to-watch"
@@ -227,21 +231,24 @@ def live_wp_sample_counts(games: list[dict]) -> dict[str, int]:
     return counts
 
 
-def _wp_alignment(data: dict | None) -> tuple[str | None, bool]:
-    """(label, aligned) for one raw /summary payload; label None if no play yet."""
+def _wp_alignment(data: dict | None) -> tuple[str | None, str]:
+    """(label, status) for one raw /summary payload; label None if no play yet.
+
+    LOST if the payload is missing, SKIP if it has no plays, else PASS/FAIL.
+    """
     if data is None:
-        return "fetch failed", False
+        return "fetch failed", LOST
     plays = data.get("plays") or []
     wp = data.get("winprobability") or []
     if not plays:
-        return None, True
+        return None, SKIP
     # Index only truthy ids, as fetch_live_win_probability does: str(None)
     # is "None" on both sides, so an id-less feed would otherwise pass as
     # fully aligned. A missing or blank playId then cannot match.
     ids = {str(p["id"]) for p in plays if p.get("id")}
     orphans = sum(str(w.get("playId")) not in ids for w in wp)
     label = f"{len(wp)}/{len(plays)}" + (f" ({orphans} orphan)" if orphans else "")
-    return label, len(wp) == len(plays) and not orphans
+    return label, PASS if len(wp) == len(plays) and not orphans else FAIL
 
 
 def check_wp_matches_plays(
@@ -264,21 +271,28 @@ def check_wp_matches_plays(
 
     Runs on every night class, postseason included: the live overlay is off
     in the postseason, but the thriller alerts and /replay's Live-now strip
-    read the same feed. A lost fetch is FAIL, not SKIP, so it cannot hide
-    behind a sibling check's PASS in main's verdict.
+    read the same feed. A game whose deciding payload was lost is LOST, not
+    FAIL: ESPN did not show us a defect, we just could not look.
     """
     name = "ESPN live WP matches plays"
-    bad, good = [], []
+    found: dict[str, list[str]] = {PASS: [], FAIL: [], LOST: []}
     for event_id, data in sorted(summaries.items()):
-        label, aligned = _wp_alignment(data)
-        if not aligned and refetch is not None:
-            retry_label, aligned = _wp_alignment(refetch(event_id))
+        label, status = _wp_alignment(data)
+        if status in (FAIL, LOST) and refetch is not None:
+            retry_label, status_retry = _wp_alignment(refetch(event_id))
             label = f"{label} -> retry {retry_label or 'no plays'}"
-        if label is None:
+            # The retry decides, but a payload with no plays cannot clear a
+            # game whose first payload had some. After a lost first fetch it
+            # can: the game may not have tipped.
+            status = LOST if status_retry == SKIP and data is not None else status_retry
+        if status == SKIP:
             continue
-        (good if aligned else bad).append(f"{event_id}={label}")
+        found[status].append(f"{event_id}={label}")
+    bad, lost, good = found[FAIL], found[LOST], found[PASS]
     if bad:
-        return CheckResult(name, FAIL, "wp/plays: " + "  ".join(bad))
+        return CheckResult(name, FAIL, "wp/plays: " + "  ".join(bad + lost))
+    if lost:
+        return CheckResult(name, LOST, "wp/plays: " + "  ".join(lost + good))
     if not good:
         return CheckResult(name, SKIP, "no live game has a play yet")
     return CheckResult(name, PASS, "wp/plays: " + "  ".join(good))
@@ -573,10 +587,10 @@ def check_postseason_movers(
     is a page that could not be read. Plain data, like every other check in
     this layer — main does the fetching.
 
-    Losing every page on a scored slate FAILS rather than SKIPs: the magnitude
-    check passes off /api/games/upcoming alone, so a SKIP would hide behind its
-    PASS as "OK (1 skipped)" — and the by-eye step this replaced is gone, so
-    nobody would look instead.
+    Losing every page on a scored slate is LOST rather than SKIP: the
+    magnitude check passes off /api/games/upcoming alone, so a SKIP would hide
+    behind its PASS as "OK (1 skipped)" — and the by-eye step this replaced is
+    gone, so nobody would look instead.
 
     Kept ALONGSIDE the magnitude band rather than replacing it: the band is
     measured, and it catches a regular-season-sized score that this check
@@ -637,9 +651,9 @@ def check_postseason_movers(
         return CheckResult(name, PASS, "; ".join(proved + notes))
     if lost:
         # Nothing proved AND evidence was lost — see the docstring on why that
-        # is a failure rather than a skip.
+        # is not a skip.
         return CheckResult(
-            name, FAIL, "no detail page could be read: " + "; ".join(notes)
+            name, LOST, "no detail page could be read: " + "; ".join(notes)
         )
     # Nothing proved but nothing lost either: every score legitimately
     # suppressed its own movers. Unproven, not broken.
@@ -724,6 +738,35 @@ def checks_for_night(
         check_seed_movement(odds, snapshot, playing),
         check_column_suppression(odds),
     ]
+
+
+def verdict(
+    night: str, night_results: list[CheckResult], aux_results: list[CheckResult]
+) -> tuple[list[str], int]:
+    """(summary lines, exit code) for one run. The one place run policy lives.
+
+    Any LOST night check fails the run. Without this, a check that could not
+    read its input would read as a skip, and one sibling PASS would print OK.
+    Aux checks stay out of everything but FAIL (see main on the log read).
+    """
+    failed = [r for r in night_results + aux_results if r.status == FAIL]
+    lost = [r for r in night_results if r.status == LOST]
+    skipped = [r for r in night_results if r.status == SKIP]
+    lines = []
+    if failed:
+        lines.append(f"  {len(failed)} FAILED")
+    if lost:
+        lines.append(
+            f"  {len(lost)} check(s) lost their input — nothing was verified there"
+        )
+    if lines:
+        return lines, 1
+    if not any(r.status == PASS for r in night_results):
+        return [
+            f"  Nothing verified — {len(skipped)} night check(s) skipped on a "
+            f"{night!r} night. This run proves nothing about the live path."
+        ], 0
+    return [f"  OK ({len(skipped)} skipped)"], 0
 
 
 # --- production probe -----------------------------------------------------
@@ -916,20 +959,11 @@ def main() -> int:
         )
         print("         last final, that polling stops.")
 
-    failed = [r for r in results if r.status == FAIL]
-    skipped = [r for r in night_results if r.status == SKIP]
+    lines, code = verdict(night, night_results, aux_results)
     print()
-    if failed:
-        print(f"  {len(failed)} FAILED")
-        return 1
-    if not any(r.status == PASS for r in night_results):
-        print(
-            f"  Nothing verified — {len(skipped)} night check(s) skipped on a "
-            f"{night!r} night. This run proves nothing about the live path."
-        )
-        return 0
-    print(f"  OK ({len(skipped)} skipped)")
-    return 0
+    for line in lines:
+        print(line)
+    return code
 
 
 if __name__ == "__main__":

@@ -15,8 +15,10 @@ from src.api.routes import _importance_movers_html
 
 from scripts.verify_game_night import (
     FAIL,
+    LOST,
     PASS,
     SKIP,
+    CheckResult,
     candidate_baseline_dates,
     daily_run_consumed,
     probed_games,
@@ -33,6 +35,7 @@ from scripts.verify_game_night import (
     classify_night,
     playoffs_column_is_dead,
     seed_movement,
+    verdict,
 )
 
 
@@ -595,7 +598,7 @@ def test_a_team_that_is_not_playing_fails_the_check(movers):
     assert check_postseason_movers([game], {"401900001": html}).status == FAIL
 
 
-def test_losing_every_detail_page_fails_rather_than_skipping():
+def test_losing_every_detail_page_is_lost_rather_than_skipped():
     """Evidence lost is not evidence of health.
 
     The magnitude check passes off /api/games/upcoming alone, so a SKIP here
@@ -604,12 +607,12 @@ def test_losing_every_detail_page_fails_rather_than_skipping():
     runs, an unreadable detail page has to stop the run.
     """
     game = _post(46.8, espn_id="401900001")
-    assert check_postseason_movers([game], ({})).status == FAIL
+    assert check_postseason_movers([game], ({})).status == LOST
 
 
-def test_a_row_without_an_espn_id_also_fails():
+def test_a_row_without_an_espn_id_is_also_lost():
     game = _post(46.8, espn_id=None)
-    assert check_postseason_movers([game], ({})).status == FAIL
+    assert check_postseason_movers([game], ({})).status == LOST
 
 
 def test_one_unreachable_page_beside_a_proved_one_does_not_fail():
@@ -674,10 +677,11 @@ def test_a_postseason_night_runs_the_structural_check():
     assert structural[0].status == PASS
 
 
-def test_a_postseason_night_without_any_pages_fails_the_structural_check():
+def test_a_postseason_night_without_any_pages_fails_the_run():
     """No way to read the page is not evidence the page is right. One rule,
-    no special cases: on a scored postseason slate, unable to read is a
-    failure however it arose."""
+    no special cases: on a scored postseason slate, unable to read is LOST
+    however it arose — and the run fails although the magnitude check,
+    which reads no page, passes beside it."""
     results = checks_for_night(
         "postseason",
         odds=[],
@@ -687,7 +691,9 @@ def test_a_postseason_night_without_any_pages_fails_the_structural_check():
     )
     structural = [r for r in results if "structural" in r.name]
     assert len(structural) == 1
-    assert structural[0].status == FAIL
+    assert structural[0].status == LOST
+    assert any(r.status == PASS for r in results)
+    assert verdict("postseason", results, [])[1] == 1
 
 
 def test_mover_teams_reads_the_names_not_the_percentages():
@@ -736,12 +742,18 @@ def test_wp_check_fails_on_a_sample_that_names_no_real_play():
     assert r.status == FAIL
 
 
-def test_wp_check_fails_when_a_live_game_could_not_be_fetched():
-    # A lost fetch is lost evidence; a SKIP here would hide behind a
-    # sibling check's PASS in main's verdict.
+def test_wp_check_is_lost_when_a_live_game_could_not_be_fetched():
+    # A lost fetch is lost evidence, not a defect ESPN showed us — and not
+    # a SKIP, which would hide behind a sibling check's PASS.
     r = check_wp_matches_plays({"401": _summary(89), "402": None})
-    assert r.status == FAIL
+    assert r.status == LOST
     assert "402" in r.detail
+
+
+def test_a_real_mismatch_outranks_a_lost_game():
+    r = check_wp_matches_plays({"401": _summary(89, n_wp=0), "402": None})
+    assert r.status == FAIL
+    assert "401" in r.detail and "402" in r.detail
 
 
 def test_wp_check_names_only_the_bad_game_among_good_ones():
@@ -791,8 +803,29 @@ def test_wp_check_fails_when_the_mismatch_persists_on_refetch():
     assert r.status == FAIL
 
 
-def test_wp_check_fails_when_the_refetch_is_lost():
+def test_wp_check_is_lost_when_the_refetch_is_lost():
+    # The second payload decides, and there is none.
     r = check_wp_matches_plays({"401": _summary(89, n_wp=88)}, refetch=lambda _: None)
+    assert r.status == LOST
+
+
+@pytest.mark.parametrize("retry", [{"plays": [], "winprobability": []}, {}])
+def test_an_empty_retry_cannot_clear_a_mismatch(retry):
+    # A readable payload with no plays is not evidence about a game that
+    # already had 89 of them.
+    r = check_wp_matches_plays({"401": _summary(89, n_wp=88)}, refetch=lambda _: retry)
+    assert r.status == LOST
+    assert "retry no plays" in r.detail
+
+
+def test_a_lost_first_fetch_that_retries_to_no_plays_is_not_judged():
+    # The game may genuinely not have tipped: nothing to judge, not lost.
+    r = check_wp_matches_plays({"401": None}, refetch=lambda _: _summary(0))
+    assert r.status == SKIP
+
+
+def test_wp_check_fails_when_a_lost_first_fetch_retries_into_a_mismatch():
+    r = check_wp_matches_plays({"401": None}, refetch=lambda _: _summary(89, n_wp=0))
     assert r.status == FAIL
 
 
@@ -804,3 +837,50 @@ def test_wp_check_retries_a_lost_first_fetch():
 def test_wp_check_does_not_refetch_an_aligned_game():
     r = check_wp_matches_plays({"401": _summary(89)}, refetch=_never)
     assert r.status == PASS
+
+
+def test_wp_check_fails_on_a_play_row_with_no_id_key():
+    # The id filter runs before the lookup, so this cannot raise KeyError
+    # today. Pinned because a review misread that line, so a "simplify" could
+    # make the KeyError real.
+    s = _summary(5)
+    del s["plays"][0]["id"]
+    assert check_wp_matches_plays({"401": s}).status == FAIL
+
+
+# --- verdict --------------------------------------------------------------
+# The one place run policy lives. The case it exists for: a check that lost
+# its input must fail the run even when a sibling check passed.
+
+
+def _r(status, name="check"):
+    return CheckResult(name, status, "")
+
+
+def test_a_lost_check_beside_a_pass_fails_the_run():
+    lines, code = verdict("postseason", [_r(PASS), _r(LOST)], [])
+    assert code == 1
+    assert any("lost their input" in ln for ln in lines)
+
+
+def test_a_skip_beside_a_pass_is_still_ok():
+    lines, code = verdict("postseason", [_r(PASS), _r(SKIP)], [])
+    assert code == 0
+    assert lines == ["  OK (1 skipped)"]
+
+
+def test_a_fail_and_a_lost_are_both_reported():
+    lines, code = verdict("live", [_r(FAIL), _r(LOST)], [])
+    assert code == 1
+    assert len(lines) == 2
+
+
+def test_an_aux_fail_still_fails_the_run():
+    _, code = verdict("live", [_r(PASS)], [_r(FAIL)])
+    assert code == 1
+
+
+def test_an_aux_pass_cannot_stand_in_for_the_night_checks():
+    lines, code = verdict("off", [_r(SKIP)], [_r(PASS)])
+    assert code == 0
+    assert "Nothing verified" in lines[0]
