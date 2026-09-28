@@ -1,6 +1,8 @@
 """Tests for ESPN scoreboard event parsing."""
 
-from src.data.espn_api import _parse_event
+import pytest
+
+from src.data.espn_api import _finite_float, _parse_event
 
 
 def _base_event(date: str, time_valid: bool | None = True) -> dict:
@@ -279,3 +281,19 @@ def test_if_necessary_false_for_a_plain_game_note_or_no_note():
         _parse_event(_postseason_event("First Round - Game 1"))["if_necessary"] is False
     )
     assert _parse_event(_base_event("2026-06-30T23:00:00Z"))["if_necessary"] is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "0.5", True, False, float("nan"), float("inf"), float("-inf"), [1.0]],
+)
+def test_finite_float_rejects_non_finite_and_non_numbers(value):
+    assert _finite_float(value) is None
+
+
+@pytest.mark.parametrize(
+    "value, expected", [(0, 0.0), (3, 3.0), (-1.5, -1.5), (0.25, 0.25)]
+)
+def test_finite_float_returns_a_float_with_no_range_check(value, expected):
+    result = _finite_float(value)
+    assert result == expected and type(result) is float

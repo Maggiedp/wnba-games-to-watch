@@ -205,14 +205,22 @@ def _split_values(team: dict, cat_name: str, split_id: str) -> Optional[list]:
     return None
 
 
+def _finite_float(value) -> Optional[float]:
+    """`value` as a float if it is a finite JSON number, else None.
+
+    bool is rejected explicitly (it is an int subclass in Python). No range
+    check: each caller applies its own.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
 def _stat(values: Optional[list], idx: dict[str, int], name: str) -> Optional[float]:
     """A finite float from `values` at the label `name`, or None."""
     if values is None or name not in idx or idx[name] >= len(values):
         return None
-    v = values[idx[name]]
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
-        return None
-    return float(v)
+    return _finite_float(values[idx[name]])
 
 
 def fetch_team_style_stats(season: int) -> list[dict]:
@@ -658,13 +666,10 @@ def _valid_home_pct(value) -> float | None:
 
     ESPN's contract is a JSON number in [0, 1]; anything else (explicit
     null, a string, NaN/inf, or out-of-range) is schema drift we must not
-    trust. bool is rejected explicitly (it's an int subclass in Python).
+    trust.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    if not math.isfinite(value) or not (0.0 <= value <= 1.0):
-        return None
-    return float(value)
+    pct = _finite_float(value)
+    return pct if pct is not None and 0.0 <= pct <= 1.0 else None
 
 
 def fetch_live_win_probability(espn_id: str, timeout: int = 10) -> dict:
