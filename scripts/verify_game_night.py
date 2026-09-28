@@ -27,7 +27,7 @@ import re
 import shutil
 import subprocess
 import time
-from datetime import date as date_cls, timedelta
+from datetime import date as date_cls, datetime, timedelta, timezone
 from typing import Callable, Iterable, NamedTuple
 
 import requests
@@ -47,6 +47,8 @@ PASS, FAIL, SKIP, LOST, INFO = "PASS", "FAIL", "SKIP", "LOST", "INFO"
 
 _BASE_URL = "https://wumbers.com"
 _PROJECT = "wnba-games-to-watch"
+_SERVICE = "wnba-games-to-watch"  # the Cloud Run service; same name as the project
+_REGION = "us-central1"
 _HTTP_TIMEOUT = 30
 
 # A 10k Monte Carlo carries ~±0.5pp of jitter run to run. The live overlay and
@@ -660,13 +662,84 @@ def check_postseason_movers(
     return CheckResult(name, SKIP, "; ".join(benign) or "nothing to read")
 
 
-def check_logs(hours: int = 12) -> CheckResult:
-    name = f"no live-odds: warnings in the last {hours}h"
+def log_window_start(
+    now: datetime, hours: int, revision_created: datetime | None
+) -> datetime:
+    """Start of the warnings window: `hours` back, but never before the serving
+    revision went live. A warning from a REPLACED revision says nothing about
+    the code now serving, and on 2026-09-27 one kept the probe red for hours
+    after the deploy that fixed it."""
+    start = now - timedelta(hours=hours)
+    if revision_created is not None and revision_created > start:
+        return revision_created
+    return start
+
+
+def _gcloud_value(args: list[str]) -> str | None:
+    """First line of a `gcloud ... --format=value(...)` read, or None."""
+    try:
+        out = subprocess.run(
+            ["gcloud", *args, f"--project={_PROJECT}"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    lines = out.stdout.split()
+    return lines[0] if out.returncode == 0 and lines else None
+
+
+def _serving_revision() -> tuple[str, datetime] | None:
+    """(name, creation time) of the revision now serving, or None."""
+    name = _gcloud_value(
+        [
+            "run",
+            "services",
+            "describe",
+            _SERVICE,
+            f"--region={_REGION}",
+            "--format=value(status.latestReadyRevisionName)",
+        ]
+    )
+    if name is None:
+        return None
+    created = _gcloud_value(
+        [
+            "run",
+            "revisions",
+            "describe",
+            name,
+            f"--region={_REGION}",
+            "--format=value(metadata.creationTimestamp)",
+        ]
+    )
+    if created is None:
+        return None
+    return name, datetime.fromisoformat(created)
+
+
+def check_logs(hours: int = 12, now: datetime | None = None) -> CheckResult:
+    name = "no live-odds: warnings in the log window"
     if not shutil.which("gcloud"):
         return CheckResult(name, SKIP, "gcloud not on PATH")
+    now = now or datetime.now(timezone.utc)
+    revision = _serving_revision()
+    start = log_window_start(now, hours, revision[1] if revision else None)
+    stamp = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+    minutes = (now - start).total_seconds() / 60
+    span = f"{minutes:.0f} min" if minutes < 60 else f"{minutes / 60:.1f}h"
+    # The window it actually used: right after a deploy it is short, and a
+    # PASS over a few minutes says little.
+    window = (
+        f"{span} since {revision[0]} went live ({stamp})"
+        if revision and start == revision[1]
+        else f"the last {span}" + ("" if revision else " (serving revision unknown)")
+    )
     filt = (
         'resource.type="cloud_run_revision" '
-        'AND (textPayload:"live-odds:" OR jsonPayload.message:"live-odds:")'
+        'AND (textPayload:"live-odds:" OR jsonPayload.message:"live-odds:") '
+        f'AND timestamp>="{stamp}"'
     )
     try:
         out = subprocess.run(
@@ -691,9 +764,9 @@ def check_logs(hours: int = 12) -> CheckResult:
     lines = [ln for ln in out.stdout.splitlines() if ln.strip()]
     if lines:
         return CheckResult(
-            name, FAIL, f"{len(lines)} warning(s); first: {lines[0][:140]}"
+            name, FAIL, f"{len(lines)} warning(s) in {window}; first: {lines[0][:140]}"
         )
-    return CheckResult(name, PASS, "none")
+    return CheckResult(name, PASS, f"none in {window}")
 
 
 def checks_for_night(

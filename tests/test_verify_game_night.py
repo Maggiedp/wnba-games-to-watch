@@ -7,6 +7,7 @@ nothing and would be indistinguishable from a working live path.
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -28,11 +29,13 @@ from scripts.verify_game_night import (
     mover_teams,
     played_postseason_pairs,
     check_live_flags,
+    check_logs,
     check_repeatability,
     checks_for_night,
     check_seed_movement,
     check_wp_matches_plays,
     classify_night,
+    log_window_start,
     playoffs_column_is_dead,
     seed_movement,
     verdict,
@@ -884,3 +887,82 @@ def test_an_aux_pass_cannot_stand_in_for_the_night_checks():
     lines, code = verdict("off", [_r(SKIP)], [_r(PASS)])
     assert code == 0
     assert "Nothing verified" in lines[0]
+
+
+# --- log window -----------------------------------------------------------
+
+_NOW = datetime(2026, 9, 28, 1, 20, tzinfo=timezone.utc)
+
+
+def test_log_window_starts_at_a_revision_newer_than_the_lookback():
+    created = _NOW - timedelta(minutes=66)
+    assert log_window_start(_NOW, 12, created) == created
+
+
+def test_log_window_keeps_the_full_lookback_for_an_older_revision():
+    created = _NOW - timedelta(days=3)
+    assert log_window_start(_NOW, 12, created) == _NOW - timedelta(hours=12)
+
+
+def test_log_window_keeps_the_full_lookback_when_the_revision_is_unknown():
+    assert log_window_start(_NOW, 12, None) == _NOW - timedelta(hours=12)
+
+
+def _fake_gcloud(
+    monkeypatch,
+    *,
+    revision="rev-00152",
+    created="2026-09-28T00:14:56.060890Z",
+    warnings="",
+    describe_rc=0,
+):
+    """Answer the three gcloud calls check_logs makes; record the log filter."""
+    seen = {}
+
+    def run(cmd, **kwargs):
+        if cmd[1:3] == ["run", "services"]:
+            return SimpleNamespace(
+                returncode=describe_rc, stdout=revision + "\n", stderr="boom"
+            )
+        if cmd[1:3] == ["run", "revisions"]:
+            return SimpleNamespace(returncode=0, stdout=created + "\n", stderr="")
+        seen["filter"] = cmd[3]
+        return SimpleNamespace(returncode=0, stdout=warnings, stderr="")
+
+    monkeypatch.setattr(
+        "scripts.verify_game_night.shutil.which", lambda _: "/bin/gcloud"
+    )
+    monkeypatch.setattr("scripts.verify_game_night.subprocess.run", run)
+    return seen
+
+
+def test_check_logs_reads_only_since_the_serving_revision_went_live(monkeypatch):
+    """A warning logged by a REPLACED revision must not fail tonight's run: the
+    2026-09-27 probe went red on a 14:27 ET warning from the revision that the
+    20:14 ET deploy had just fixed."""
+    seen = _fake_gcloud(monkeypatch)
+    result = check_logs(now=_NOW)
+    assert 'timestamp>="2026-09-28T00:14:56Z"' in seen["filter"]
+    assert result.status == PASS
+    assert "rev-00152" in result.detail and "1.1h" in result.detail
+
+
+def test_check_logs_fails_on_a_warning_inside_the_window(monkeypatch):
+    _fake_gcloud(monkeypatch, warnings="live-odds: live overlay failed\n")
+    result = check_logs(now=_NOW)
+    assert result.status == FAIL
+    assert "live overlay failed" in result.detail and "rev-00152" in result.detail
+
+
+def test_check_logs_falls_back_to_the_full_lookback_and_says_so(monkeypatch):
+    seen = _fake_gcloud(monkeypatch, describe_rc=1)
+    result = check_logs(now=_NOW)
+    assert 'timestamp>="2026-09-27T13:20:00Z"' in seen["filter"]
+    assert result.status == PASS
+    assert "serving revision unknown" in result.detail
+
+
+def test_check_logs_reports_a_short_window_in_minutes(monkeypatch):
+    """Right after a deploy the window is minutes long; "0.0h" would hide that."""
+    _fake_gcloud(monkeypatch, created="2026-09-28T01:17:00Z")
+    assert "3 min since rev-00152" in check_logs(now=_NOW).detail
