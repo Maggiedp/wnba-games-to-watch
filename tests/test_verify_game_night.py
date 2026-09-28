@@ -911,21 +911,24 @@ def test_log_window_keeps_the_full_lookback_when_the_revision_is_unknown():
 def _fake_gcloud(
     monkeypatch,
     *,
-    revision="rev-00152",
-    created="2026-09-28T00:14:56.060890Z",
+    traffic=({"revisionName": "rev-00152", "percent": 100},),
+    created=None,
     warnings="",
     describe_rc=0,
 ):
-    """Answer the three gcloud calls check_logs makes; record the log filter."""
+    """Answer the gcloud calls check_logs makes; record the log filter.
+    `created` maps revision name -> creationTimestamp."""
+    created = created or {"rev-00152": "2026-09-28T00:14:56.060890Z"}
     seen = {}
 
     def run(cmd, **kwargs):
         if cmd[1:3] == ["run", "services"]:
-            return SimpleNamespace(
-                returncode=describe_rc, stdout=revision + "\n", stderr="boom"
-            )
+            body = json.dumps({"status": {"traffic": list(traffic)}})
+            return SimpleNamespace(returncode=describe_rc, stdout=body, stderr="boom")
         if cmd[1:3] == ["run", "revisions"]:
-            return SimpleNamespace(returncode=0, stdout=created + "\n", stderr="")
+            return SimpleNamespace(
+                returncode=0, stdout=created[cmd[4]] + "\n", stderr=""
+            )
         seen["filter"] = cmd[3]
         return SimpleNamespace(returncode=0, stdout=warnings, stderr="")
 
@@ -954,6 +957,50 @@ def test_check_logs_fails_on_a_warning_inside_the_window(monkeypatch):
     assert "live overlay failed" in result.detail and "rev-00152" in result.detail
 
 
+def test_check_logs_after_a_rollback_bounds_by_the_revision_taking_traffic(monkeypatch):
+    """Rolled back to an older revision: the newer one is still the latest READY
+    revision but serves nothing. Bounding by it would hide the warnings of the
+    revision users actually hit (Codex, PR #158)."""
+    seen = _fake_gcloud(
+        monkeypatch,
+        traffic=({"revisionName": "rev-00150", "percent": 100},),
+        created={"rev-00150": "2026-09-25T18:00:00Z"},
+    )
+    result = check_logs(now=_NOW)
+    assert 'timestamp>="2026-09-27T13:20:00Z"' in seen["filter"]
+    assert "serving: rev-00150" in result.detail
+
+
+def test_check_logs_under_split_traffic_starts_at_the_oldest_serving_revision(
+    monkeypatch,
+):
+    seen = _fake_gcloud(
+        monkeypatch,
+        traffic=(
+            {"revisionName": "rev-a", "percent": 50},
+            {"revisionName": "rev-b", "percent": 50},
+        ),
+        created={"rev-a": "2026-09-28T00:14:56Z", "rev-b": "2026-09-28T01:00:00Z"},
+    )
+    result = check_logs(now=_NOW)
+    assert 'timestamp>="2026-09-28T00:14:56Z"' in seen["filter"]
+    assert "rev-a" in result.detail and "rev-b" in result.detail
+
+
+def test_check_logs_ignores_a_tagged_revision_with_no_traffic(monkeypatch):
+    """A --no-traffic deploy adds a tagged 0% entry (percent may be omitted)."""
+    seen = _fake_gcloud(
+        monkeypatch,
+        traffic=(
+            {"revisionName": "rev-new", "tag": "canary"},
+            {"revisionName": "rev-00152", "percent": 100},
+        ),
+    )
+    result = check_logs(now=_NOW)
+    assert 'timestamp>="2026-09-28T00:14:56Z"' in seen["filter"]
+    assert "rev-new" not in result.detail
+
+
 def test_check_logs_falls_back_to_the_full_lookback_and_says_so(monkeypatch):
     seen = _fake_gcloud(monkeypatch, describe_rc=1)
     result = check_logs(now=_NOW)
@@ -964,5 +1011,5 @@ def test_check_logs_falls_back_to_the_full_lookback_and_says_so(monkeypatch):
 
 def test_check_logs_reports_a_short_window_in_minutes(monkeypatch):
     """Right after a deploy the window is minutes long; "0.0h" would hide that."""
-    _fake_gcloud(monkeypatch, created="2026-09-28T01:17:00Z")
+    _fake_gcloud(monkeypatch, created={"rev-00152": "2026-09-28T01:17:00Z"})
     assert "3 min since rev-00152" in check_logs(now=_NOW).detail

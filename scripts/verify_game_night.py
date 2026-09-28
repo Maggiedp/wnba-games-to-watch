@@ -23,6 +23,7 @@ Run from the repo root with the venv active:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -675,8 +676,8 @@ def log_window_start(
     return start
 
 
-def _gcloud_value(args: list[str]) -> str | None:
-    """First line of a `gcloud ... --format=value(...)` read, or None."""
+def _gcloud(args: list[str]) -> str | None:
+    """stdout of a read-only gcloud call, or None if it failed or timed out."""
     try:
         out = subprocess.run(
             ["gcloud", *args, f"--project={_PROJECT}"],
@@ -686,37 +687,48 @@ def _gcloud_value(args: list[str]) -> str | None:
         )
     except subprocess.TimeoutExpired:
         return None
-    lines = out.stdout.split()
-    return lines[0] if out.returncode == 0 and lines else None
+    return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
 
 
-def _serving_revision() -> tuple[str, datetime] | None:
-    """(name, creation time) of the revision now serving, or None."""
-    name = _gcloud_value(
+def _serving_revisions() -> tuple[list[str], datetime] | None:
+    """Names of the revisions taking traffic, and the OLDEST one's creation time.
+
+    Reads `status.traffic`, not `latestReadyRevisionName`: after a rollback or a
+    --no-traffic deploy the latest ready revision serves nothing, and bounding
+    the window by it would hide the warnings of the revision users hit.
+    """
+    raw = _gcloud(
         [
             "run",
             "services",
             "describe",
             _SERVICE,
             f"--region={_REGION}",
-            "--format=value(status.latestReadyRevisionName)",
+            "--format=json(status.traffic)",
         ]
     )
-    if name is None:
+    try:
+        traffic = json.loads(raw)["status"]["traffic"] if raw else []
+    except (ValueError, KeyError, TypeError):
         return None
-    created = _gcloud_value(
-        [
-            "run",
-            "revisions",
-            "describe",
-            name,
-            f"--region={_REGION}",
-            "--format=value(metadata.creationTimestamp)",
-        ]
-    )
-    if created is None:
-        return None
-    return name, datetime.fromisoformat(created)
+    # A tagged 0% entry may omit `percent` entirely.
+    names = [t["revisionName"] for t in traffic if t.get("percent", 0) > 0]
+    created = []
+    for name in names:
+        stamp = _gcloud(
+            [
+                "run",
+                "revisions",
+                "describe",
+                name,
+                f"--region={_REGION}",
+                "--format=value(metadata.creationTimestamp)",
+            ]
+        )
+        if stamp is None:
+            return None
+        created.append(datetime.fromisoformat(stamp))
+    return (names, min(created)) if names else None
 
 
 def check_logs(hours: int = 12, now: datetime | None = None) -> CheckResult:
@@ -724,18 +736,24 @@ def check_logs(hours: int = 12, now: datetime | None = None) -> CheckResult:
     if not shutil.which("gcloud"):
         return CheckResult(name, SKIP, "gcloud not on PATH")
     now = now or datetime.now(timezone.utc)
-    revision = _serving_revision()
-    start = log_window_start(now, hours, revision[1] if revision else None)
+    serving = _serving_revisions()
+    start = log_window_start(now, hours, serving[1] if serving else None)
     stamp = start.strftime("%Y-%m-%dT%H:%M:%SZ")
     minutes = (now - start).total_seconds() / 60
     span = f"{minutes:.0f} min" if minutes < 60 else f"{minutes / 60:.1f}h"
     # The window it actually used: right after a deploy it is short, and a
     # PASS over a few minutes says little.
-    window = (
-        f"{span} since {revision[0]} went live ({stamp})"
-        if revision and start == revision[1]
-        else f"the last {span}" + ("" if revision else " (serving revision unknown)")
-    )
+    if serving is None:
+        window = f"the last {span} (serving revision unknown)"
+    elif start == serving[1]:
+        which = (
+            serving[0][0]
+            if len(serving[0]) == 1
+            else "the oldest of " + ", ".join(serving[0])
+        )
+        window = f"{span} since {which} went live ({stamp})"
+    else:
+        window = f"the last {span} (serving: {', '.join(serving[0])})"
     filt = (
         'resource.type="cloud_run_revision" '
         'AND (textPayload:"live-odds:" OR jsonPayload.message:"live-odds:") '
