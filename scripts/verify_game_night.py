@@ -667,9 +667,14 @@ def log_window_start(
     now: datetime, hours: int, revision_created: datetime | None
 ) -> datetime:
     """Start of the warnings window: `hours` back, but never before the serving
-    revision went live. A warning from a REPLACED revision says nothing about
+    revision was created. A warning from a REPLACED revision says nothing about
     the code now serving, and on 2026-09-27 one kept the probe red for hours
-    after the deploy that fixed it."""
+    after the deploy that fixed it.
+
+    Creation, not traffic assignment: Cloud Run exposes no assignment time. The
+    gap is harmless here, since `live-odds:` warnings come only from requests,
+    and a revision with no traffic gets none (this service never deploys with
+    --no-traffic or tags)."""
     start = now - timedelta(hours=hours)
     if revision_created is not None and revision_created > start:
         return revision_created
@@ -751,7 +756,7 @@ def check_logs(hours: int = 12, now: datetime | None = None) -> CheckResult:
             if len(serving[0]) == 1
             else "the oldest of " + ", ".join(serving[0])
         )
-        window = f"{span} since {which} went live ({stamp})"
+        window = f"{span} since {which} was created ({stamp})"
     else:
         window = f"the last {span} (serving: {', '.join(serving[0])})"
     filt = (
