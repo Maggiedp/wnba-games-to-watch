@@ -88,7 +88,12 @@ def test_live_wp_requires_espn_id_param():
     assert resp.status_code == 422
 
 
-def test_live_wp_endpoint_returns_502_detail():
+def test_live_wp_endpoint_returns_502_detail(caplog):
+    """The cause reaches the browser AND the server log.
+
+    The log half exists because a prod 502 (401918013, 2026-09-28 00:12Z) left
+    only a request-log line and could not be diagnosed.
+    """
     from src.data.espn_api import ESPNAPIError
 
     with patch(
@@ -98,6 +103,7 @@ def test_live_wp_endpoint_returns_502_detail():
         resp = client.get("/api/live-wp?espn_id=401856901")
     assert resp.status_code == 502
     assert "connection refused" in resp.json()["detail"]
+    assert "live-wp: 401856901: connection refused" in caplog.text
 
 
 def test_today_games_calls_fetch_today_game_statuses():
