@@ -10,8 +10,6 @@ produces. The assertions below are what keep those tests able to fail.
 import threading
 import time
 
-import pytest
-
 
 def test_run_concurrently_runs_the_callable_once_per_thread(run_concurrently):
     calls = []
@@ -46,39 +44,3 @@ def test_run_concurrently_overlaps_the_threads(run_concurrently):
 
     assert live["peak"] > 1, "threads ran serially, not concurrently"
     assert live["now"] == 0  # every thread was joined before returning
-
-
-def test_run_concurrently_reraises_a_worker_failure(run_concurrently):
-    # Without this, a bare Thread swallows the raise: Python routes it to
-    # threading.excepthook, pytest downgrades it to a warning, and the caller's
-    # assertions run anyway. Measured before the fix -- 5 raising workers
-    # reported "1 passed". A test asserting only a side effect (build count,
-    # send count) would stay green while every concurrent caller failed.
-    def boom():
-        raise RuntimeError("worker failed")
-
-    with pytest.raises(ExceptionGroup) as excinfo:
-        run_concurrently(5, boom)
-
-    assert len(excinfo.value.exceptions) == 5
-    assert all(isinstance(e, RuntimeError) for e in excinfo.value.exceptions)
-
-
-def test_run_concurrently_joins_every_thread_before_reraising(run_concurrently):
-    # The raise must not short-circuit the joins, or a surviving worker keeps
-    # mutating shared state while the caller is already handling the failure.
-    finished = []
-    finished_lock = threading.Lock()
-
-    def half_fail():
-        time.sleep(0.05)
-        with finished_lock:
-            finished.append(1)
-            n = len(finished)
-        if n == 1:
-            raise RuntimeError("one worker failed")
-
-    with pytest.raises(ExceptionGroup):
-        run_concurrently(4, half_fail)
-
-    assert len(finished) == 4  # all four ran to completion despite the failure

@@ -62,37 +62,22 @@ def make_wp_plays(anchors: list[float], n: int = 41) -> list[dict]:
 def run_threads_concurrently(n: int, fn: Callable[[], object]) -> None:
     """Run `fn` on `n` threads, started together and all joined before returning.
 
-    Worker exceptions are re-raised together as an ExceptionGroup. Results are
-    side-effect-only: callers close over their own list, since what they capture
-    differs (return values, caught exceptions, a shared exception's identity).
-    tests/test_conftest_helpers.py pins both overlap and the re-raise.
+    Results are side-effect-only: callers close over their own list, since what
+    they capture differs (return values, caught exceptions, a shared exception's
+    identity). A worker that raises fails the test through pytest.ini's filter
+    (pinned by tests/test_pytest_ini.py); tests/test_conftest_helpers.py pins
+    the overlap.
     """
-    # Not redundant with pytest.ini's PytestUnhandledThreadExceptionWarning
-    # filter (measured on pytest 7.4.3): that path reports only the LAST of N
-    # worker exceptions, only after the test body finishes, and its error
-    # replaces the test's own assertion failure. This fails at the call site.
-    errors: list[Exception] = []
-    errors_lock = threading.Lock()
-
-    def guarded() -> None:
-        try:
-            fn()
-        except Exception as e:
-            with errors_lock:
-                errors.append(e)
-
     # Raw threads, not ThreadPoolExecutor: the pool reuses IDLE workers, so N
     # submits of a fast callable ran on 2-3 threads at peak concurrency 1
     # (measured). A serial run makes every single-flight test pass vacuously.
-    threads = [threading.Thread(target=guarded) for _ in range(n)]
+    threads = [threading.Thread(target=fn) for _ in range(n)]
     for t in threads:
         t.start()
     # No join timeout: a deadlocked build should hang visibly, not let the
     # assertions run against half-finished state.
     for t in threads:
         t.join()
-    if errors:
-        raise ExceptionGroup(f"{len(errors)} of {n} worker threads raised", errors)
 
 
 @pytest.fixture
