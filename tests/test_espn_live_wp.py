@@ -216,6 +216,14 @@ def test_nan_home_pct_is_dropped():
     assert _home_pcts(result) == [0.3, 0.8]
 
 
+def test_bool_home_pct_is_dropped():
+    """True is an int subclass equal to 1 — it must not pass as a 100% sample."""
+    summary = _summary_with_wp([0.3, True, 0.8])
+    with patch("src.data.espn_api._get", return_value=summary):
+        result = fetch_live_win_probability("401856901")
+    assert _home_pcts(result) == [0.3, 0.8]
+
+
 def test_out_of_range_home_pct_is_dropped():
     summary = _summary_with_wp([0.3, 1.5, 0.8])
     with patch("src.data.espn_api._get", return_value=summary):
