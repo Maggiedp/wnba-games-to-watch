@@ -23,6 +23,7 @@ Run from the repo root with the venv active:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -47,6 +48,8 @@ PASS, FAIL, SKIP, LOST, INFO = "PASS", "FAIL", "SKIP", "LOST", "INFO"
 
 _BASE_URL = "https://wumbers.com"
 _PROJECT = "wnba-games-to-watch"
+_SERVICE = "wnba-games-to-watch"  # the Cloud Run service; same name as the project
+_REGION = "us-central1"
 _HTTP_TIMEOUT = 30
 
 # A 10k Monte Carlo carries ~±0.5pp of jitter run to run. The live overlay and
@@ -660,6 +663,45 @@ def check_postseason_movers(
     return CheckResult(name, SKIP, "; ".join(benign) or "nothing to read")
 
 
+def _gcloud(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess | None:
+    """Run a read-only gcloud command; None if it timed out."""
+    try:
+        return subprocess.run(
+            ["gcloud", *args, f"--project={_PROJECT}"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _serving_revisions() -> list[str] | None:
+    """Revisions taking traffic, or None if the service can't be read.
+
+    Reads `status.traffic`, not `latestReadyRevisionName`: after a rollback or a
+    --no-traffic deploy the latest ready revision serves nothing.
+    """
+    out = _gcloud(
+        [
+            "run",
+            "services",
+            "describe",
+            _SERVICE,
+            f"--region={_REGION}",
+            "--format=json(status.traffic)",
+        ]
+    )
+    if out is None or out.returncode != 0:
+        return None
+    try:
+        traffic = json.loads(out.stdout)["status"]["traffic"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    # A tagged 0% entry may omit `percent` entirely.
+    return [t["revisionName"] for t in traffic if t.get("percent", 0) > 0] or None
+
+
 def check_logs(hours: int = 12) -> CheckResult:
     name = f"no live-odds: warnings in the last {hours}h"
     if not shutil.which("gcloud"):
@@ -668,32 +710,37 @@ def check_logs(hours: int = 12) -> CheckResult:
         'resource.type="cloud_run_revision" '
         'AND (textPayload:"live-odds:" OR jsonPayload.message:"live-odds:")'
     )
-    try:
-        out = subprocess.run(
-            [
-                "gcloud",
-                "logging",
-                "read",
-                filt,
-                f"--freshness={hours}h",
-                "--limit=20",
-                "--format=value(textPayload,jsonPayload.message)",
-                f"--project={_PROJECT}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=90,
-        )
-    except subprocess.TimeoutExpired:
+    # Only the revisions serving now: a warning from a REPLACED revision says
+    # nothing about the code users hit, and on 2026-09-27 one kept this check
+    # red for hours after the deploy that fixed it.
+    serving = _serving_revisions()
+    if serving:
+        revs = " OR ".join(f'resource.labels.revision_name="{r}"' for r in serving)
+        filt += f" AND ({revs})"
+        scope = "serving: " + ", ".join(serving)
+    else:
+        scope = "all revisions; serving revision unknown"
+    out = _gcloud(
+        [
+            "logging",
+            "read",
+            filt,
+            f"--freshness={hours}h",
+            "--limit=20",
+            "--format=value(textPayload,jsonPayload.message)",
+        ],
+        timeout=90,
+    )
+    if out is None:
         return CheckResult(name, SKIP, "gcloud logging read timed out")
     if out.returncode != 0:
         return CheckResult(name, SKIP, f"gcloud failed: {out.stderr.strip()[:120]}")
     lines = [ln for ln in out.stdout.splitlines() if ln.strip()]
     if lines:
         return CheckResult(
-            name, FAIL, f"{len(lines)} warning(s); first: {lines[0][:140]}"
+            name, FAIL, f"{len(lines)} warning(s) ({scope}); first: {lines[0][:140]}"
         )
-    return CheckResult(name, PASS, "none")
+    return CheckResult(name, PASS, f"none ({scope})")
 
 
 def checks_for_night(

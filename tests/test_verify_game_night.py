@@ -28,6 +28,7 @@ from scripts.verify_game_night import (
     mover_teams,
     played_postseason_pairs,
     check_live_flags,
+    check_logs,
     check_repeatability,
     checks_for_night,
     check_seed_movement,
@@ -884,3 +885,102 @@ def test_an_aux_pass_cannot_stand_in_for_the_night_checks():
     lines, code = verdict("off", [_r(SKIP)], [_r(PASS)])
     assert code == 0
     assert "Nothing verified" in lines[0]
+
+
+# --- log read ------------------------------------------------------------
+
+
+def _fake_gcloud(
+    monkeypatch,
+    *,
+    traffic=({"revisionName": "rev-00152", "percent": 100},),
+    describe_rc=0,
+    describe_out=None,
+    warnings="",
+):
+    """Answer check_logs' two gcloud calls; record the log-read command."""
+    seen = {}
+
+    def run(cmd, **kwargs):
+        if cmd[1:3] == ["run", "services"]:
+            body = describe_out or json.dumps({"status": {"traffic": list(traffic)}})
+            return SimpleNamespace(returncode=describe_rc, stdout=body, stderr="")
+        seen["cmd"] = cmd
+        seen["filter"] = cmd[3]
+        return SimpleNamespace(returncode=0, stdout=warnings, stderr="")
+
+    monkeypatch.setattr(
+        "scripts.verify_game_night.shutil.which", lambda _: "/bin/gcloud"
+    )
+    monkeypatch.setattr("scripts.verify_game_night.subprocess.run", run)
+    return seen
+
+
+def test_check_logs_reads_only_the_serving_revision(monkeypatch):
+    """A warning logged by a REPLACED revision must not fail tonight's run: the
+    2026-09-27 probe went red on a warning from the revision that the 20:14 ET
+    deploy had just fixed."""
+    seen = _fake_gcloud(monkeypatch)
+    result = check_logs()
+    assert '(resource.labels.revision_name="rev-00152")' in seen["filter"]
+    assert "--freshness=12h" in seen["cmd"]
+    assert result == CheckResult(
+        "no live-odds: warnings in the last 12h", PASS, "none (serving: rev-00152)"
+    )
+
+
+def test_check_logs_fails_on_a_serving_revision_warning(monkeypatch):
+    _fake_gcloud(monkeypatch, warnings="live-odds: live overlay failed\n")
+    result = check_logs()
+    assert result.status == FAIL
+    assert "live overlay failed" in result.detail and "rev-00152" in result.detail
+
+
+def test_check_logs_after_a_rollback_reads_the_revision_taking_traffic(monkeypatch):
+    """Rolled back: the newer revision is still the latest READY one but serves
+    nothing. Reading it would hide the warnings users actually hit (Codex R1)."""
+    seen = _fake_gcloud(
+        monkeypatch, traffic=({"revisionName": "rev-00150", "percent": 100},)
+    )
+    check_logs()
+    assert '(resource.labels.revision_name="rev-00150")' in seen["filter"]
+
+
+def test_check_logs_under_split_traffic_reads_every_serving_revision(monkeypatch):
+    seen = _fake_gcloud(
+        monkeypatch,
+        traffic=(
+            {"revisionName": "rev-a", "percent": 50},
+            {"revisionName": "rev-b", "percent": 50},
+        ),
+    )
+    check_logs()
+    assert (
+        '(resource.labels.revision_name="rev-a"'
+        ' OR resource.labels.revision_name="rev-b")'
+    ) in seen["filter"]
+
+
+def test_check_logs_ignores_a_tagged_revision_with_no_traffic(monkeypatch):
+    """A --no-traffic deploy adds a tagged 0% entry (percent may be omitted)."""
+    seen = _fake_gcloud(
+        monkeypatch,
+        traffic=(
+            {"revisionName": "rev-new", "tag": "canary"},
+            {"revisionName": "rev-00152", "percent": 100},
+        ),
+    )
+    check_logs()
+    assert "rev-new" not in seen["filter"]
+    assert '(resource.labels.revision_name="rev-00152")' in seen["filter"]
+
+
+@pytest.mark.parametrize(
+    "kw", [{"describe_rc": 1}, {"describe_out": "not json"}, {"traffic": ()}]
+)
+def test_check_logs_reads_all_revisions_when_serving_is_unknown(monkeypatch, kw):
+    seen = _fake_gcloud(monkeypatch, **kw)
+    result = check_logs()
+    assert "revision_name" not in seen["filter"]
+    assert result.status == PASS
+    assert "serving revision unknown" in result.detail
