@@ -28,7 +28,7 @@ import re
 import shutil
 import subprocess
 import time
-from datetime import date as date_cls, datetime, timedelta, timezone
+from datetime import date as date_cls, timedelta
 from typing import Callable, Iterable, NamedTuple
 
 import requests
@@ -663,46 +663,26 @@ def check_postseason_movers(
     return CheckResult(name, SKIP, "; ".join(benign) or "nothing to read")
 
 
-def log_window_start(
-    now: datetime, hours: int, revision_created: datetime | None
-) -> datetime:
-    """Start of the warnings window: `hours` back, but never before the serving
-    revision was created. A warning from a REPLACED revision says nothing about
-    the code now serving, and on 2026-09-27 one kept the probe red for hours
-    after the deploy that fixed it.
-
-    Creation, not traffic assignment: Cloud Run exposes no assignment time. The
-    gap is harmless here, since `live-odds:` warnings come only from requests,
-    and a revision with no traffic gets none (this service never deploys with
-    --no-traffic or tags)."""
-    start = now - timedelta(hours=hours)
-    if revision_created is not None and revision_created > start:
-        return revision_created
-    return start
-
-
-def _gcloud(args: list[str]) -> str | None:
-    """stdout of a read-only gcloud call, or None if it failed or timed out."""
+def _gcloud(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess | None:
+    """Run a read-only gcloud command; None if it timed out."""
     try:
-        out = subprocess.run(
+        return subprocess.run(
             ["gcloud", *args, f"--project={_PROJECT}"],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         return None
-    return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
 
 
-def _serving_revisions() -> tuple[list[str], datetime] | None:
-    """Names of the revisions taking traffic, and the OLDEST one's creation time.
+def _serving_revisions() -> list[str] | None:
+    """Revisions taking traffic, or None if the service can't be read.
 
     Reads `status.traffic`, not `latestReadyRevisionName`: after a rollback or a
-    --no-traffic deploy the latest ready revision serves nothing, and bounding
-    the window by it would hide the warnings of the revision users hit.
+    --no-traffic deploy the latest ready revision serves nothing.
     """
-    raw = _gcloud(
+    out = _gcloud(
         [
             "run",
             "services",
@@ -712,90 +692,55 @@ def _serving_revisions() -> tuple[list[str], datetime] | None:
             "--format=json(status.traffic)",
         ]
     )
+    if out is None or out.returncode != 0:
+        return None
     try:
-        traffic = json.loads(raw)["status"]["traffic"] if raw else []
+        traffic = json.loads(out.stdout)["status"]["traffic"]
     except (ValueError, KeyError, TypeError):
         return None
     # A tagged 0% entry may omit `percent` entirely.
-    names = [t["revisionName"] for t in traffic if t.get("percent", 0) > 0]
-    created = []
-    for name in names:
-        stamp = _gcloud(
-            [
-                "run",
-                "revisions",
-                "describe",
-                name,
-                f"--region={_REGION}",
-                "--format=value(metadata.creationTimestamp)",
-            ]
-        )
-        if stamp is None:
-            return None
-        created.append(datetime.fromisoformat(stamp))
-    return (names, min(created)) if names else None
+    return [t["revisionName"] for t in traffic if t.get("percent", 0) > 0] or None
 
 
-def check_logs(hours: int = 12, now: datetime | None = None) -> CheckResult:
-    name = "no live-odds: warnings in the log window"
+def check_logs(hours: int = 12) -> CheckResult:
+    name = f"no live-odds: warnings in the last {hours}h"
     if not shutil.which("gcloud"):
         return CheckResult(name, SKIP, "gcloud not on PATH")
-    now = now or datetime.now(timezone.utc)
-    serving = _serving_revisions()
-    start = log_window_start(now, hours, serving[1] if serving else None)
-    stamp = start.strftime("%Y-%m-%dT%H:%M:%SZ")
-    minutes = (now - start).total_seconds() / 60
-    span = f"{minutes:.0f} min" if minutes < 60 else f"{minutes / 60:.1f}h"
-    # The window it actually used: right after a deploy it is short, and a
-    # PASS over a few minutes says little.
-    if serving is None:
-        window = f"the last {span} (serving revision unknown)"
-    elif start == serving[1]:
-        which = (
-            serving[0][0]
-            if len(serving[0]) == 1
-            else "the oldest of " + ", ".join(serving[0])
-        )
-        window = f"{span} since {which} was created ({stamp})"
-    else:
-        window = f"the last {span} (serving: {', '.join(serving[0])})"
     filt = (
         'resource.type="cloud_run_revision" '
-        'AND (textPayload:"live-odds:" OR jsonPayload.message:"live-odds:") '
-        f'AND timestamp>="{stamp}"'
+        'AND (textPayload:"live-odds:" OR jsonPayload.message:"live-odds:")'
     )
-    if serving is not None:
-        # The time bound alone is not enough: a revision is created BEFORE
-        # traffic moves to it, and the old one keeps serving (and logging)
-        # until then.
-        revs = " OR ".join(f'resource.labels.revision_name="{r}"' for r in serving[0])
+    # Only the revisions serving now: a warning from a REPLACED revision says
+    # nothing about the code users hit, and on 2026-09-27 one kept this check
+    # red for hours after the deploy that fixed it.
+    serving = _serving_revisions()
+    if serving:
+        revs = " OR ".join(f'resource.labels.revision_name="{r}"' for r in serving)
         filt += f" AND ({revs})"
-    try:
-        out = subprocess.run(
-            [
-                "gcloud",
-                "logging",
-                "read",
-                filt,
-                f"--freshness={hours}h",
-                "--limit=20",
-                "--format=value(textPayload,jsonPayload.message)",
-                f"--project={_PROJECT}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=90,
-        )
-    except subprocess.TimeoutExpired:
+        scope = "serving: " + ", ".join(serving)
+    else:
+        scope = "all revisions; serving revision unknown"
+    out = _gcloud(
+        [
+            "logging",
+            "read",
+            filt,
+            f"--freshness={hours}h",
+            "--limit=20",
+            "--format=value(textPayload,jsonPayload.message)",
+        ],
+        timeout=90,
+    )
+    if out is None:
         return CheckResult(name, SKIP, "gcloud logging read timed out")
     if out.returncode != 0:
         return CheckResult(name, SKIP, f"gcloud failed: {out.stderr.strip()[:120]}")
     lines = [ln for ln in out.stdout.splitlines() if ln.strip()]
     if lines:
         return CheckResult(
-            name, FAIL, f"{len(lines)} warning(s) in {window}; first: {lines[0][:140]}"
+            name, FAIL, f"{len(lines)} warning(s) ({scope}); first: {lines[0][:140]}"
         )
-    return CheckResult(name, PASS, f"none in {window}")
+    return CheckResult(name, PASS, f"none ({scope})")
 
 
 def checks_for_night(

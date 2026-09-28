@@ -7,7 +7,6 @@ nothing and would be indistinguishable from a working live path.
 """
 
 import json
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -35,7 +34,6 @@ from scripts.verify_game_night import (
     check_seed_movement,
     check_wp_matches_plays,
     classify_night,
-    log_window_start,
     playoffs_column_is_dead,
     seed_movement,
     verdict,
@@ -889,46 +887,25 @@ def test_an_aux_pass_cannot_stand_in_for_the_night_checks():
     assert "Nothing verified" in lines[0]
 
 
-# --- log window -----------------------------------------------------------
-
-_NOW = datetime(2026, 9, 28, 1, 20, tzinfo=timezone.utc)
-
-
-def test_log_window_starts_at_a_revision_newer_than_the_lookback():
-    created = _NOW - timedelta(minutes=66)
-    assert log_window_start(_NOW, 12, created) == created
-
-
-def test_log_window_keeps_the_full_lookback_for_an_older_revision():
-    created = _NOW - timedelta(days=3)
-    assert log_window_start(_NOW, 12, created) == _NOW - timedelta(hours=12)
-
-
-def test_log_window_keeps_the_full_lookback_when_the_revision_is_unknown():
-    assert log_window_start(_NOW, 12, None) == _NOW - timedelta(hours=12)
+# --- log read ------------------------------------------------------------
 
 
 def _fake_gcloud(
     monkeypatch,
     *,
     traffic=({"revisionName": "rev-00152", "percent": 100},),
-    created=None,
-    warnings="",
     describe_rc=0,
+    describe_out=None,
+    warnings="",
 ):
-    """Answer the gcloud calls check_logs makes; record the log filter.
-    `created` maps revision name -> creationTimestamp."""
-    created = created or {"rev-00152": "2026-09-28T00:14:56.060890Z"}
+    """Answer check_logs' two gcloud calls; record the log-read command."""
     seen = {}
 
     def run(cmd, **kwargs):
         if cmd[1:3] == ["run", "services"]:
-            body = json.dumps({"status": {"traffic": list(traffic)}})
-            return SimpleNamespace(returncode=describe_rc, stdout=body, stderr="boom")
-        if cmd[1:3] == ["run", "revisions"]:
-            return SimpleNamespace(
-                returncode=0, stdout=created[cmd[4]] + "\n", stderr=""
-            )
+            body = describe_out or json.dumps({"status": {"traffic": list(traffic)}})
+            return SimpleNamespace(returncode=describe_rc, stdout=body, stderr="")
+        seen["cmd"] = cmd
         seen["filter"] = cmd[3]
         return SimpleNamespace(returncode=0, stdout=warnings, stderr="")
 
@@ -939,57 +916,49 @@ def _fake_gcloud(
     return seen
 
 
-def test_check_logs_reads_only_since_the_serving_revision_went_live(monkeypatch):
+def test_check_logs_reads_only_the_serving_revision(monkeypatch):
     """A warning logged by a REPLACED revision must not fail tonight's run: the
-    2026-09-27 probe went red on a 14:27 ET warning from the revision that the
-    20:14 ET deploy had just fixed."""
+    2026-09-27 probe went red on a warning from the revision that the 20:14 ET
+    deploy had just fixed."""
     seen = _fake_gcloud(monkeypatch)
-    result = check_logs(now=_NOW)
-    assert 'timestamp>="2026-09-28T00:14:56Z"' in seen["filter"]
+    result = check_logs()
     assert '(resource.labels.revision_name="rev-00152")' in seen["filter"]
-    assert result.status == PASS
-    assert "rev-00152" in result.detail and "1.1h" in result.detail
+    assert "--freshness=12h" in seen["cmd"]
+    assert result == CheckResult(
+        "no live-odds: warnings in the last 12h", PASS, "none (serving: rev-00152)"
+    )
 
 
-def test_check_logs_fails_on_a_warning_inside_the_window(monkeypatch):
+def test_check_logs_fails_on_a_serving_revision_warning(monkeypatch):
     _fake_gcloud(monkeypatch, warnings="live-odds: live overlay failed\n")
-    result = check_logs(now=_NOW)
+    result = check_logs()
     assert result.status == FAIL
     assert "live overlay failed" in result.detail and "rev-00152" in result.detail
 
 
-def test_check_logs_after_a_rollback_bounds_by_the_revision_taking_traffic(monkeypatch):
-    """Rolled back to an older revision: the newer one is still the latest READY
-    revision but serves nothing. Bounding by it would hide the warnings of the
-    revision users actually hit (Codex, PR #158)."""
+def test_check_logs_after_a_rollback_reads_the_revision_taking_traffic(monkeypatch):
+    """Rolled back: the newer revision is still the latest READY one but serves
+    nothing. Reading it would hide the warnings users actually hit (Codex R1)."""
     seen = _fake_gcloud(
-        monkeypatch,
-        traffic=({"revisionName": "rev-00150", "percent": 100},),
-        created={"rev-00150": "2026-09-25T18:00:00Z"},
+        monkeypatch, traffic=({"revisionName": "rev-00150", "percent": 100},)
     )
-    result = check_logs(now=_NOW)
-    assert 'timestamp>="2026-09-27T13:20:00Z"' in seen["filter"]
-    assert "serving: rev-00150" in result.detail
+    check_logs()
+    assert '(resource.labels.revision_name="rev-00150")' in seen["filter"]
 
 
-def test_check_logs_under_split_traffic_starts_at_the_oldest_serving_revision(
-    monkeypatch,
-):
+def test_check_logs_under_split_traffic_reads_every_serving_revision(monkeypatch):
     seen = _fake_gcloud(
         monkeypatch,
         traffic=(
             {"revisionName": "rev-a", "percent": 50},
             {"revisionName": "rev-b", "percent": 50},
         ),
-        created={"rev-a": "2026-09-28T00:14:56Z", "rev-b": "2026-09-28T01:00:00Z"},
     )
-    result = check_logs(now=_NOW)
-    assert 'timestamp>="2026-09-28T00:14:56Z"' in seen["filter"]
+    check_logs()
     assert (
         '(resource.labels.revision_name="rev-a"'
         ' OR resource.labels.revision_name="rev-b")'
     ) in seen["filter"]
-    assert "rev-a" in result.detail and "rev-b" in result.detail
 
 
 def test_check_logs_ignores_a_tagged_revision_with_no_traffic(monkeypatch):
@@ -1001,31 +970,17 @@ def test_check_logs_ignores_a_tagged_revision_with_no_traffic(monkeypatch):
             {"revisionName": "rev-00152", "percent": 100},
         ),
     )
-    result = check_logs(now=_NOW)
-    assert 'timestamp>="2026-09-28T00:14:56Z"' in seen["filter"]
-    assert "rev-new" not in seen["filter"] and "rev-new" not in result.detail
+    check_logs()
+    assert "rev-new" not in seen["filter"]
+    assert '(resource.labels.revision_name="rev-00152")' in seen["filter"]
 
 
-def test_check_logs_falls_back_to_the_full_lookback_and_says_so(monkeypatch):
-    seen = _fake_gcloud(monkeypatch, describe_rc=1)
-    result = check_logs(now=_NOW)
-    assert 'timestamp>="2026-09-27T13:20:00Z"' in seen["filter"]
+@pytest.mark.parametrize(
+    "kw", [{"describe_rc": 1}, {"describe_out": "not json"}, {"traffic": ()}]
+)
+def test_check_logs_reads_all_revisions_when_serving_is_unknown(monkeypatch, kw):
+    seen = _fake_gcloud(monkeypatch, **kw)
+    result = check_logs()
     assert "revision_name" not in seen["filter"]
     assert result.status == PASS
     assert "serving revision unknown" in result.detail
-
-
-def test_check_logs_reports_a_short_window_in_minutes(monkeypatch):
-    """Right after a deploy the window is minutes long; "0.0h" would hide that."""
-    _fake_gcloud(monkeypatch, created={"rev-00152": "2026-09-28T01:17:00Z"})
-    assert "3 min since rev-00152" in check_logs(now=_NOW).detail
-
-
-def test_check_logs_excludes_the_old_revision_during_the_rollout_gap(monkeypatch):
-    """A revision is CREATED before traffic moves to it; until then the old
-    revision still serves and can log after the new one's timestamp. The
-    revision predicate, not the time bound, is what keeps those out (Codex R2)."""
-    seen = _fake_gcloud(monkeypatch)
-    check_logs(now=_NOW)
-    assert "rev-00151" not in seen["filter"]
-    assert seen["filter"].count("resource.labels.revision_name=") == 1
