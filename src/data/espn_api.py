@@ -205,7 +205,7 @@ def _split_values(team: dict, cat_name: str, split_id: str) -> Optional[list]:
     return None
 
 
-def _finite_float(value) -> float | None:
+def _finite_float(value) -> Optional[float]:
     """`value` as a float if it is a finite JSON number, else None.
 
     bool is rejected explicitly (it is an int subclass in Python). No range
@@ -666,7 +666,7 @@ def _valid_home_pct(value) -> float | None:
 
     ESPN's contract is a JSON number in [0, 1]; anything else (explicit
     null, a string, NaN/inf, or out-of-range) is schema drift we must not
-    trust. bool is rejected explicitly (it's an int subclass in Python).
+    trust.
     """
     pct = _finite_float(value)
     return pct if pct is not None and 0.0 <= pct <= 1.0 else None

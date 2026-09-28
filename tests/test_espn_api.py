@@ -1,7 +1,5 @@
 """Tests for ESPN scoreboard event parsing."""
 
-import math
-
 import pytest
 
 from src.data.espn_api import _finite_float, _parse_event
@@ -286,11 +284,10 @@ def test_if_necessary_false_for_a_plain_game_note_or_no_note():
 
 
 @pytest.mark.parametrize(
-    "value", [None, "0.5", True, False, float("nan"), float("inf"), -math.inf, [1.0]]
+    "value",
+    [None, "0.5", True, False, float("nan"), float("inf"), float("-inf"), [1.0]],
 )
 def test_finite_float_rejects_non_finite_and_non_numbers(value):
-    """bool is rejected even though it is an int subclass: ESPN never sends a
-    boolean where a number belongs, so one there is schema drift."""
     assert _finite_float(value) is None
 
 
