@@ -10,6 +10,7 @@ from src.db.queries import (
     upsert_game_shape,
     upsert_team,
 )
+from tests.conftest import seed_two_teams
 
 
 def _seed_shape(env, espn_id="401", season=2026):
@@ -84,18 +85,17 @@ def test_get_team_abbrev_map(env):
 
 def test_get_completed_games_missing_shape_excludes_shaped(env):
     session = env.get_session()
-    a = upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
-    b = upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    a, b = seed_two_teams(session, full_names=True)
     session.commit()
     upsert_game(
         session,
-        team_a_id=a.id,
-        team_b_id=b.id,
+        team_a_id=a,
+        team_b_id=b,
         date="2026-08-15",
         time="",
         broadcaster="",
         espn_id="401",
-        winner_id=a.id,
+        winner_id=a,
         season_type=2,
     )
     session.commit()
@@ -129,29 +129,28 @@ def test_get_completed_games_missing_shape_excludes_shaped(env):
 
 def test_get_completed_games_missing_shape_rotates_by_attempt(env):
     session = env.get_session()
-    a = upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
-    b = upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    a, b = seed_two_teams(session, full_names=True)
     session.commit()
     upsert_game(
         session,
-        team_a_id=a.id,
-        team_b_id=b.id,
+        team_a_id=a,
+        team_b_id=b,
         date="2026-06-10",
         time="",
         broadcaster="",
         espn_id="older",
-        winner_id=a.id,
+        winner_id=a,
         season_type=2,
     )
     newer = upsert_game(
         session,
-        team_a_id=a.id,
-        team_b_id=b.id,
+        team_a_id=a,
+        team_b_id=b,
         date="2026-08-15",
         time="",
         broadcaster="",
         espn_id="newer",
-        winner_id=a.id,
+        winner_id=a,
         season_type=2,
     )
     session.commit()

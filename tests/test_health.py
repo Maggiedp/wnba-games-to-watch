@@ -12,7 +12,8 @@ AGE, which is what this endpoint publishes.
 from datetime import datetime, timedelta
 
 from src.data.espn_api import ET
-from src.db.queries import upsert_game, upsert_playoff_probability, upsert_team
+from src.db.queries import upsert_game, upsert_playoff_probability
+from tests.conftest import seed_two_teams
 
 
 def _at(hour: int, day_offset: int = 0) -> datetime:
@@ -30,15 +31,6 @@ def _freeze(monkeypatch, now: datetime) -> None:
     import src.api.app as app_module
 
     monkeypatch.setattr(app_module, "now_et", lambda: now)
-
-
-def _seed_teams(session, env) -> tuple[int, int]:
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    return (
-        session.query(env.Team).filter_by(name="Aces").one().id,
-        session.query(env.Team).filter_by(name="Liberty").one().id,
-    )
 
 
 def _seed_game(session, a_id: int, b_id: int, date: str) -> None:
@@ -67,7 +59,7 @@ def _seed_snapshot(session, team_id: int, date: str) -> None:
 def test_todays_snapshot_after_the_run_window_is_ok(env, client, monkeypatch):
     """The healthy case: the 6 AM job wrote today, and it is past 08:00 ET."""
     session = env.get_session()
-    a_id, b_id = _seed_teams(session, env)
+    a_id, b_id = seed_two_teams(session)
     _seed_game(session, a_id, b_id, "2026-09-17")
     _seed_snapshot(session, a_id, "2026-09-17")
     session.close()
@@ -86,7 +78,7 @@ def test_missing_todays_snapshot_after_the_run_window_is_stale(
 ):
     """The incident, day one: the job ran at 6 AM and wrote nothing."""
     session = env.get_session()
-    a_id, b_id = _seed_teams(session, env)
+    a_id, b_id = seed_two_teams(session)
     _seed_game(session, a_id, b_id, "2026-09-17")
     _seed_snapshot(session, a_id, "2026-09-16")
     session.close()
@@ -102,7 +94,7 @@ def test_missing_todays_snapshot_after_the_run_window_is_stale(
 def test_yesterdays_snapshot_before_the_run_window_is_ok(env, client, monkeypatch):
     """Pre-06:00 ET, yesterday's row IS the freshest possible answer."""
     session = env.get_session()
-    a_id, b_id = _seed_teams(session, env)
+    a_id, b_id = seed_two_teams(session)
     _seed_game(session, a_id, b_id, "2026-09-17")
     _seed_snapshot(session, a_id, "2026-09-16")
     session.close()
@@ -117,7 +109,7 @@ def test_yesterdays_snapshot_before_the_run_window_is_ok(env, client, monkeypatc
 def test_two_day_old_snapshot_before_the_run_window_is_stale(env, client, monkeypatch):
     """The incident, day two: even the pre-run tolerance is exhausted."""
     session = env.get_session()
-    a_id, b_id = _seed_teams(session, env)
+    a_id, b_id = seed_two_teams(session)
     _seed_game(session, a_id, b_id, "2026-09-17")
     _seed_snapshot(session, a_id, "2026-09-15")
     session.close()
@@ -132,7 +124,7 @@ def test_two_day_old_snapshot_before_the_run_window_is_stale(env, client, monkey
 def test_no_snapshot_at_all_while_armed_is_stale(env, client, monkeypatch):
     """An empty table must not read as healthy — absence is the worst case."""
     session = env.get_session()
-    a_id, b_id = _seed_teams(session, env)
+    a_id, b_id = seed_two_teams(session)
     _seed_game(session, a_id, b_id, "2026-09-17")
     session.close()
     _freeze(monkeypatch, _at(9))
@@ -149,7 +141,7 @@ def test_offseason_disarms_the_check(env, client, monkeypatch):
     correct steady state, not an outage. Without this the alert would fire
     every day from November until the next schedule is published."""
     session = env.get_session()
-    a_id, b_id = _seed_teams(session, env)
+    a_id, b_id = seed_two_teams(session)
     _seed_game(session, a_id, b_id, "2026-09-17")
     _seed_snapshot(session, a_id, "2026-09-17")
     session.close()
@@ -172,7 +164,7 @@ def test_a_mid_season_break_stays_armed(env, client, monkeypatch):
     exists to break.
     """
     session = env.get_session()
-    a_id, b_id = _seed_teams(session, env)
+    a_id, b_id = seed_two_teams(session)
     _seed_game(session, a_id, b_id, "2026-08-30")  # last before the break
     _seed_game(session, a_id, b_id, "2026-09-17")  # first after it
     _seed_snapshot(session, a_id, "2026-09-06")
@@ -190,7 +182,7 @@ def test_no_games_left_in_the_season_disarms_the_check(env, client, monkeypatch)
     remains in the fetch range, so the job writes nothing and there is nothing
     to be stale about -- the other side of the break case above."""
     session = env.get_session()
-    a_id, b_id = _seed_teams(session, env)
+    a_id, b_id = seed_two_teams(session)
     _seed_game(session, a_id, b_id, "2026-10-20")
     _seed_snapshot(session, a_id, "2026-10-20")
     session.close()
@@ -208,7 +200,7 @@ def test_an_upcoming_game_arms_the_check_before_it_is_played(env, client, monkey
     what kept it armed during the incident: the stale rows still knew games
     were coming."""
     session = env.get_session()
-    a_id, b_id = _seed_teams(session, env)
+    a_id, b_id = seed_two_teams(session)
     _seed_game(session, a_id, b_id, "2026-09-19")
     _seed_snapshot(session, a_id, "2026-09-15")
     session.close()
@@ -225,7 +217,7 @@ def test_health_always_returns_200(env, client, monkeypatch):
     data problem, not a server error, and a 5xx here would pollute Cloud Run's
     own error metrics."""
     session = env.get_session()
-    a_id, b_id = _seed_teams(session, env)
+    a_id, b_id = seed_two_teams(session)
     _seed_game(session, a_id, b_id, "2026-09-17")
     session.close()
     _freeze(monkeypatch, _at(9))

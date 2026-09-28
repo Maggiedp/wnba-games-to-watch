@@ -19,6 +19,7 @@ from src.db.queries import (
     upsert_team,
 )
 from src.db.schema import Base, Game
+from tests.conftest import seed_two_teams
 
 
 @pytest.fixture
@@ -333,10 +334,7 @@ def test_format_games_response_game_status_none_when_no_dict(session, team_ids):
 def test_completed_endpoint_returns_excitement_sorted_games(env, client):
     """GET /api/games/completed returns 2026 completed games sorted by excitement desc."""
     session = env.get_session()
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    team_a_id = session.query(env.Team).filter_by(name="Aces").one().id
-    team_b_id = session.query(env.Team).filter_by(name="Liberty").one().id
+    team_a_id, team_b_id = seed_two_teams(session)
 
     for date, excitement in [
         ("2026-05-20", 3.0),
@@ -386,10 +384,7 @@ def test_completed_endpoint_includes_null_excitement_sorted_last(env, client):
     after games that have a score. Otherwise an ESPN outage silently
     deletes real completed games from the user-visible list."""
     session = env.get_session()
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(env.Team).filter_by(name="Aces").one().id
-    b = session.query(env.Team).filter_by(name="Liberty").one().id
+    a, b = seed_two_teams(session)
 
     # Two scored games + one NULL-excitement.
     for date, exc in [("2026-05-20", 4.0), ("2026-05-21", 6.0), ("2026-05-22", None)]:
@@ -434,10 +429,7 @@ def test_completed_endpoint_uses_game_broadcaster_over_stale_ranking(env, client
     pre-game scoring time. The archive must serve the Game value so the
     list and the filter agree with reality after a network change."""
     session = env.get_session()
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(env.Team).filter_by(name="Aces").one().id
-    b = session.query(env.Team).filter_by(name="Liberty").one().id
+    a, b = seed_two_teams(session)
 
     # Game (source of truth) shows the corrected broadcaster; DailyRanking
     # has the stale pre-game value.
@@ -493,10 +485,7 @@ def test_completed_endpoint_includes_orphan_games_without_ranking(env, client):
     still appear in /api/games/completed (with None scored fields), so the
     archive doesn't silently hide games on a missed daily-update day."""
     session = env.get_session()
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(env.Team).filter_by(name="Aces").one().id
-    b = session.query(env.Team).filter_by(name="Liberty").one().id
+    a, b = seed_two_teams(session)
 
     # Orphan: completed + has excitement, no DailyRanking row.
     session.add(
@@ -532,10 +521,7 @@ def test_completed_endpoint_includes_orphan_games_without_ranking(env, client):
 def test_filter_endpoint_mode_completed(env, client):
     """/api/games/filter?mode=completed&broadcaster=ION restricts to completed ION games."""
     session = env.get_session()
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(env.Team).filter_by(name="Aces").one().id
-    b = session.query(env.Team).filter_by(name="Liberty").one().id
+    a, b = seed_two_teams(session)
 
     # Completed ION game — past date, would be excluded by date >= today filter.
     session.add(
@@ -677,10 +663,7 @@ def test_format_games_response_clears_both_time_fields_on_tbd(session, team_ids)
 def test_playoff_odds_endpoint_shape_and_sort(env, client):
     """GET /api/playoff-odds returns 4 round probs sorted by make_playoffs_prob desc."""
     session = env.get_session()
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a_id = session.query(env.Team).filter_by(name="Aces").one().id
-    b_id = session.query(env.Team).filter_by(name="Liberty").one().id
+    a_id, b_id = seed_two_teams(session)
 
     today = today_et()
     upsert_playoff_probability(
@@ -740,10 +723,7 @@ def test_upcoming_endpoint_includes_yesterday_et_for_west_coast_viewers(
     monkeypatch.setattr("src.api.app.today_et", lambda: "2026-05-22")
     monkeypatch.setattr("src.data.espn_api.today_et", lambda: "2026-05-22")
     session = env.get_session()
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(env.Team).filter_by(name="Aces").one().id
-    b = session.query(env.Team).filter_by(name="Liberty").one().id
+    a, b = seed_two_teams(session)
 
     # Three games: yesterday-ET (boundary), today-ET, tomorrow-ET.
     for date in ("2026-05-21", "2026-05-22", "2026-05-23"):
@@ -1317,10 +1297,7 @@ def test_detail_page_does_not_pregame_poll_a_non_today_game(session, team_ids):
 def test_playoff_odds_endpoint_includes_wl_record(env, client):
     """GET /api/playoff-odds carries regular-season wins/losses per team."""
     session = env.get_session()
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a_id = session.query(env.Team).filter_by(name="Aces").one().id
-    b_id = session.query(env.Team).filter_by(name="Liberty").one().id
+    a_id, b_id = seed_two_teams(session)
 
     today = today_et()
     upsert_playoff_probability(
@@ -1693,18 +1670,13 @@ def test_shape_svg_css_is_shared_across_replay_and_homepage():
 
 def test_game_detail_route_serves_shape_section(env, client):
     session = env.get_session()
-    a = upsert_team(
-        session, name="Las Vegas Aces", abbreviation="LV", logo_url="", bpi_rating=0.0
-    )
-    b = upsert_team(
-        session, name="New York Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0
-    )
+    a, b = seed_two_teams(session, full_names=True)
     session.commit()
     date = today_et()
     upsert_game(
         session,
-        team_a_id=a.id,
-        team_b_id=b.id,
+        team_a_id=a,
+        team_b_id=b,
         date=date,
         time="7:00 PM ET",
         broadcaster="ION",
@@ -1762,10 +1734,7 @@ def test_thin_curve_returns_short_curve_unchanged():
 def _seed_completed_game(env, *, date, espn_id, excitement=5.0):
     """Seed one completed 2026 game (Game + DailyRanking) and return team ids."""
     session = env.get_session()
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(env.Team).filter_by(name="Aces").one().id
-    b = session.query(env.Team).filter_by(name="Liberty").one().id
+    a, b = seed_two_teams(session)
     session.add(
         Game(
             team_a_id=a,

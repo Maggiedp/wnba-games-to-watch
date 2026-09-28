@@ -18,6 +18,7 @@ from src.db.queries import (
     upsert_team,
 )
 from src.db.schema import Base, DailyRanking, Game, PlayoffProbability
+from tests.conftest import seed_two_teams
 
 
 @pytest.fixture
@@ -850,10 +851,7 @@ def test_completed_archive_keeps_scores_after_rekey(env, client):
     endpoint would synthesize a None-scored ranking — permanent
     degradation with no automatic rebuild path."""
     session = env.get_session()
-    upsert_team(session, name="Aces", abbreviation="LV", logo_url="", bpi_rating=0.0)
-    upsert_team(session, name="Liberty", abbreviation="NY", logo_url="", bpi_rating=0.0)
-    a = session.query(env.Team).filter_by(name="Aces").one().id
-    b = session.query(env.Team).filter_by(name="Liberty").one().id
+    a, b = seed_two_teams(session)
 
     # Final game with a fully-stored ranking.
     session.add(

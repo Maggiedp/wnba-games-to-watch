@@ -1,21 +1,21 @@
 from src.constants import GameStatus
-from src.db.queries import upsert_game, upsert_team
+from src.db.queries import upsert_game
+from tests.conftest import seed_two_teams
 
 
 def test_populate_game_shapes_stores_row(env, monkeypatch, wp_plays):
     session = env.get_session()
-    a = upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
-    b = upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    a, b = seed_two_teams(session, full_names=True)
     session.commit()
     upsert_game(
         session,
-        team_a_id=a.id,
-        team_b_id=b.id,
+        team_a_id=a,
+        team_b_id=b,
         date="2026-08-15",
         time="",
         broadcaster="",
         espn_id="401",
-        winner_id=a.id,
+        winner_id=a,
         season_type=2,
     )
     session.commit()
@@ -49,18 +49,17 @@ def test_populate_logs_warning_when_coverage_gate_rejects(
     # naming the espn_id, play count, and span — a systemic ESPN feed change
     # should be visible in the logs, not just a shrinking stored count.
     session = env.get_session()
-    a = upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
-    b = upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    a, b = seed_two_teams(session, full_names=True)
     session.commit()
     upsert_game(
         session,
-        team_a_id=a.id,
-        team_b_id=b.id,
+        team_a_id=a,
+        team_b_id=b,
         date="2026-08-15",
         time="",
         broadcaster="",
         espn_id="401",
-        winner_id=a.id,
+        winner_id=a,
         season_type=2,
     )
     session.commit()

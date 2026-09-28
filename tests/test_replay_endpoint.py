@@ -1,5 +1,6 @@
 from src.data.espn_api import today_et
 from src.db.queries import upsert_game_shape
+from tests.conftest import seed_two_teams
 
 
 def _seed(env, espn_id, season, date, excitement=5.0):
@@ -97,20 +98,19 @@ def test_replay_skips_unparseable_curve(env, client):
 
 
 def test_replay_has_detail_true_only_when_game_in_table(env, client):
-    from src.db.queries import upsert_game, upsert_team
+    from src.db.queries import upsert_game
 
     session = env.get_session()
-    a = upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
-    b = upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    a, b = seed_two_teams(session, full_names=True)
     upsert_game(
         session,
-        team_a_id=a.id,
-        team_b_id=b.id,
+        team_a_id=a,
+        team_b_id=b,
         date="2026-08-15",
         time="",
         broadcaster="",
         espn_id="indb",
-        winner_id=a.id,
+        winner_id=a,
         season_type=2,
     )
     session.commit()
