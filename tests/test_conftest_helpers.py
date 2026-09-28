@@ -7,10 +7,13 @@ vacuously, since `builds["n"] == 1` is exactly what a single serial caller
 produces. The assertions below are what keep those tests able to fail.
 """
 
+import os
+import shutil
+import subprocess
+import sys
 import threading
 import time
-
-import pytest
+from pathlib import Path
 
 
 def test_run_concurrently_runs_the_callable_once_per_thread(run_concurrently):
@@ -48,37 +51,35 @@ def test_run_concurrently_overlaps_the_threads(run_concurrently):
     assert live["now"] == 0  # every thread was joined before returning
 
 
-def test_run_concurrently_reraises_a_worker_failure(run_concurrently):
-    # Without this, a bare Thread swallows the raise: Python routes it to
-    # threading.excepthook, pytest downgrades it to a warning, and the caller's
-    # assertions run anyway. Measured before the fix -- 5 raising workers
-    # reported "1 passed". A test asserting only a side effect (build count,
-    # send count) would stay green while every concurrent caller failed.
-    def boom():
-        raise RuntimeError("worker failed")
+def test_a_raising_worker_fails_the_test_even_when_its_assertions_pass(tmp_path):
+    # A bare Thread SWALLOWS whatever its target raises: Python routes it to
+    # threading.excepthook and pytest downgrades it to a warning, so a test
+    # asserting only a side effect (a build count, a send count) stays green
+    # while every concurrent caller died. The helper no longer catches worker
+    # exceptions itself, so pytest.ini's filter is the ONLY thing that turns
+    # that warning into a failure. Run it against the repo's real pytest.ini in
+    # a child session, with workers that raise and assertions that pass.
+    repo = Path(__file__).resolve().parent.parent
+    shutil.copy(repo / "pytest.ini", tmp_path / "pytest.ini")
+    (tmp_path / "test_inner.py").write_text(
+        "from tests.conftest import run_threads_concurrently\n"
+        "\n"
+        "def test_inner():\n"
+        "    def boom():\n"
+        "        raise RuntimeError('worker failed')\n"
+        "    run_threads_concurrently(5, boom)\n"
+        "    assert True\n"
+    )
 
-    with pytest.raises(ExceptionGroup) as excinfo:
-        run_concurrently(5, boom)
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "test_inner.py"],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(repo)},
+        capture_output=True,
+        text=True,
+    )
 
-    assert len(excinfo.value.exceptions) == 5
-    assert all(isinstance(e, RuntimeError) for e in excinfo.value.exceptions)
-
-
-def test_run_concurrently_joins_every_thread_before_reraising(run_concurrently):
-    # The raise must not short-circuit the joins, or a surviving worker keeps
-    # mutating shared state while the caller is already handling the failure.
-    finished = []
-    finished_lock = threading.Lock()
-
-    def half_fail():
-        time.sleep(0.05)
-        with finished_lock:
-            finished.append(1)
-            n = len(finished)
-        if n == 1:
-            raise RuntimeError("one worker failed")
-
-    with pytest.raises(ExceptionGroup):
-        run_concurrently(4, half_fail)
-
-    assert len(finished) == 4  # all four ran to completion despite the failure
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "1 failed" in result.stdout
+    # Every worker's exception is reported, not only the last one.
+    assert result.stdout.count("RuntimeError: worker failed") >= 5
