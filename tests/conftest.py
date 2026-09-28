@@ -164,3 +164,16 @@ def seed_shots_for_recompute(session, *, n: int = 120, athlete_id: str = "10"):
             commit=False,
         )
     session.commit()
+
+
+def seed_two_teams(session, *, full_names: bool = False) -> tuple[int, int]:
+    """Seed the Aces (LV) and the Liberty (NY) at BPI 0.0; return their ids,
+    Aces first. `full_names` uses ESPN's display names ("Las Vegas Aces" /
+    "New York Liberty") for tests that resolve teams the way ingest does."""
+    from src.db.queries import upsert_team
+
+    a, b = ("Las Vegas Aces", "New York Liberty") if full_names else ("Aces", "Liberty")
+    return (
+        upsert_team(session, name=a, abbreviation="LV", bpi_rating=0.0).id,
+        upsert_team(session, name=b, abbreviation="NY", bpi_rating=0.0).id,
+    )

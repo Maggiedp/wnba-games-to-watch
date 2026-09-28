@@ -13,20 +13,7 @@ import pytest
 
 from scripts.backfill_importance import rebuild_date
 from src.db.queries import upsert_daily_ranking, upsert_game, upsert_team
-
-
-def _two_teams(session):
-    a = upsert_team(
-        session, name="Las Vegas Aces", abbreviation="LV", logo_url="", bpi_rating=0.0
-    )
-    b = upsert_team(
-        session,
-        name="New York Liberty",
-        abbreviation="NY",
-        logo_url="",
-        bpi_rating=0.0,
-    )
-    return a.id, b.id
+from tests.conftest import seed_two_teams
 
 
 def test_rebuild_date_rewrites_importance_and_overall_consistently(env):
@@ -34,7 +21,7 @@ def test_rebuild_date_rewrites_importance_and_overall_consistently(env):
     and overall_score stays derived from the CURRENT quality + importance —
     the two must never be rewritten out of step."""
     session = env.get_session()
-    a_id, b_id = _two_teams(session)
+    a_id, b_id = seed_two_teams(session, full_names=True)
     upsert_game(
         session,
         team_a_id=a_id,
@@ -101,7 +88,7 @@ def test_rebuild_date_leaves_preseason_and_postseason_untouched(env):
     by the structural POSTSEASON_MAX_SWING) and preseason is pinned at 0
     either way."""
     session = env.get_session()
-    a_id, b_id = _two_teams(session)
+    a_id, b_id = seed_two_teams(session, full_names=True)
     upsert_game(
         session,
         team_a_id=a_id,
@@ -147,7 +134,7 @@ def test_rebuild_date_raises_when_regular_season_row_has_no_matching_game(env):
     be a silent skip (confirmed by manually reverting the fix and re-running
     this test, see task-6-report.md: it failed with no exception raised)."""
     session = env.get_session()
-    a_id, b_id = _two_teams(session)
+    a_id, b_id = seed_two_teams(session, full_names=True)
     # Deliberately no upsert_game call: the (date, team_a_id, team_b_id)
     # Game lookup inside rebuild_date will find nothing.
     stale_importance = 987.0
@@ -188,7 +175,7 @@ def test_rebuild_date_raises_on_null_season_type_row(env):
     the same fail-closed path as any other unmatchable row, not be
     silently treated as a legitimate preseason/postseason exemption."""
     session = env.get_session()
-    a_id, b_id = _two_teams(session)
+    a_id, b_id = seed_two_teams(session, full_names=True)
     upsert_game(
         session,
         team_a_id=a_id,
@@ -566,7 +553,7 @@ def test_main_fails_closed_on_empty_fetch_with_ranked_dates_present(env, monkeyp
     test to actually exercise the guard it's meant to short-circuit.
     """
     session = env.get_session()
-    a_id, b_id = _two_teams(session)
+    a_id, b_id = seed_two_teams(session, full_names=True)
     upsert_game(
         session,
         team_a_id=a_id,
@@ -626,7 +613,7 @@ def test_main_recompute_fails_closed_when_a_date_errors(env, monkeypatch):
     unnoticed — the test can't pass while skipping its own scenario.
     """
     session = env.get_session()
-    a_id, b_id = _two_teams(session)
+    a_id, b_id = seed_two_teams(session, full_names=True)
     upsert_game(
         session,
         team_a_id=a_id,
@@ -697,7 +684,7 @@ def test_main_recompute_fails_closed_when_a_date_errors(env, monkeypatch):
 def test_main_dry_run_does_not_call_rebuild_date(env, monkeypatch):
     """Without --recompute, main() only lists dates; it must not write."""
     session = env.get_session()
-    a_id, b_id = _two_teams(session)
+    a_id, b_id = seed_two_teams(session, full_names=True)
     upsert_daily_ranking(
         session,
         date="2026-08-01",
@@ -785,7 +772,7 @@ def test_rebuild_date_excludes_non_standings_games_from_the_remaining_universe(
     import scripts.backfill_importance as bi
 
     session = env.get_session()
-    a_id, b_id = _two_teams(session)
+    a_id, b_id = seed_two_teams(session, full_names=True)
     upsert_game(
         session,
         team_a_id=a_id,

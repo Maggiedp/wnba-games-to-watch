@@ -1,7 +1,8 @@
 from datetime import date
 
 from src.constants import GameStatus
-from src.db.queries import upsert_game_shape, upsert_team
+from src.db.queries import upsert_game_shape
+from tests.conftest import seed_two_teams
 
 
 def _seed_stale_shape(session, espn_id="STALE"):
@@ -29,8 +30,7 @@ def _seed_stale_shape(session, espn_id="STALE"):
 
 def test_backfill_stores_completed_and_skips_existing(env, monkeypatch, wp_plays):
     session = env.get_session()
-    upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
-    upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    seed_two_teams(session, full_names=True)
     session.commit()
 
     import scripts.backfill_game_shapes as bf
@@ -96,8 +96,7 @@ def test_backfill_main_fails_closed_on_skipped_window(env, monkeypatch):
 
 def test_backfill_recompute_reprocesses_existing(env, monkeypatch, wp_plays):
     session = env.get_session()
-    upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
-    upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    seed_two_teams(session, full_names=True)
     session.commit()
 
     import scripts.backfill_game_shapes as bf
@@ -158,8 +157,7 @@ def test_backfill_recompute_purges_row_rejected_by_coverage_gate(
     # for a permanently degenerate feed (the 2025-05-02 DAL@LV case) that
     # would otherwise wedge every future --recompute run at exit 1.
     session = env.get_session()
-    upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
-    upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    seed_two_teams(session, full_names=True)
     _seed_stale_shape(session)
     session.commit()
 
@@ -224,8 +222,7 @@ def test_backfill_recompute_records_existing_row_misses_only(
     env, monkeypatch, wp_plays
 ):
     session = env.get_session()
-    upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
-    upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    seed_two_teams(session, full_names=True)
     # STALE already has a stored shape -> if recompute can't refresh it, the
     # stale pre-fix row persists (a real miss to surface).
     _seed_stale_shape(session)
@@ -298,8 +295,7 @@ def test_backfill_recompute_records_existing_row_misses_only(
 
 def test_backfill_main_recompute_fails_closed_on_per_game_error(env, monkeypatch):
     session = env.get_session()
-    upsert_team(session, name="Las Vegas Aces", bpi_rating=0.0, abbreviation="LV")
-    upsert_team(session, name="New York Liberty", bpi_rating=0.0, abbreviation="NY")
+    seed_two_teams(session, full_names=True)
     # STALE has a stored row, so a failed recompute leaves stale data behind.
     _seed_stale_shape(session)
     session.commit()
