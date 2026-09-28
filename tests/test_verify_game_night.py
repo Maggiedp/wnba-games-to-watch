@@ -946,6 +946,7 @@ def test_check_logs_reads_only_since_the_serving_revision_went_live(monkeypatch)
     seen = _fake_gcloud(monkeypatch)
     result = check_logs(now=_NOW)
     assert 'timestamp>="2026-09-28T00:14:56Z"' in seen["filter"]
+    assert '(resource.labels.revision_name="rev-00152")' in seen["filter"]
     assert result.status == PASS
     assert "rev-00152" in result.detail and "1.1h" in result.detail
 
@@ -984,6 +985,10 @@ def test_check_logs_under_split_traffic_starts_at_the_oldest_serving_revision(
     )
     result = check_logs(now=_NOW)
     assert 'timestamp>="2026-09-28T00:14:56Z"' in seen["filter"]
+    assert (
+        '(resource.labels.revision_name="rev-a"'
+        ' OR resource.labels.revision_name="rev-b")'
+    ) in seen["filter"]
     assert "rev-a" in result.detail and "rev-b" in result.detail
 
 
@@ -998,13 +1003,14 @@ def test_check_logs_ignores_a_tagged_revision_with_no_traffic(monkeypatch):
     )
     result = check_logs(now=_NOW)
     assert 'timestamp>="2026-09-28T00:14:56Z"' in seen["filter"]
-    assert "rev-new" not in result.detail
+    assert "rev-new" not in seen["filter"] and "rev-new" not in result.detail
 
 
 def test_check_logs_falls_back_to_the_full_lookback_and_says_so(monkeypatch):
     seen = _fake_gcloud(monkeypatch, describe_rc=1)
     result = check_logs(now=_NOW)
     assert 'timestamp>="2026-09-27T13:20:00Z"' in seen["filter"]
+    assert "revision_name" not in seen["filter"]
     assert result.status == PASS
     assert "serving revision unknown" in result.detail
 
@@ -1013,3 +1019,13 @@ def test_check_logs_reports_a_short_window_in_minutes(monkeypatch):
     """Right after a deploy the window is minutes long; "0.0h" would hide that."""
     _fake_gcloud(monkeypatch, created={"rev-00152": "2026-09-28T01:17:00Z"})
     assert "3 min since rev-00152" in check_logs(now=_NOW).detail
+
+
+def test_check_logs_excludes_the_old_revision_during_the_rollout_gap(monkeypatch):
+    """A revision is CREATED before traffic moves to it; until then the old
+    revision still serves and can log after the new one's timestamp. The
+    revision predicate, not the time bound, is what keeps those out (Codex R2)."""
+    seen = _fake_gcloud(monkeypatch)
+    check_logs(now=_NOW)
+    assert "rev-00151" not in seen["filter"]
+    assert seen["filter"].count("resource.labels.revision_name=") == 1

@@ -759,6 +759,12 @@ def check_logs(hours: int = 12, now: datetime | None = None) -> CheckResult:
         'AND (textPayload:"live-odds:" OR jsonPayload.message:"live-odds:") '
         f'AND timestamp>="{stamp}"'
     )
+    if serving is not None:
+        # The time bound alone is not enough: a revision is created BEFORE
+        # traffic moves to it, and the old one keeps serving (and logging)
+        # until then.
+        revs = " OR ".join(f'resource.labels.revision_name="{r}"' for r in serving[0])
+        filt += f" AND ({revs})"
     try:
         out = subprocess.run(
             [
