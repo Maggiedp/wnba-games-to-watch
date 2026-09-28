@@ -64,10 +64,9 @@ def run_threads_concurrently(n: int, fn: Callable[[], object]) -> None:
 
     Results are side-effect-only: callers close over their own list, since what
     they capture differs (return values, caught exceptions, a shared exception's
-    identity). A worker that raises fails the test through pytest.ini's
-    PytestUnhandledThreadExceptionWarning filter, which on pytest >= 9 reports
-    every worker exception AND keeps the test's own assertion failure.
-    tests/test_conftest_helpers.py pins both overlap and that failure path.
+    identity). A worker that raises fails the test through pytest.ini's filter
+    (pinned by tests/test_pytest_ini.py); tests/test_conftest_helpers.py pins
+    the overlap.
     """
     # Raw threads, not ThreadPoolExecutor: the pool reuses IDLE workers, so N
     # submits of a fast callable ran on 2-3 threads at peak concurrency 1
