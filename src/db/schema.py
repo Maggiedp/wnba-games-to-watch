@@ -493,7 +493,9 @@ def get_engine():
             db_dir = os.path.dirname(url.replace("sqlite:///", "", 1))
             if db_dir:
                 os.makedirs(db_dir, exist_ok=True)
-        _engine = create_engine(url, echo=False)
+        # pool_pre_ping: Cloud SQL silently drops idle pooled connections, and
+        # the next checkout would fail its first query. Ping on checkout instead.
+        _engine = create_engine(url, echo=False, pool_pre_ping=True)
     return _engine
 
 
