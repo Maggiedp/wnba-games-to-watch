@@ -756,6 +756,7 @@ def get_live_win_probability(espn_id: str = Query(..., pattern=_ESPN_ID_PATTERN)
     except ESPNNotFoundError:
         raise HTTPException(status_code=404, detail="Game not found on ESPN")
     except ESPNAPIError as e:
+        logger.warning("live-wp: %s: %s", espn_id, e)
         raise HTTPException(status_code=502, detail=str(e))
 
 
