@@ -329,7 +329,10 @@ def fetch_team_style_stats(season: int) -> list[dict]:
 
 
 def fetch_games_for_range(
-    start: date, end: date, failed_windows: list[str] | None = None
+    start: date,
+    end: date,
+    failed_windows: list[str] | None = None,
+    listed_by_window: dict[tuple[date, date], set[str]] | None = None,
 ) -> list[dict]:
     """Return all parsed WNBA games between start and end dates (inclusive).
 
@@ -338,6 +341,10 @@ def fetch_games_for_range(
     crash); pass `failed_windows` to have those skipped `YYYYMMDD-YYYYMMDD`
     windows recorded, so a caller needing completeness (the one-shot backfill)
     can detect the gap and fail closed instead of reporting a partial run.
+    Pass `listed_by_window` to collect, for each sub-window whose request came
+    back, every raw event id ESPN returned in it, before parsing or filtering:
+    the ghost-game cleanup reads absence from it (an event our parser drops is
+    still one ESPN lists), and a failed sub-window is simply absent.
 
     **The scoreboard is queried as `dates=YYYYMM`, one whole month per request.
     ESPN began rejecting the `dates=YYYYMMDD-YYYYMMDD` range form with HTTP 400
@@ -381,7 +388,12 @@ def fetch_games_for_range(
             cursor = next_month
             continue
 
-        for event in data.get("events", []):
+        events = data.get("events", [])
+        if listed_by_window is not None:
+            listed_by_window[(range_start, range_end)] = {
+                e["id"] for e in events if e.get("id")
+            }
+        for event in events:
             event_id = event.get("id")
             if event_id in seen_ids:
                 continue
@@ -502,14 +514,6 @@ def daily_fetch_window(today: date) -> tuple[date, date]:
     """
     # Include yesterday to catch games that just finished.
     return today - timedelta(days=1), _SEASON_END
-
-
-def fetch_schedule_and_results() -> list[dict]:
-    """Return all games from yesterday through end of season, WNBA teams only."""
-    start, end = daily_fetch_window(date.today())
-    games = fetch_games_for_range(start, end)
-    logger.info(f"Fetched {len(games)} WNBA games through end of season")
-    return games
 
 
 _IF_NECESSARY_NOTE = re.compile(r"\bGame (\d+) If Necessary$", re.IGNORECASE)

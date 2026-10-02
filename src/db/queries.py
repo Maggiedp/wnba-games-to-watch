@@ -409,6 +409,42 @@ def get_upcoming_games(session: Session, start_date: str) -> list[Game]:
     )
 
 
+def delete_unlisted_if_necessary_games(
+    session: Session, listed_espn_ids: set[str], start: str, end: str
+) -> list[Game]:
+    """Delete unplayed "if necessary" postseason games ESPN no longer lists.
+
+    When a series ends early ESPN drops the unneeded games from its scoreboard,
+    but `upsert_game` only sees rows ESPN returns, so ours stayed on the board
+    until their date passed. The caller decides whether the fetch is complete
+    enough for an absence to mean anything; this only applies the row filter.
+    Only rows dated inside the fetched [start, end] window are candidates.
+
+    Deletes the matching `daily_rankings` row too: the upcoming board reads
+    rankings through an OUTER join on games, so an orphaned ranking stays visible.
+    """
+    candidates = (
+        session.query(Game)
+        .filter(Game.season_type == 3)
+        .filter(Game.if_necessary.is_(True))
+        .filter(Game.winner_id.is_(None))
+        .filter(Game.espn_id.isnot(None))
+        .filter(Game.date >= start, Game.date <= end)
+        .order_by(Game.date)
+        .all()
+    )
+    dropped = [g for g in candidates if g.espn_id not in listed_espn_ids]
+    for game in dropped:
+        session.query(DailyRanking).filter(
+            DailyRanking.date == game.date,
+            DailyRanking.team_a_id == game.team_a_id,
+            DailyRanking.team_b_id == game.team_b_id,
+        ).delete()
+        session.delete(game)
+    session.commit()
+    return dropped
+
+
 def get_completed_games(
     session: Session, season_year: int = CURRENT_SEASON
 ) -> list[Game]:
