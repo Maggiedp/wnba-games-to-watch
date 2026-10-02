@@ -558,6 +558,7 @@ def test_render_player_card_returns_1200x630_png():
         name="Sabrina Ionescu",
         team="NY",
         headline="+20.0 points added · #1 of 2 · 150 FGA",
+        season=2026,
     )
     assert isinstance(png, bytes)
     img = _open(png)
@@ -566,18 +567,18 @@ def test_render_player_card_returns_1200x630_png():
 
 
 def test_render_player_card_png_unknown_id_returns_none(session):
-    assert render_player_card_png(session, "nobody") is None
+    assert render_player_card_png(session, "nobody", 2026) is None
 
 
 def test_render_player_card_png_qualified_returns_png_bytes(session):
     _seed_qualified_player(session)
-    png = render_player_card_png(session, "p-qual")
+    png = render_player_card_png(session, "p-qual", 2026)
     assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
 
 
 def test_render_player_card_png_sub_threshold_returns_png_bytes(session):
     _seed_sub_threshold_player(session)
-    png = render_player_card_png(session, "p-sub")
+    png = render_player_card_png(session, "p-sub", 2026)
     assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
 
 
@@ -595,13 +596,13 @@ def test_render_player_card_png_sub_threshold_team_is_deterministic_plurality(
     original = render_player_card
     captured = {}
 
-    def _spy(*, name, team, headline):
+    def _spy(*, name, team, headline, season):
         captured["team"] = team
-        return original(name=name, team=team, headline=headline)
+        return original(name=name, team=team, headline=headline, season=season)
 
     monkeypatch.setattr("src.api.og_image.render_player_card", _spy)
 
-    png = render_player_card_png(session, "p-traded")
+    png = render_player_card_png(session, "p-traded", 2026)
     assert isinstance(png, bytes) and png[:8] == _PNG_MAGIC
     assert captured["team"] == "NY"
 
@@ -657,3 +658,44 @@ def test_render_game_card_png_reads_if_necessary_from_the_game(session, team_ids
     seed(False)
     plain = _open(render_game_card_png(session, "401900"))
     assert tagged.crop(_TOP_RIGHT).tobytes() != plain.crop(_TOP_RIGHT).tobytes()
+
+
+_FOOTER = (0, 540, 1200, 600)  # the "{season} · Shot making · wumbers" line
+
+
+def test_player_card_footer_shows_the_season():
+    a = _open(render_player_card(name="N", team="NY", headline="h", season=2025))
+    b = _open(render_player_card(name="N", team="NY", headline="h", season=2026))
+    assert a.crop(_FOOTER).tobytes() != b.crop(_FOOTER).tobytes()
+
+
+def _seed_two_seasons(env):
+    s = env.get_session()
+    upsert_shots(s, "g-2025", 2025, [_shot("o1", "p-two", "Two Seasons", "1", "NY")])
+    upsert_shots(s, "g-2026", 2026, [_shot("n1", "p-two", "Two Seasons", "1", "NY")])
+    s.close()
+
+
+def test_player_og_bare_link_in_offseason(env, client, monkeypatch):
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-01-15")
+    _seed_two_seasons(env)
+    r = client.get("/player/p-two/og.png")
+    assert r.status_code == 200 and r.content[:8] == _PNG_MAGIC
+
+
+def test_player_og_season_without_shots_is_404(env, client):
+    _seed_two_seasons(env)
+    assert client.get("/player/p-two/og.png?season=2024").status_code == 404
+
+
+def test_player_og_cache_is_keyed_by_season(env, client):
+    from src.api import app as app_module
+
+    _seed_two_seasons(env)
+    a = client.get("/player/p-two/og.png?season=2025").content
+    b = client.get("/player/p-two/og.png?season=2026").content
+    assert ("p-two", 2025) in app_module._player_og_cache
+    assert ("p-two", 2026) in app_module._player_og_cache
+    assert a != b  # different footer year; a shared key would return the same PNG

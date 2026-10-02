@@ -16,7 +16,6 @@ from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.orm import Session
 
-from src.data.espn_api import clock_season
 from src.db.queries import get_shot_making, get_shots_for_player, get_teams_by_ids
 from src.db.schema import DailyRanking, Game
 from src.scoring.shot_making import player_headline
@@ -298,30 +297,34 @@ def render_game_card_png(session: Session, espn_id: str) -> bytes | None:
     )
 
 
-def render_player_card(name: str, team: str, headline: str) -> bytes:
+def render_player_card(name: str, team: str, headline: str, season: int) -> bytes:
     """Render the 1200x630 shareable player card as PNG bytes. Text only (name,
-    team, headline). `headline` is ASCII-signed (see shot_making.player_headline)
-    because Fraunces has no U+2212 glyph — a Unicode minus would tofu on the
-    rasterized card."""
+    team, headline, season). `headline` is ASCII-signed (see
+    shot_making.player_headline) because Fraunces has no U+2212 glyph — a
+    Unicode minus would tofu on the rasterized card. The footer carries the
+    season so a pinned card ("#3 of 80") is never read as the current rank."""
     img, draw = _draw_base()
     name_font = _fit_font(draw, name, max_width=1080, start_size=110, weight=900.0)
     _centered(draw, name, 210, name_font, _OFFWHITE)
     if team:
         _centered(draw, team, 360, _load_font(40, 600.0), _MUTED)
     _centered(draw, headline, 470, _load_font(46, 700.0), _ORANGE)
-    _centered(draw, "Shot making · wumbers", 560, _load_font(28, 400.0), _MUTED)
+    _centered(
+        draw, f"{season} · Shot making · wumbers", 560, _load_font(28, 400.0), _MUTED
+    )
     return _to_png(img)
 
 
-def render_player_card_png(session: Session, athlete_id: str) -> bytes | None:
-    """Fetch a player and render the shareable OG card, or None if no shots.
+def render_player_card_png(
+    session: Session, athlete_id: str, season: int
+) -> bytes | None:
+    """Fetch a player and render the shareable OG card for `season` (resolved
+    by the caller), or None if the athlete has no shots that season.
 
     Resolves the same qualified/sub-threshold headline as render_player_page
     (routes.py) — a deliberate 2-caller duplication of that rank/team logic
     per the repo's extract-on-3rd-caller convention.
     """
-    season = clock_season()
-
     # Check the ranked board first: a qualified player (the common path — the
     # leaderboard only links ≥100-FGA players) carries name/team/stats on the
     # board row, so we can skip the full raw-shots query entirely. One pass
@@ -357,4 +360,4 @@ def render_player_card_png(session: Session, athlete_id: str) -> bytes | None:
         team = max(shot_counts, key=lambda t: (shot_counts[t], t))
         headline = player_headline(len(rows), None, None, None)
 
-    return render_player_card(name=name, team=team, headline=headline)
+    return render_player_card(name=name, team=team, headline=headline, season=season)

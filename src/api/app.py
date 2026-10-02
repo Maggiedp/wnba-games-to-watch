@@ -260,30 +260,37 @@ def game_og_image(espn_id: str):
 
 
 @app.api_route("/player/{athlete_id}/og.png", methods=["GET", "HEAD"])
-def player_og_image(athlete_id: str):
+def player_og_image(athlete_id: str, season: int = Query(default=None)):
     from src.api.og_image import render_player_card_png
 
-    with _og_cache_lock:
-        cached = _player_og_cache.get(athlete_id)
-        if cached and cached[0] > time.monotonic():
-            _player_og_cache.move_to_end(athlete_id)
-            png = cached[1]
-        else:
-            png = None
-
-    if png is None:
-        session = get_session()
-        try:
-            png = render_player_card_png(session, athlete_id)
-        finally:
-            session.close()
-        if png is None:
+    session = get_session()
+    try:
+        # Resolve the season BEFORE the cache lookup: it is part of the key.
+        if season is None:
+            season = _default_player_season(session, athlete_id)
+        if season is None:
             raise HTTPException(status_code=404, detail="Player not found")
+        key = (athlete_id, season)
+
         with _og_cache_lock:
-            _player_og_cache[athlete_id] = (time.monotonic() + _OG_CACHE_TTL_S, png)
-            _player_og_cache.move_to_end(athlete_id)
-            while len(_player_og_cache) > _OG_CACHE_MAX_ENTRIES:
-                _player_og_cache.popitem(last=False)
+            cached = _player_og_cache.get(key)
+            if cached and cached[0] > time.monotonic():
+                _player_og_cache.move_to_end(key)
+                png = cached[1]
+            else:
+                png = None
+
+        if png is None:
+            png = render_player_card_png(session, athlete_id, season)
+            if png is None:
+                raise HTTPException(status_code=404, detail="Player not found")
+            with _og_cache_lock:
+                _player_og_cache[key] = (time.monotonic() + _OG_CACHE_TTL_S, png)
+                _player_og_cache.move_to_end(key)
+                while len(_player_og_cache) > _OG_CACHE_MAX_ENTRIES:
+                    _player_og_cache.popitem(last=False)
+    finally:
+        session.close()
 
     return _png_response(png, _OG_CACHE_TTL_S)
 
@@ -557,11 +564,12 @@ _og_cache: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
 # read-modify-write (move_to_end / eviction loop) like _live_wp_cache does.
 _og_cache_lock = threading.Lock()
 
-# Dedicated cache for /player/{athlete_id}/og.png, keyed by athlete_id — kept
-# separate from _og_cache so an athlete_id can never collide with a game
-# espn_id in the shared dict. Reuses _og_cache_lock + _OG_CACHE_TTL_S /
-# _OG_CACHE_MAX_ENTRIES (same freshness/size policy, different keyspace).
-_player_og_cache: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
+# Dedicated cache for /player/{athlete_id}/og.png, keyed by (athlete_id, season)
+# — season is part of the key because one athlete has one card per season, and
+# a pinned ?season= link must never be served another season's card. Kept
+# separate from _og_cache so an athlete key can never collide with a game
+# espn_id. Reuses _og_cache_lock + _OG_CACHE_TTL_S / _OG_CACHE_MAX_ENTRIES.
+_player_og_cache: "OrderedDict[tuple[str, int], tuple[float, bytes]]" = OrderedDict()
 
 
 def _get_known_espn_ids() -> frozenset[str]:
