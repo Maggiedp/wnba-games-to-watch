@@ -721,6 +721,17 @@ def _get_shot_baseline(season: int) -> dict:
     return _shot_baseline_cache.get(season, build)
 
 
+def _populated_season(session, latest, season: int | None) -> int:
+    """`season` if given, else the newest season `latest(session, max_season)`
+    finds with data not after the clock, else the clock year (nothing at all).
+    The shared default for the season-archive endpoints (/api/elo-history,
+    /api/calibration, /api/shot-making); `latest` bounds its own search."""
+    if season is not None:
+        return season
+    now = clock_season()
+    return latest(session, now) or now
+
+
 def _default_player_season(session, athlete_id: str) -> int | None:
     """Season a bare player link resolves to: the newest season in which the
     athlete has shots, not after the clock. None for an unknown athlete."""
@@ -1241,9 +1252,7 @@ async def get_elo_history_endpoint(season: int = Query(default=None)):
     finished season by its year."""
     session = get_session()
     try:
-        if season is None:
-            now = clock_season()
-            season = get_latest_elo_history_season(session, now) or now
+        season = _populated_season(session, get_latest_elo_history_season, season)
         rows = get_elo_history(session, season)
         if not rows:
             return {"season": season, "teams": {}}
@@ -1392,9 +1401,7 @@ async def get_shot_making_endpoint(season: int = Query(default=None)):
     agree. An explicit ?season= with no rows returns an empty board."""
     session = get_session()
     try:
-        current = clock_season()
-        if season is None:
-            season = get_latest_shot_making_season(session, current) or current
+        season = _populated_season(session, get_latest_shot_making_season, season)
         rows = get_shot_making(session, season)
         rows.sort(key=lambda r: r.points_added, reverse=True)
         # All-league anchors, written by the daily recompute. Null until the first
@@ -1431,7 +1438,7 @@ async def get_shot_making_endpoint(season: int = Query(default=None)):
             )
         return {
             "season": season,
-            "current_season": current,
+            "current_season": clock_season(),
             "league_avg_xpps": league_avg_xpps,
             "league_avg_pps": league_avg_pps,
             "vs_league_scale": vs_league_scale,
@@ -1453,9 +1460,7 @@ async def get_calibration_endpoint(season: int = Query(default=None)):
     beside it is retrospective anyway. In season this is the calendar year."""
     session = get_session()
     try:
-        if season is None:
-            now = clock_season()
-            season = get_latest_calibration_season(session, now) or now
+        season = _populated_season(session, get_latest_calibration_season, season)
         pairs = get_calibration_pairs(session, season)
         result = compute_calibration(pairs)
         return {
