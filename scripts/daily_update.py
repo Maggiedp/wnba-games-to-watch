@@ -346,22 +346,29 @@ def _drop_unlisted_if_necessary_games(
     """Drop "if necessary" postseason rows ESPN stopped listing (series ended early).
 
     An absence only counts as evidence when the fetch is demonstrably whole:
-    every month came back, and it carried at least one postseason game. A
-    failed or degraded fetch must never read as "the bracket vanished" -- the
-    2026-09-17 outage served nothing at all for two days. Absence is read from
-    ESPN's RAW event ids, not the parsed games, so an event our parser drops
-    is never mistaken for one ESPN dropped.
+    every month came back, and the row's OWN month carried at least one
+    postseason game. Evidence is per month because the scoreboard is fetched
+    one month per request -- a healthy September cannot vouch for an October
+    that came back 200-but-empty. A failed or degraded fetch must never read
+    as "the bracket vanished": the 2026-09-17 outage served nothing for two
+    days. Absence is read from ESPN's RAW event ids, not the parsed games, so
+    an event our parser drops is never mistaken for one ESPN dropped.
+
+    Residual, accepted: a month that comes back PARTIAL (some postseason games
+    present, others missing) is indistinguishable from ESPN dropping them.
     """
     if failed_windows:
         logger.warning(
             f"Skipping if-necessary cleanup: {len(failed_windows)} window(s) failed"
         )
         return
-    if not any(g.get("season_type") == 3 for g in games):
-        return
-    dropped = delete_unlisted_if_necessary_games(
-        session, listed_event_ids, start.isoformat(), end.isoformat()
-    )
+    window = (start.isoformat(), end.isoformat())
+    months = sorted({g["date"][:7] for g in games if g.get("season_type") == 3})
+    dropped = []
+    for month in months:
+        # "-31" bounds any month: the comparison is on YYYY-MM-DD strings.
+        lo, hi = max(window[0], f"{month}-01"), min(window[1], f"{month}-31")
+        dropped += delete_unlisted_if_necessary_games(session, listed_event_ids, lo, hi)
     for game in dropped:
         logger.info(
             f"Dropped if-necessary game {game.espn_id} on {game.date}: "

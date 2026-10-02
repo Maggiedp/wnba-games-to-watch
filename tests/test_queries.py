@@ -4289,3 +4289,25 @@ def test_ingest_keeps_an_if_necessary_row_whose_event_failed_to_parse(
     du.fetch_and_store_games(session, window=_window())
 
     assert session.query(Game).filter(Game.espn_id == "unparsed").count() == 1
+
+
+def test_ingest_keeps_rows_in_a_month_with_no_postseason_evidence(
+    session, team_ids, monkeypatch
+):
+    """Evidence is per month: today's window spans two monthly requests, and an
+    October that comes back 200-but-empty must not be vouched for by a healthy
+    September. Without a postseason game from the row's own month, absence
+    means nothing."""
+    a_id, b_id = team_ids
+    names = {a_id: "Team A", b_id: "Team B"}
+    _seed_postseason_game(session, a_id, b_id, "october", "2026-10-02", if_necessary=True)
+
+    du = _ingest_with(
+        monkeypatch,
+        lambda start, end, failed_windows=None: [
+            _espn_postseason_game(names, b_id, a_id, "september", "2026-09-30")
+        ],
+    )
+    du.fetch_and_store_games(session, window=_window())
+
+    assert session.query(Game).filter(Game.espn_id == "october").count() == 1
