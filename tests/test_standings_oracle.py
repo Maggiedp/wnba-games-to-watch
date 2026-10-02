@@ -263,7 +263,12 @@ def test_a_team_with_no_schedule_is_not_expected_in_the_rollup():
 
 def test_disagreement_emits_the_alert_string(monkeypatch, caplog):
     """The alert string is what a GCP log-based metric keys on, so which
-    branch emits it IS the contract."""
+    branch emits it IS the contract.
+
+    Log metric `standings-mismatch` matches textPayload=~"Standings disagree
+    with ESPN" and alert policy 1946887543697430515 pages on it. The literal
+    is copied from that filter on purpose: asserting the constant would pass
+    after a reword that silently disarms the alert."""
     import scripts.daily_update as du
 
     monkeypatch.setattr(
@@ -274,7 +279,7 @@ def test_disagreement_emits_the_alert_string(monkeypatch, caplog):
     with caplog.at_level("ERROR"):
         du.check_standings_against_espn(None, _ours({"A": (2, 0)}))
 
-    assert du.STANDINGS_MISMATCH_ALERT in caplog.text
+    assert "Standings disagree with ESPN" in caplog.text
 
 
 def test_agreement_logs_success_without_the_alert_string(monkeypatch, caplog):
