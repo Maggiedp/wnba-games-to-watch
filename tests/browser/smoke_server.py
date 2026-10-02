@@ -69,12 +69,13 @@ def seed(session) -> None:
     )
 
     today = date.fromisoformat(today_et())
-    # Clock-derived on purpose: the shot-making family (/api/shot-making,
-    # /api/player-shots, /player/{id}) reads clock_season(), so these rows must
-    # match the clock, NOT CURRENT_SEASON. (Until PR #134 this comment also
-    # named /api/elo-history; that endpoint is now newest-populated, which the
-    # clock seed also satisfies -- it just is no longer the REASON.) The
-    # completed window below is the opposite case.
+    # Clock-derived: the shot-making family (/api/shot-making,
+    # /api/player-shots, /player/{id}) defaults to the newest populated season
+    # NOT AFTER clock_season(), and labels it "this season" only when it equals
+    # the clock -- so seeding the clock year exercises the in-season copy. A
+    # CURRENT_SEASON seed would also resolve, but would show the offseason
+    # labels whenever the two differ. The completed window below is the
+    # opposite case.
     season = today.year
 
     teams = [Team(name=n, abbreviation=a, logo_url="") for n, a in _TEAMS]

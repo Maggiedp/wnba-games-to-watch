@@ -322,11 +322,9 @@ def test_explicit_season_still_wins_over_the_populated_default(
     assert cal["season"] == CURRENT_SEASON + 1 and cal["n"] == 0
 
 
-# The deliberate OTHER half of the split -- /api/shot-making and /player/{id}
-# stay on the clock, so an offseason request gets an empty board rather than a
-# finished season relabeled as current. That property is already pinned by
-# tests/test_shot_making_endpoint.py::test_endpoint_does_not_fall_back_to_prior_season;
-# not duplicated here, only cross-referenced so the split reads as a decision.
+# /api/shot-making and /player/{id} now use the same newest-populated default
+# (pinned in tests/test_shot_making_endpoint.py and tests/test_player_page.py);
+# they label a finished season by its year rather than hiding it.
 
 
 def test_populated_default_never_runs_ahead_of_the_calendar(env, client, monkeypatch):

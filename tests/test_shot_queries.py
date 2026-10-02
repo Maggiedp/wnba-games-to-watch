@@ -257,3 +257,61 @@ def test_shot_league_avg_is_scoped_by_season(session):
     q.upsert_shot_league_avg(session, 2026, avg_xpps=1.02, avg_pps=1.03, fga=100)
     assert q.get_shot_league_avg(session, 2025) is None
     assert q.get_shot_league_avg(session, 2026).fga == 100
+
+
+def _board_row(session, season, athlete_id):
+    q.upsert_shot_making(
+        session,
+        season,
+        athlete_id,
+        athlete_name="X",
+        team_id="1",
+        team_abbr="NY",
+        fga=150,
+        made=80,
+        actual_pts=170.0,
+        expected_pts=160.0,
+        points_added=10.0,
+        points_added_per_100=6.67,
+        actual_pps=1.133,
+        expected_pps=1.067,
+        diet="{}",
+    )
+    session.commit()
+
+
+def test_latest_shot_making_season_is_newest_populated(session):
+    _board_row(session, 2025, "a")
+    _board_row(session, 2026, "a")
+    assert q.get_latest_shot_making_season(session, 2027) == 2026
+
+
+def test_latest_shot_making_season_skips_seasons_after_the_bound(session):
+    # A future-dated row must be skipped by the search, not clamped afterwards
+    # (clamping would land on 2027, which holds nothing).
+    _board_row(session, 2026, "a")
+    _board_row(session, 2028, "a")
+    assert q.get_latest_shot_making_season(session, 2027) == 2026
+
+
+def test_latest_shot_making_season_none_when_empty(session):
+    assert q.get_latest_shot_making_season(session, 2027) is None
+
+
+def test_latest_player_shot_season_is_per_player(session):
+    q.upsert_shots(session, "g1", 2025, [_shot_payload("p1", "star")])
+    q.upsert_shots(session, "g2", 2026, [_shot_payload("p2", "other")])
+    # "other" has a newer season; it must not leak into "star"'s answer.
+    assert q.get_latest_player_shot_season(session, "star", 2027) == 2025
+    assert q.get_latest_player_shot_season(session, "other", 2027) == 2026
+
+
+def test_latest_player_shot_season_skips_seasons_after_the_bound(session):
+    q.upsert_shots(session, "g1", 2026, [_shot_payload("p1", "star")])
+    q.upsert_shots(session, "g2", 2028, [_shot_payload("p2", "star")])
+    assert q.get_latest_player_shot_season(session, "star", 2027) == 2026
+
+
+def test_latest_player_shot_season_none_for_unknown_player(session):
+    q.upsert_shots(session, "g1", 2026, [_shot_payload("p1", "star")])
+    assert q.get_latest_player_shot_season(session, "nobody", 2027) is None

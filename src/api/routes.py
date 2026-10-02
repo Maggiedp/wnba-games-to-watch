@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from src.api import blurbs
-from src.data.espn_api import clock_season, today_et
+from src.data.espn_api import today_et
 from src.db.queries import (
     get_game_fields,
     get_head_to_head,
@@ -1510,12 +1510,12 @@ def _player_zones_html(zones) -> str:
     )
 
 
-def render_player_page(session, athlete_id, get_baseline) -> str | None:
-    """Render the shareable shot-chart page for one player, or None if the
-    athlete has no shots this season (→ 404). `get_baseline(season)` is injected
-    (the app-layer _get_shot_baseline cache) so this module doesn't import app.py
-    and the full-season baseline only builds for a real player."""
-    season = clock_season()
+def render_player_page(session, athlete_id, season, get_baseline) -> str | None:
+    """Render the shareable shot-chart page for one player and season, or None
+    if the athlete has no shots that season (→ 404). The caller resolves
+    `season` (explicit ?season= or the player's newest season). `get_baseline`
+    is injected (the app-layer _get_shot_baseline cache) so this module doesn't
+    import app.py and the full-season baseline only builds for a real player."""
     rows = get_shots_for_player(session, season, athlete_id)
     if not rows:
         return None
@@ -1553,7 +1553,7 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
         bridge_html = _vs_league_bridge_html(
             me.expected_pps, me.actual_pps, anchors, scale, rank_label
         )
-        headline = player_headline(me.fga, me.points_added, rank, total)
+        headline = player_headline(me.fga, me.points_added, rank, total, season)
         stat_header = _player_stat_header_html(me, rank, total, league_avg_xpps, diet)
     else:
         # get_shots_for_player has no ORDER BY, so rows[0].team_abbr is
@@ -1563,7 +1563,7 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
         # the player took the most shots for, ties broken by abbreviation.
         shot_counts = Counter(r.team_abbr for r in rows)
         team_abbr = max(shot_counts, key=lambda t: (shot_counts[t], t))
-        headline = player_headline(len(rows), None, None, None)
+        headline = player_headline(len(rows), None, None, None, season)
         # Copy deliberately asserts NO per-player FGA count: this sub-threshold
         # branch also covers the transient 6 AM window where a player has 100+
         # raw shots but isn't in the just-being-recomputed shot_making board yet
@@ -1585,6 +1585,7 @@ def render_player_page(session, athlete_id, get_baseline) -> str | None:
         name=name,
         subtitle=subtitle,
         athlete_id=athlete_id,
+        season=season,
         site_url=_SITE_URL,
         stat_header=stat_header,
         bridge_html=bridge_html,

@@ -82,10 +82,12 @@ def clock_season() -> int:
     The codebase has two season concepts and only one of them had a name.
     CURRENT_SEASON (src/constants.py) is the PINNED anchor: bumped by hand each
     offseason, it says which season the site is *about* and never rolls on its
-    own. This is the other one: it rolls at midnight on January 1, and it is
-    right for surfaces that must refuse to present a finished season as the
-    live one (the /shot-making board and /player/{id}, which frame their data
-    as "this season"). Read src/constants.py before reaching for either.
+    own. This is the other one: it rolls at midnight on January 1. It is the
+    upper bound for the newest-populated-season lookups (/rankings,
+    /transparency, /replay, /style, /shot-making, /player/{id}), which show
+    the newest season that has data and is not in the future, and it tells the
+    shot-making page whether that season is "this season" or a finished one.
+    Read src/constants.py before reaching for either.
 
     Resolving today_et() here rather than at each call site also collapses a
     documented test footgun: modules that do `from ... import clock_season`

@@ -74,8 +74,33 @@ def test_shot_making_panel_has_full_page_permalink():
     from src.api.routes import render_shot_making
 
     html = render_shot_making()
-    assert "/player/${encodeURIComponent(data.athlete_id)}" in html
+    assert (
+        "/player/${encodeURIComponent(data.athlete_id)}"
+        "?season=${encodeURIComponent(data.season)}"
+    ) in html
     assert "Full page" in html
+
+
+def test_panel_fetch_passes_the_board_season():
+    # Early-season split: board on 2026 while a player already has 2027 shots.
+    # The panel must ask for the board's season, never the player's newest.
+    from src.api.routes import render_shot_making
+
+    html = render_shot_making()
+    assert "'&season=' + encodeURIComponent(boardSeason)" in html
+
+
+def test_season_copy_is_driven_by_the_api_season():
+    from src.api.routes import render_shot_making
+
+    html = render_shot_making()
+    assert '<span id="season-phrase">this season</span>' in html
+    assert "boardSeason = data.season" in html
+    assert "currentSeason = data.current_season" in html
+    assert "in the ${boardSeason} season" in html
+    # No hard-coded "this season" left in JS-built copy.
+    assert "League average this season" not in html
+    assert "logged this season" not in html
 
 
 def test_shot_making_page_ships_the_bridge_css_and_helper(client):
@@ -106,7 +131,7 @@ def test_shot_making_page_explains_the_league_anchor_honestly(client):
     html = client.get("/shot-making").text
     # the rewritten note (Step 5) states both anchors now that they're genuinely
     # leaguewide, replacing the old qualified-pool-only phrasing
-    assert "League average this season:" in html
+    assert "League average ${seasonPhrase()}:" in html
     assert "League-average xPPS this season" not in html
     # F2: the ▲/▽ marker column is the most likely place to misread "▲ = good",
     # so the note itself must carry the honesty caveat. It is now the ONLY

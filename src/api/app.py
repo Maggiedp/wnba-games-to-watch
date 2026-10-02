@@ -51,7 +51,9 @@ from src.db.queries import (
     get_games_by_date,
     get_latest_calibration_season,
     get_latest_elo_history_season,
+    get_latest_player_shot_season,
     get_latest_playoff_probability_date,
+    get_latest_shot_making_season,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
@@ -196,12 +198,18 @@ def game_detail(espn_id: str):
 
 
 @app.get("/player/{athlete_id}", response_class=HTMLResponse)
-def player_page(athlete_id: str):
+def player_page(athlete_id: str, season: int = Query(default=None)):
     from src.api.routes import render_player_page
 
     session = get_session()
     try:
-        html = render_player_page(session, athlete_id, _get_shot_baseline)
+        if season is None:
+            season = _default_player_season(session, athlete_id)
+        html = (
+            None
+            if season is None
+            else render_player_page(session, athlete_id, season, _get_shot_baseline)
+        )
     finally:
         session.close()
     if html is None:
@@ -252,30 +260,37 @@ def game_og_image(espn_id: str):
 
 
 @app.api_route("/player/{athlete_id}/og.png", methods=["GET", "HEAD"])
-def player_og_image(athlete_id: str):
+def player_og_image(athlete_id: str, season: int = Query(default=None)):
     from src.api.og_image import render_player_card_png
 
-    with _og_cache_lock:
-        cached = _player_og_cache.get(athlete_id)
-        if cached and cached[0] > time.monotonic():
-            _player_og_cache.move_to_end(athlete_id)
-            png = cached[1]
-        else:
-            png = None
-
-    if png is None:
-        session = get_session()
-        try:
-            png = render_player_card_png(session, athlete_id)
-        finally:
-            session.close()
-        if png is None:
+    session = get_session()
+    try:
+        # Resolve the season BEFORE the cache lookup: it is part of the key.
+        if season is None:
+            season = _default_player_season(session, athlete_id)
+        if season is None:
             raise HTTPException(status_code=404, detail="Player not found")
+        key = (athlete_id, season)
+
         with _og_cache_lock:
-            _player_og_cache[athlete_id] = (time.monotonic() + _OG_CACHE_TTL_S, png)
-            _player_og_cache.move_to_end(athlete_id)
-            while len(_player_og_cache) > _OG_CACHE_MAX_ENTRIES:
-                _player_og_cache.popitem(last=False)
+            cached = _player_og_cache.get(key)
+            if cached and cached[0] > time.monotonic():
+                _player_og_cache.move_to_end(key)
+                png = cached[1]
+            else:
+                png = None
+
+        if png is None:
+            png = render_player_card_png(session, athlete_id, season)
+            if png is None:
+                raise HTTPException(status_code=404, detail="Player not found")
+            with _og_cache_lock:
+                _player_og_cache[key] = (time.monotonic() + _OG_CACHE_TTL_S, png)
+                _player_og_cache.move_to_end(key)
+                while len(_player_og_cache) > _OG_CACHE_MAX_ENTRIES:
+                    _player_og_cache.popitem(last=False)
+    finally:
+        session.close()
 
     return _png_response(png, _OG_CACHE_TTL_S)
 
@@ -549,11 +564,12 @@ _og_cache: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
 # read-modify-write (move_to_end / eviction loop) like _live_wp_cache does.
 _og_cache_lock = threading.Lock()
 
-# Dedicated cache for /player/{athlete_id}/og.png, keyed by athlete_id — kept
-# separate from _og_cache so an athlete_id can never collide with a game
-# espn_id in the shared dict. Reuses _og_cache_lock + _OG_CACHE_TTL_S /
-# _OG_CACHE_MAX_ENTRIES (same freshness/size policy, different keyspace).
-_player_og_cache: "OrderedDict[str, tuple[float, bytes]]" = OrderedDict()
+# Dedicated cache for /player/{athlete_id}/og.png, keyed by (athlete_id, season)
+# — season is part of the key because one athlete has one card per season, and
+# a pinned ?season= link must never be served another season's card. Kept
+# separate from _og_cache so an athlete key can never collide with a game
+# espn_id. Reuses _og_cache_lock + _OG_CACHE_TTL_S / _OG_CACHE_MAX_ENTRIES.
+_player_og_cache: "OrderedDict[tuple[str, int], tuple[float, bytes]]" = OrderedDict()
 
 
 def _get_known_espn_ids() -> frozenset[str]:
@@ -705,9 +721,29 @@ def _get_shot_baseline(season: int) -> dict:
     return _shot_baseline_cache.get(season, build)
 
 
+def _populated_season(session, latest, season: int | None) -> int:
+    """`season` if given, else the newest season `latest(session, max_season)`
+    finds with data not after the clock, else the clock year (nothing at all).
+    The shared default for the season-archive endpoints (/api/elo-history,
+    /api/calibration, /api/shot-making); `latest` bounds its own search."""
+    if season is not None:
+        return season
+    now = clock_season()
+    return latest(session, now) or now
+
+
+def _default_player_season(session, athlete_id: str) -> int | None:
+    """Season a bare player link resolves to: the newest season in which the
+    athlete has shots, not after the clock. None for an unknown athlete."""
+    return get_latest_player_shot_season(session, athlete_id, clock_season())
+
+
 @app.get("/api/player-shots")
-def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
-    """One player's shot chart for the CURRENT season (DB-only). Colors each shot
+def get_player_shots(
+    athlete_id: str = Query(..., min_length=1, max_length=20),
+    season: int = Query(default=None),
+):
+    """One player's shot chart for a season (DB-only). Colors each shot
     by points added vs. the league xPPS baseline; empty for an unknown player.
 
     The panel renders ONLY `shots` + `zones`, so the response deliberately omits
@@ -719,10 +755,15 @@ def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
     window (see the /api/player-shots gotcha in src/api/CLAUDE.md). `zones` still
     reflect that same window skew, but only for a just-ingested player and only by
     mentally summing — accepted daily-window known-limitation. Between daily runs
-    the zones tie to the leaderboard exactly (shared build_baseline)."""
-    season = clock_season()
+    the zones tie to the leaderboard exactly (shared build_baseline).
+
+    Defaults to the player's newest season with shots; the leaderboard panel
+    always passes the board's season explicitly, so its chart can never come
+    from a different season than the row it opens under."""
     session = get_session()
     try:
+        if season is None:
+            season = _default_player_season(session, athlete_id) or clock_season()
         rows = get_shots_for_player(session, season, athlete_id)
     finally:
         session.close()
@@ -1207,14 +1248,11 @@ async def get_elo_history_endpoint(season: int = Query(default=None)):
     fallback only ever fires in that gap. The /rankings page labels whichever
     season it receives, so a fallback is never passed off as "this season".
 
-    Contrast /api/shot-making, which stays on the clock ON PURPOSE: that page
-    frames its board as current, so serving a finished season there would
-    mislabel it. Same reasoning, opposite answer, because the framing differs."""
+    /api/shot-making uses the same newest-populated default and labels a
+    finished season by its year."""
     session = get_session()
     try:
-        if season is None:
-            now = clock_season()
-            season = get_latest_elo_history_season(session, now) or now
+        season = _populated_season(session, get_latest_elo_history_season, season)
         rows = get_elo_history(session, season)
         if not rows:
             return {"season": season, "teams": {}}
@@ -1351,17 +1389,19 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
 
 
 @app.get("/api/shot-making")
-async def get_shot_making_endpoint():
-    """Shot-making leaderboard for the CURRENT season (DB-only, precomputed).
-    Ranks players by points added over expected (actual - xPPS); v1 exposes no
-    season param. Keys off the current season (NOT the newest *populated* season
-    like /api/replay) because the page frames the data as "this season" — an
-    empty current season returns an empty board (its graceful empty state), never
-    last season's leaderboard silently mislabeled as current (mirrors the
-    /playoff-odds convention: never serve stale-season data as current)."""
+async def get_shot_making_endpoint(season: int = Query(default=None)):
+    """Shot-making leaderboard (DB-only, precomputed). Ranks players by points
+    added over expected (actual - xPPS).
+
+    Defaults to the newest POPULATED season not after the clock (like
+    /api/elo-history), so through the offseason the page shows the finished
+    board rather than an empty one. The response carries both `season` (what is
+    shown) and `current_season` (the clock) so the page can label a finished
+    season by its year instead of calling it "this season". In season the two
+    agree. An explicit ?season= with no rows returns an empty board."""
     session = get_session()
     try:
-        season = clock_season()
+        season = _populated_season(session, get_latest_shot_making_season, season)
         rows = get_shot_making(session, season)
         rows.sort(key=lambda r: r.points_added, reverse=True)
         # All-league anchors, written by the daily recompute. Null until the first
@@ -1398,6 +1438,7 @@ async def get_shot_making_endpoint():
             )
         return {
             "season": season,
+            "current_season": clock_season(),
             "league_avg_xpps": league_avg_xpps,
             "league_avg_pps": league_avg_pps,
             "vs_league_scale": vs_league_scale,
@@ -1419,9 +1460,7 @@ async def get_calibration_endpoint(season: int = Query(default=None)):
     beside it is retrospective anyway. In season this is the calendar year."""
     session = get_session()
     try:
-        if season is None:
-            now = clock_season()
-            season = get_latest_calibration_season(session, now) or now
+        season = _populated_season(session, get_latest_calibration_season, season)
         pairs = get_calibration_pairs(session, season)
         result = compute_calibration(pairs)
         return {

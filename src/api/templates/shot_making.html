@@ -414,7 +414,7 @@
 %%SITE_NAV%%
 <div class="wrap">
   <h1>Shot-making</h1>
-  <p class="sub">Points added over expected — did she convert better than a league-average WNBA player would from the same spots and shot types this season? No defender tracking, so this is a location-and-type model.</p>
+  <p class="sub">Points added over expected — did she convert better than a league-average WNBA player would from the same spots and shot types <span id="season-phrase">this season</span>? No defender tracking, so this is a location-and-type model.</p>
   <p class="shots-note">The league total nets to ~zero by construction — this measures who beat the expectation, not who scored the most.</p>
 
   <section class="shots-card">
@@ -470,6 +470,13 @@
   let players = [];
   let sortBy = 'added';  // 'added' | 'per100'
   let leagueAnchors = null;
+  let boardSeason = null;    // season the board shows (from /api/shot-making)
+  let currentSeason = null;  // clock season; differs from boardSeason in the offseason
+  function seasonPhrase() {
+    return boardSeason === null || boardSeason === currentSeason
+      ? 'this season'
+      : `in the ${boardSeason} season`;
+  }
   let vsLeagueScale = null;
 
   const status = document.getElementById('shots-status');
@@ -540,7 +547,7 @@
     return `<div class="shot-panel">
       ${bridgeHtml || ''}
       <div class="chart-wrap">
-        <a class="full-page-link" href="/player/${encodeURIComponent(data.athlete_id)}">Full page ↗</a>
+        <a class="full-page-link" href="/player/${encodeURIComponent(data.athlete_id)}?season=${encodeURIComponent(data.season)}">Full page ↗</a>
         ${buildShotChartSvg(data.shots)}
         <div class="shot-legend"><span>Worse than average</span><span class="grad"></span><span>Better than average</span></div>
         <p class="cap">Each circle groups the shots she took from about the same spot. Bigger means more attempts; the color is points added vs. a league-average shooter from there. A heave from beyond the chart sits along the top edge as a triangle.</p>
@@ -562,7 +569,7 @@
     if (shotCache[aid]) { cell.innerHTML = panelHtml(shotCache[aid], bridgeFor(aid)); return; }
     cell.innerHTML = '<div class="shot-panel"><p class="status">Loading shots…</p></div>';
     try {
-      const res = await fetch('/api/player-shots?athlete_id=' + encodeURIComponent(aid));
+      const res = await fetch('/api/player-shots?athlete_id=' + encodeURIComponent(aid) + '&season=' + encodeURIComponent(boardSeason));
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       shotCache[aid] = data;
@@ -623,6 +630,10 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       players = data.players || [];
+      boardSeason = data.season;
+      currentSeason = data.current_season;
+      const phrase = document.getElementById('season-phrase');
+      if (phrase) phrase.textContent = seasonPhrase();
       // The two anchors are written together by one daily transaction, so they
       // are all-or-nothing — one object, one guard, used by both the markers
       // and the bridge.
@@ -633,9 +644,9 @@
       const note = document.getElementById('lg-xpps-note');
       if (note && leagueAnchors) {
         note.textContent =
-          ` League average this season: ${leagueAnchors.avg_xpps.toFixed(3)} xPPS, ${leagueAnchors.avg_pps.toFixed(3)} PPS — ▲ above it, ▽ below — that's her shot diet, not shot quality.`;
+          ` League average ${seasonPhrase()}: ${leagueAnchors.avg_xpps.toFixed(3)} xPPS, ${leagueAnchors.avg_pps.toFixed(3)} PPS — ▲ above it, ▽ below — that's her shot diet, not shot quality.`;
       }
-      if (!players.length) { showStatus('Shot-making appears once enough shots are logged this season.'); return; }
+      if (!players.length) { showStatus(`Shot-making appears once enough shots are logged ${seasonPhrase()}.`); return; }
       hideStatus();
       render();
     } catch (e) {

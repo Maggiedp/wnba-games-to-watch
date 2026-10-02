@@ -98,6 +98,7 @@ def test_shot_making_endpoint_empty(client, env):
     assert r.status_code == 200
     assert r.json() == {
         "season": int(today_et()[:4]),
+        "current_season": int(today_et()[:4]),
         "league_avg_xpps": None,
         "league_avg_pps": None,
         "vs_league_scale": None,
@@ -105,21 +106,12 @@ def test_shot_making_endpoint_empty(client, env):
     }
 
 
-def test_endpoint_does_not_fall_back_to_prior_season(client, env, monkeypatch):
-    # The current season has no rows but a PRIOR season does: the endpoint must
-    # return an empty CURRENT-season board, never last season's leaderboard
-    # silently mislabeled as "this season" (Codex R3).
-    # Patch espn_api.today_et, the ONE name: app.py reads the season through
-    # espn_api.clock_season(), which resolves today_et in espn_api's globals.
-    import src.data.espn_api as espn_api
-
-    monkeypatch.setattr(espn_api, "today_et", lambda: "2099-07-01")
-    session = get_session()
+def _board_row(session, season, athlete_id, name):
     q.upsert_shot_making(
         session,
-        2026,
-        "old",
-        athlete_name="Old",
+        season,
+        athlete_id,
+        athlete_name=name,
         team_id="1",
         team_abbr="LV",
         fga=150,
@@ -132,13 +124,59 @@ def test_endpoint_does_not_fall_back_to_prior_season(client, env, monkeypatch):
         expected_pps=1.067,
         diet="{}",
     )
+
+
+def test_endpoint_serves_newest_populated_season_in_the_offseason(
+    client, env, monkeypatch
+):
+    # Offseason: the clock says 2027, no 2027 board exists. Both 2025 and 2026
+    # exist, so a wrong pick (oldest, or the empty clock season) is visible.
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-02-01")
+    session = get_session()
+    _board_row(session, 2025, "old", "Old")
+    _board_row(session, 2026, "new", "New")
     session.commit()
     session.close()
-    r = client.get("/api/shot-making")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["season"] == 2099  # current season, not the populated 2026
-    assert body["players"] == []
+
+    body = client.get("/api/shot-making").json()
+    assert body["season"] == 2026
+    assert body["current_season"] == 2027
+    assert [p["athlete_name"] for p in body["players"]] == ["New"]
+
+
+def test_endpoint_ignores_a_future_dated_board(client, env, monkeypatch):
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2026-07-01")
+    session = get_session()
+    _board_row(session, 2026, "now", "Now")
+    _board_row(session, 2030, "future", "Future")
+    session.commit()
+    session.close()
+
+    body = client.get("/api/shot-making").json()
+    assert body["season"] == 2026
+    assert body["current_season"] == 2026
+
+
+def test_endpoint_explicit_season(client, env, monkeypatch):
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-02-01")
+    session = get_session()
+    _board_row(session, 2025, "old", "Old")
+    _board_row(session, 2026, "new", "New")
+    session.commit()
+    session.close()
+
+    body = client.get("/api/shot-making?season=2025").json()
+    assert body["season"] == 2025
+    assert [p["athlete_name"] for p in body["players"]] == ["Old"]
+
+    empty = client.get("/api/shot-making?season=2024").json()
+    assert empty["season"] == 2024 and empty["players"] == []
 
 
 def test_endpoint_returns_all_league_anchors_and_scale(client, env):
@@ -315,3 +353,67 @@ def test_endpoint_drops_anchors_when_the_season_empties(env, client):
     assert emptied["league_avg_xpps"] is None
     assert emptied["league_avg_pps"] is None
     assert emptied["vs_league_scale"] is None
+
+
+def _seed_split_seasons():
+    """2026: two 'star' shots. 2027: one 'star' shot. Models the early-season
+    split where the board is still on 2026."""
+    from src.db.queries import upsert_shots
+
+    session = get_session()
+    upsert_shots(
+        session,
+        "g26",
+        2026,
+        [_p("a26", "star", "Star Player"), _p("b26", "star", "Star Player")],
+    )
+    upsert_shots(session, "g27", 2027, [_p("a27", "star", "Star Player")])
+    session.close()
+
+
+def test_player_shots_explicit_season_matches_the_board(client, env, monkeypatch):
+    # The leaderboard panel passes the BOARD's season. With the board on 2026
+    # and 'star' already shooting in 2027, the panel must get 2026 shots.
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-05-20")
+    _seed_split_seasons()
+
+    data = client.get("/api/player-shots?athlete_id=star&season=2026").json()
+    assert data["season"] == 2026
+    assert data["fga"] == 2
+
+
+def test_player_shots_default_is_players_newest_season(client, env, monkeypatch):
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-05-20")
+    _seed_split_seasons()
+
+    data = client.get("/api/player-shots?athlete_id=star").json()
+    assert data["season"] == 2027
+    assert data["fga"] == 1
+
+
+def test_player_shots_default_in_offseason(client, env, monkeypatch):
+    import src.data.espn_api as espn_api
+    from src.db.queries import upsert_shots
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-02-01")
+    session = get_session()
+    upsert_shots(session, "g25", 2025, [_p("x25", "star", "Star Player")])
+    upsert_shots(
+        session,
+        "g26",
+        2026,
+        [_p("a26", "star", "Star Player"), _p("b26", "star", "Star Player")],
+    )
+    session.close()
+
+    data = client.get("/api/player-shots?athlete_id=star").json()
+    assert data["season"] == 2026 and data["fga"] == 2
+
+
+def test_player_shots_explicit_season_without_data_is_empty(client, env):
+    data = client.get("/api/player-shots?athlete_id=star&season=2024").json()
+    assert data["season"] == 2024 and data["shots"] == [] and data["fga"] == 0

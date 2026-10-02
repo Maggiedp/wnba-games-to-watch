@@ -1528,6 +1528,38 @@ def get_shots_for_player(session: Session, season: int, athlete_id: str) -> list
     )
 
 
+def get_latest_shot_making_season(session: Session, max_season: int) -> int | None:
+    """Newest season with >=1 shot_making row NOT AFTER `max_season`, or None.
+
+    Lets /api/shot-making default to the newest POPULATED board, so the
+    leaderboard shows the finished season through the offseason instead of an
+    empty page from January to tip-off. The bound is in the filter, not applied
+    to the result, for the reason in get_latest_elo_history_season: clamping a
+    too-new answer can land on a season that holds nothing. `max_season` is
+    required; the caller passes clock_season()."""
+    return (
+        session.query(func.max(ShotMaking.season))
+        .filter(ShotMaking.season <= max_season)
+        .scalar()
+    )
+
+
+def get_latest_player_shot_season(
+    session: Session, athlete_id: str, max_season: int
+) -> int | None:
+    """Newest season in which `athlete_id` has >=1 shot, NOT AFTER `max_season`.
+
+    Backs the bare /player/{id} link (and its OG card): it resolves to the
+    newest season that player has data for, so a link shared in-season still
+    works through the offseason. Same bound-the-search rule as
+    get_latest_shot_making_season."""
+    return (
+        session.query(func.max(Shot.season))
+        .filter(Shot.athlete_id == athlete_id, Shot.season <= max_season)
+        .scalar()
+    )
+
+
 def shot_row_to_dict(row: Shot) -> dict:
     """A `shots` row → the plain dict the pure scoring helpers consume
     (build_baseline / compute_leaderboard / compute_player_shot_chart). Includes

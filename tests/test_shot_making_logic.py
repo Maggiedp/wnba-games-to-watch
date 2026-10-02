@@ -222,24 +222,26 @@ def test_chart_zone_shape_and_order():
 
 
 def test_player_headline_qualified_positive():
-    assert player_headline(312, 2.34, 4, 38) == "+2.3 points added · #4 of 38 · 312 FGA"
+    assert player_headline(312, 2.34, 4, 38, 2026) == "+2.3 points added · #4 of 38 · 312 FGA"
 
 
 def test_player_headline_qualified_negative():
     assert (
-        player_headline(210, -1.75, 33, 38) == "-1.8 points added · #33 of 38 · 210 FGA"
+        player_headline(210, -1.75, 33, 38, 2026) == "-1.8 points added · #33 of 38 · 210 FGA"
     )
 
 
 def test_player_headline_qualified_zero_is_plus():
     assert (
-        player_headline(150, 0.0, 20, 38) == "+0.0 points added · #20 of 38 · 150 FGA"
+        player_headline(150, 0.0, 20, 38, 2026) == "+0.0 points added · #20 of 38 · 150 FGA"
     )
 
 
 def test_player_headline_sub_threshold():
     # rank is None -> below the leaderboard cutoff: chart-only, no rank line.
-    assert player_headline(41, None, None, None) == "41 FGA this season"
+    # Names the season, never "this season": a pinned or offseason page shows a
+    # finished season, and the line is also the OG card's headline.
+    assert player_headline(41, None, None, None, 2025) == "41 FGA in 2025"
 
 
 def _shots(n_rim, n_three):
