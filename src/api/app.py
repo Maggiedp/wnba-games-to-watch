@@ -52,6 +52,7 @@ from src.db.queries import (
     get_latest_calibration_season,
     get_latest_elo_history_season,
     get_latest_playoff_probability_date,
+    get_latest_shot_making_season,
     get_playoff_probabilities,
     get_rankings_by_broadcaster,
     get_shape_seasons,
@@ -1207,9 +1208,8 @@ async def get_elo_history_endpoint(season: int = Query(default=None)):
     fallback only ever fires in that gap. The /rankings page labels whichever
     season it receives, so a fallback is never passed off as "this season".
 
-    Contrast /api/shot-making, which stays on the clock ON PURPOSE: that page
-    frames its board as current, so serving a finished season there would
-    mislabel it. Same reasoning, opposite answer, because the framing differs."""
+    /api/shot-making uses the same newest-populated default and labels a
+    finished season by its year."""
     session = get_session()
     try:
         if season is None:
@@ -1351,17 +1351,21 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
 
 
 @app.get("/api/shot-making")
-async def get_shot_making_endpoint():
-    """Shot-making leaderboard for the CURRENT season (DB-only, precomputed).
-    Ranks players by points added over expected (actual - xPPS); v1 exposes no
-    season param. Keys off the current season (NOT the newest *populated* season
-    like /api/replay) because the page frames the data as "this season" — an
-    empty current season returns an empty board (its graceful empty state), never
-    last season's leaderboard silently mislabeled as current (mirrors the
-    /playoff-odds convention: never serve stale-season data as current)."""
+async def get_shot_making_endpoint(season: int = Query(default=None)):
+    """Shot-making leaderboard (DB-only, precomputed). Ranks players by points
+    added over expected (actual - xPPS).
+
+    Defaults to the newest POPULATED season not after the clock (like
+    /api/elo-history), so through the offseason the page shows the finished
+    board rather than an empty one. The response carries both `season` (what is
+    shown) and `current_season` (the clock) so the page can label a finished
+    season by its year instead of calling it "this season". In season the two
+    agree. An explicit ?season= with no rows returns an empty board."""
     session = get_session()
     try:
-        season = clock_season()
+        current = clock_season()
+        if season is None:
+            season = get_latest_shot_making_season(session, current) or current
         rows = get_shot_making(session, season)
         rows.sort(key=lambda r: r.points_added, reverse=True)
         # All-league anchors, written by the daily recompute. Null until the first
@@ -1398,6 +1402,7 @@ async def get_shot_making_endpoint():
             )
         return {
             "season": season,
+            "current_season": current,
             "league_avg_xpps": league_avg_xpps,
             "league_avg_pps": league_avg_pps,
             "vs_league_scale": vs_league_scale,
