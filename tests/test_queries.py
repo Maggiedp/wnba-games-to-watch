@@ -3947,8 +3947,8 @@ def test_fetch_and_store_games_persists_competition_type(
 
     monkeypatch.setattr(
         du,
-        "fetch_schedule_and_results",
-        lambda: [
+        "fetch_games_for_range",
+        lambda start, end, failed_windows=None: [
             {
                 "event_id": "401857321",
                 "team_a": names[a_id],
@@ -3995,7 +3995,7 @@ def test_fetch_and_store_games_uses_an_explicit_window_when_given(
     names = {a_id: "Team A", b_id: "Team B"}
     seen = {}
 
-    def fake_range(start, end):
+    def fake_range(start, end, failed_windows=None):
         seen["window"] = (start, end)
         return [
             {
@@ -4015,11 +4015,11 @@ def test_fetch_and_store_games_uses_an_explicit_window_when_given(
             }
         ]
 
-    def boom():
+    def boom(_today):
         raise AssertionError("must not fall back to the daily window")
 
     monkeypatch.setattr(du, "fetch_games_for_range", fake_range)
-    monkeypatch.setattr(du, "fetch_schedule_and_results", boom)
+    monkeypatch.setattr(du, "daily_fetch_window", boom)
     monkeypatch.setattr(du, "fetch_wnba_schedule_broadcasters", lambda _today: {})
     monkeypatch.setattr(du, "enhance_games_with_broadcasters", lambda games, _b: games)
 
@@ -4073,3 +4073,189 @@ def test_upsert_game_updates_if_necessary_and_none_preserves_it(session, team_id
     assert game.if_necessary is True
     game = upsert_game(session, if_necessary=False, **kw)
     assert game.if_necessary is False
+
+
+def _seed_postseason_game(session, a_id, b_id, espn_id, day, **kw):
+    """One postseason row plus its daily_rankings row, as the 6 AM run leaves it."""
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date=day,
+        time="8:00 PM ET",
+        broadcaster="ESPN",
+        espn_id=espn_id,
+        season_type=3,
+        **kw,
+    )
+    upsert_daily_ranking(
+        session,
+        date=day,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        quality_score=80.0,
+        importance_score=98.0,
+        overall_score=91.3,
+        broadcaster="ESPN",
+    )
+
+
+def test_delete_unlisted_if_necessary_games_drops_only_the_ghost(session, team_ids):
+    """A swept series' "if necessary" game that ESPN stopped listing is dropped,
+    game row AND ranking row — the homepage reads `daily_rankings` through an
+    OUTER join, so a ranking left behind would keep the ghost on the board.
+
+    Every other row is a near-miss on exactly one condition, so each guard is
+    exercised: listed by ESPN, not optional, already played, outside the window.
+    """
+    from src.db.queries import delete_unlisted_if_necessary_games
+
+    a_id, b_id = team_ids
+    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-02", if_necessary=True)
+    _seed_postseason_game(session, a_id, b_id, "listed", "2026-10-03", if_necessary=True)
+    _seed_postseason_game(session, a_id, b_id, "required", "2026-10-04", if_necessary=False)
+    _seed_postseason_game(
+        session,
+        a_id,
+        b_id,
+        "played",
+        "2026-10-05",
+        if_necessary=True,
+        winner_id=a_id,
+        final_score_a=80,
+        final_score_b=70,
+    )
+    _seed_postseason_game(session, a_id, b_id, "later", "2026-10-20", if_necessary=True)
+
+    dropped = delete_unlisted_if_necessary_games(
+        session, listed_espn_ids={"listed"}, start="2026-10-01", end="2026-10-15"
+    )
+
+    assert [g.espn_id for g in dropped] == ["ghost"]
+    remaining = {g.espn_id for g in session.query(Game).all()}
+    assert remaining == {"listed", "required", "played", "later"}
+    ranking_dates = {r.date for r in session.query(DailyRanking).all()}
+    assert ranking_dates == {"2026-10-03", "2026-10-04", "2026-10-05", "2026-10-20"}
+
+
+def test_delete_unlisted_if_necessary_games_keeps_regular_season_rows(
+    session, team_ids
+):
+    """Only postseason rows are candidates: `if_necessary` is a postseason
+    concept, and a regular-season row ESPN omits is not a swept series."""
+    from src.db.queries import delete_unlisted_if_necessary_games
+
+    a_id, b_id = team_ids
+    upsert_game(
+        session,
+        team_a_id=a_id,
+        team_b_id=b_id,
+        date="2026-10-02",
+        time="",
+        broadcaster="",
+        espn_id="reg",
+        season_type=2,
+        if_necessary=True,
+    )
+
+    dropped = delete_unlisted_if_necessary_games(
+        session, listed_espn_ids=set(), start="2026-10-01", end="2026-10-15"
+    )
+
+    assert dropped == []
+    assert session.query(Game).count() == 1
+
+
+def _ingest_with(monkeypatch, fake_range):
+    import scripts.daily_update as du
+
+    monkeypatch.setattr(du, "fetch_games_for_range", fake_range)
+    monkeypatch.setattr(du, "fetch_wnba_schedule_broadcasters", lambda _today: {})
+    monkeypatch.setattr(du, "enhance_games_with_broadcasters", lambda games, _b: games)
+    return du
+
+
+def _espn_postseason_game(names, a_id, b_id, espn_id, day):
+    return {
+        "event_id": espn_id,
+        "team_a": names[a_id],
+        "team_b": names[b_id],
+        "date": day,
+        "time": "8:00 PM ET",
+        "time_utc": f"{day}T00:00:00+00:00",
+        "winner_team": None,
+        "final_score_a": None,
+        "final_score_b": None,
+        "broadcaster": "ESPN",
+        "status": "STATUS_SCHEDULED",
+        "season_type": 3,
+        "competition_type": "RD16",
+        "if_necessary": False,
+    }
+
+
+
+def _window():
+    from datetime import date as date_cls
+
+    return (date_cls(2026, 9, 30), date_cls(2026, 10, 31))
+
+
+def test_ingest_drops_an_if_necessary_game_espn_stopped_listing(
+    session, team_ids, monkeypatch
+):
+    """2026-10-01: NY swept MIN, ESPN dropped Game 3, and our row stayed on the
+    board at #2 overall for a game that would never be played."""
+    a_id, b_id = team_ids
+    names = {a_id: "Team A", b_id: "Team B"}
+    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-01", if_necessary=True)
+
+    du = _ingest_with(
+        monkeypatch,
+        lambda start, end, failed_windows=None: [
+            _espn_postseason_game(names, b_id, a_id, "other-series", "2026-10-01")
+        ],
+    )
+    du.fetch_and_store_games(session, window=_window())
+
+    assert session.query(Game).filter(Game.espn_id == "ghost").count() == 0
+    assert session.query(DailyRanking).filter(DailyRanking.date == "2026-10-01").filter(
+        DailyRanking.team_a_id == a_id
+    ).count() == 0
+
+
+def test_ingest_keeps_if_necessary_rows_when_a_month_failed_to_fetch(
+    session, team_ids, monkeypatch
+):
+    """A failed month request is not evidence a game was dropped — the
+    2026-09-17 outage returned nothing for two days. Absence only counts
+    when every requested month actually came back."""
+    a_id, b_id = team_ids
+    names = {a_id: "Team A", b_id: "Team B"}
+    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-01", if_necessary=True)
+
+    def partial_range(start, end, failed_windows=None):
+        failed_windows.append("20261001-20261031")
+        return [_espn_postseason_game(names, b_id, a_id, "other-series", "2026-09-30")]
+
+    du = _ingest_with(monkeypatch, partial_range)
+    du.fetch_and_store_games(session, window=_window())
+
+    assert session.query(Game).filter(Game.espn_id == "ghost").count() == 1
+
+
+def test_ingest_keeps_if_necessary_rows_when_no_postseason_game_came_back(
+    session, team_ids, monkeypatch
+):
+    """A fetch with no postseason games at all says nothing about the bracket
+    (a degraded but 200 response), so it must not empty it."""
+    a_id, b_id = team_ids
+    names = {a_id: "Team A", b_id: "Team B"}
+    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-01", if_necessary=True)
+
+    regular = _espn_postseason_game(names, b_id, a_id, "reg", "2026-09-30")
+    regular["season_type"] = 2
+    du = _ingest_with(monkeypatch, lambda start, end, failed_windows=None: [regular])
+    du.fetch_and_store_games(session, window=_window())
+
+    assert session.query(Game).filter(Game.espn_id == "ghost").count() == 1

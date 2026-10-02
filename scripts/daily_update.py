@@ -19,11 +19,11 @@ from src.data.espn_api import (
     ESPNNotFoundError,
     _SEASON_END,
     clock_season,
+    daily_fetch_window,
     fetch_bpi_ratings,
     fetch_games_for_range,
     fetch_live_win_probability,
     fetch_team_records_from_standings,
-    fetch_schedule_and_results,
     fetch_shots,
     fetch_team_details,
     fetch_team_style_stats,
@@ -35,6 +35,7 @@ from src.data.wnba_schedule import (
 )
 from src.db.queries import (
     delete_shot_league_avg_season,
+    delete_unlisted_if_necessary_games,
     delete_shot_making_season,
     delete_team_style_season,
     get_completed_games_missing_excitement,
@@ -267,11 +268,13 @@ def fetch_and_store_games(
     next morning and no later daily run can ever finalize those rows.
     """
     logger.info("Fetching schedule and results from ESPN...")
-    games = (
-        fetch_schedule_and_results()
-        if window is None
-        else fetch_games_for_range(*window)
-    )
+    # date.today() is UTC on Cloud Run, deliberately not today_et(): it is only
+    # the LOWER bound of a months-long range, never a date key, so at worst it
+    # re-fetches one already-stored day.
+    start, end = window if window is not None else daily_fetch_window(date.today())
+    failed_windows: list[str] = []
+    games = fetch_games_for_range(start, end, failed_windows=failed_windows)
+    logger.info(f"Fetched {len(games)} WNBA games for {start}..{end}")
     if not games:
         logger.warning("No games fetched from ESPN")
         return []
@@ -323,7 +326,36 @@ def fetch_and_store_games(
         stored += 1
 
     logger.info(f"Upserted {stored} games")
+    _drop_unlisted_if_necessary_games(session, games, failed_windows, start, end)
     return games
+
+
+def _drop_unlisted_if_necessary_games(
+    session, games: list[dict], failed_windows: list[str], start: date, end: date
+) -> None:
+    """Drop "if necessary" postseason rows ESPN stopped listing (series ended early).
+
+    An absence only counts as evidence when the fetch is demonstrably whole:
+    every month came back, and it carried at least one postseason game. A
+    failed or degraded fetch must never read as "the bracket vanished" -- the
+    2026-09-17 outage served nothing at all for two days.
+    """
+    if failed_windows:
+        logger.warning(
+            f"Skipping if-necessary cleanup: {len(failed_windows)} window(s) failed"
+        )
+        return
+    if not any(g.get("season_type") == 3 for g in games):
+        return
+    listed = {g["event_id"] for g in games if g.get("event_id")}
+    dropped = delete_unlisted_if_necessary_games(
+        session, listed, start.isoformat(), end.isoformat()
+    )
+    for game in dropped:
+        logger.info(
+            f"Dropped if-necessary game {game.espn_id} on {game.date}: "
+            "ESPN no longer lists it (series ended early)"
+        )
 
 
 def backfill_missing_season_types(session) -> None:

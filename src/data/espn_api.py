@@ -504,14 +504,6 @@ def daily_fetch_window(today: date) -> tuple[date, date]:
     return today - timedelta(days=1), _SEASON_END
 
 
-def fetch_schedule_and_results() -> list[dict]:
-    """Return all games from yesterday through end of season, WNBA teams only."""
-    start, end = daily_fetch_window(date.today())
-    games = fetch_games_for_range(start, end)
-    logger.info(f"Fetched {len(games)} WNBA games through end of season")
-    return games
-
-
 _IF_NECESSARY_NOTE = re.compile(r"\bGame (\d+) If Necessary$", re.IGNORECASE)
 
 
