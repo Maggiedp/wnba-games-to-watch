@@ -141,7 +141,7 @@ def _range_fetch(monkeypatch, start, end, events_by_param=None):
     return games, params
 
 
-def test_listed_event_ids_include_events_that_parse_or_filter_away(monkeypatch):
+def test_listed_by_window_includes_events_that_parse_or_filter_away(monkeypatch):
     """The ghost-game cleanup reads absence from these ids, so they must be the
     RAW ids ESPN returned: an event that fails to parse, names a non-WNBA team,
     or falls outside the window is still listed by ESPN, not dropped by it."""
@@ -151,7 +151,11 @@ def test_listed_event_ids_include_events_that_parse_or_filter_away(monkeypatch):
 
     good = _base_event("2026-10-04T23:00:00Z")
     good["id"] = "401000001"
-    malformed = {"id": "401000002", "competitions": [{}], "date": "2026-10-05T23:00:00Z"}
+    malformed = {
+        "id": "401000002",
+        "competitions": [{}],
+        "date": "2026-10-05T23:00:00Z",
+    }
     out_of_window = _base_event("2026-10-28T23:00:00Z")
     out_of_window["id"] = "401000003"
 
@@ -165,13 +169,15 @@ def test_listed_event_ids_include_events_that_parse_or_filter_away(monkeypatch):
         "fetch_team_id_map",
         lambda: {"1": "Connecticut Sun", "2": "New York Liberty"},
     )
-    listed: set[str] = set()
+    listed: dict = {}
     games = espn_api.fetch_games_for_range(
-        date(2026, 10, 1), date(2026, 10, 15), listed_event_ids=listed
+        date(2026, 10, 1), date(2026, 10, 15), listed_by_window=listed
     )
 
     assert [g["event_id"] for g in games] == ["401000001"]
-    assert listed == {"401000001", "401000002", "401000003"}
+    assert listed == {
+        (date(2026, 10, 1), date(2026, 10, 15)): {"401000001", "401000002", "401000003"}
+    }
 
 
 def test_scoreboard_is_queried_by_month_not_by_date_range(monkeypatch):

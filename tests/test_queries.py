@@ -1,6 +1,7 @@
 """Tests for src/db/queries.py — focused on upsert correctness."""
 
 import json
+from datetime import date
 
 import pytest
 from sqlalchemy import create_engine
@@ -3948,7 +3949,7 @@ def test_fetch_and_store_games_persists_competition_type(
     monkeypatch.setattr(
         du,
         "fetch_games_for_range",
-        lambda start, end, failed_windows=None, listed_event_ids=None: [
+        lambda start, end, listed_by_window=None: [
             {
                 "event_id": "401857321",
                 "team_a": names[a_id],
@@ -3995,7 +3996,7 @@ def test_fetch_and_store_games_uses_an_explicit_window_when_given(
     names = {a_id: "Team A", b_id: "Team B"}
     seen = {}
 
-    def fake_range(start, end, failed_windows=None, listed_event_ids=None):
+    def fake_range(start, end, listed_by_window=None):
         seen["window"] = (start, end)
         return [
             {
@@ -4112,8 +4113,12 @@ def test_delete_unlisted_if_necessary_games_drops_only_the_ghost(session, team_i
 
     a_id, b_id = team_ids
     _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-02", if_necessary=True)
-    _seed_postseason_game(session, a_id, b_id, "listed", "2026-10-03", if_necessary=True)
-    _seed_postseason_game(session, a_id, b_id, "required", "2026-10-04", if_necessary=False)
+    _seed_postseason_game(
+        session, a_id, b_id, "listed", "2026-10-03", if_necessary=True
+    )
+    _seed_postseason_game(
+        session, a_id, b_id, "required", "2026-10-04", if_necessary=False
+    )
     _seed_postseason_game(
         session,
         a_id,
@@ -4166,17 +4171,25 @@ def test_delete_unlisted_if_necessary_games_keeps_regular_season_rows(
     assert session.query(Game).count() == 1
 
 
-def _ingest_with(monkeypatch, fake_range, also_listed=()):
-    """Stub the ESPN fetch. `fake_range` returns the PARSED games; ESPN's raw
-    listing is those ids plus `also_listed` (events that failed to parse)."""
+# The two sub-windows `fetch_games_for_range` requests for a 09-30..10-31 run.
+_SEP = (date(2026, 9, 30), date(2026, 9, 30))
+_OCT = (date(2026, 10, 1), date(2026, 10, 31))
+_WINDOW = (_SEP[0], _OCT[1])
+
+
+def _ingest_with(monkeypatch, responses):
+    """Stub the ESPN fetch. `responses` maps each sub-window that came back to
+    what ESPN listed in it: a game dict (parsed), or a bare event id (listed
+    but failed to parse). A sub-window missing from it failed."""
     import scripts.daily_update as du
 
-    def fetch(start, end, failed_windows=None, listed_event_ids=None):
-        games = fake_range(start, end, failed_windows=failed_windows)
-        if listed_event_ids is not None:
-            listed_event_ids.update(g["event_id"] for g in games)
-            listed_event_ids.update(also_listed)
-        return games
+    def fetch(start, end, listed_by_window=None):
+        if listed_by_window is not None:
+            for window, items in responses.items():
+                listed_by_window[window] = {
+                    i if isinstance(i, str) else i["event_id"] for i in items
+                }
+        return [i for items in responses.values() for i in items if isinstance(i, dict)]
 
     monkeypatch.setattr(du, "fetch_games_for_range", fetch)
     monkeypatch.setattr(du, "fetch_wnba_schedule_broadcasters", lambda _today: {})
@@ -4184,11 +4197,12 @@ def _ingest_with(monkeypatch, fake_range, also_listed=()):
     return du
 
 
-def _espn_postseason_game(names, a_id, b_id, espn_id, day):
+def _espn_postseason_game(espn_id, day):
+    """A parsed ESPN postseason game between the `team_ids` fixture's teams."""
     return {
         "event_id": espn_id,
-        "team_a": names[a_id],
-        "team_b": names[b_id],
+        "team_a": "Team B",
+        "team_b": "Team A",
         "date": day,
         "time": "8:00 PM ET",
         "time_utc": f"{day}T00:00:00+00:00",
@@ -4203,11 +4217,8 @@ def _espn_postseason_game(names, a_id, b_id, espn_id, day):
     }
 
 
-
-def _window():
-    from datetime import date as date_cls
-
-    return (date_cls(2026, 9, 30), date_cls(2026, 10, 31))
+def _ghost_survives(session):
+    return session.query(Game).filter(Game.espn_id == "ghost").count() == 1
 
 
 def test_ingest_drops_an_if_necessary_game_espn_stopped_listing(
@@ -4216,58 +4227,52 @@ def test_ingest_drops_an_if_necessary_game_espn_stopped_listing(
     """2026-10-01: NY swept MIN, ESPN dropped Game 3, and our row stayed on the
     board at #2 overall for a game that would never be played."""
     a_id, b_id = team_ids
-    names = {a_id: "Team A", b_id: "Team B"}
     _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-01", if_necessary=True)
 
     du = _ingest_with(
-        monkeypatch,
-        lambda start, end, failed_windows=None: [
-            _espn_postseason_game(names, b_id, a_id, "other-series", "2026-10-01")
-        ],
+        monkeypatch, {_SEP: [], _OCT: [_espn_postseason_game("other", "2026-10-01")]}
     )
-    du.fetch_and_store_games(session, window=_window())
+    du.fetch_and_store_games(session, window=_WINDOW)
 
-    assert session.query(Game).filter(Game.espn_id == "ghost").count() == 0
-    assert session.query(DailyRanking).filter(DailyRanking.date == "2026-10-01").filter(
-        DailyRanking.team_a_id == a_id
-    ).count() == 0
+    assert not _ghost_survives(session)
+    assert (
+        session.query(DailyRanking)
+        .filter(DailyRanking.date == "2026-10-01", DailyRanking.team_a_id == a_id)
+        .count()
+        == 0
+    )
 
 
-def test_ingest_keeps_if_necessary_rows_when_a_month_failed_to_fetch(
+def test_ingest_keeps_rows_whose_window_failed_to_fetch(session, team_ids, monkeypatch):
+    """A failed request is not evidence a game was dropped — the 2026-09-17
+    outage served nothing for two days. Even a September response carrying a
+    late-night 10-01 game (ESPN buckets those into the neighbouring month)
+    must not vouch for the October request that failed."""
+    a_id, b_id = team_ids
+    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-02", if_necessary=True)
+
+    du = _ingest_with(
+        monkeypatch, {_SEP: [_espn_postseason_game("late", "2026-10-01")]}
+    )
+    du.fetch_and_store_games(session, window=_WINDOW)
+
+    assert _ghost_survives(session)
+
+
+def test_ingest_keeps_rows_in_a_window_with_no_postseason_evidence(
     session, team_ids, monkeypatch
 ):
-    """A failed month request is not evidence a game was dropped — the
-    2026-09-17 outage returned nothing for two days. Absence only counts
-    when every requested month actually came back."""
+    """Evidence is per request: an October that came back 200-but-empty must
+    not be vouched for by a healthy September."""
     a_id, b_id = team_ids
-    names = {a_id: "Team A", b_id: "Team B"}
-    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-01", if_necessary=True)
+    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-02", if_necessary=True)
 
-    def partial_range(start, end, failed_windows=None):
-        failed_windows.append("20261001-20261031")
-        return [_espn_postseason_game(names, b_id, a_id, "other-series", "2026-09-30")]
+    du = _ingest_with(
+        monkeypatch, {_SEP: [_espn_postseason_game("sep", "2026-09-30")], _OCT: []}
+    )
+    du.fetch_and_store_games(session, window=_WINDOW)
 
-    du = _ingest_with(monkeypatch, partial_range)
-    du.fetch_and_store_games(session, window=_window())
-
-    assert session.query(Game).filter(Game.espn_id == "ghost").count() == 1
-
-
-def test_ingest_keeps_if_necessary_rows_when_no_postseason_game_came_back(
-    session, team_ids, monkeypatch
-):
-    """A fetch with no postseason games at all says nothing about the bracket
-    (a degraded but 200 response), so it must not empty it."""
-    a_id, b_id = team_ids
-    names = {a_id: "Team A", b_id: "Team B"}
-    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-01", if_necessary=True)
-
-    regular = _espn_postseason_game(names, b_id, a_id, "reg", "2026-09-30")
-    regular["season_type"] = 2
-    du = _ingest_with(monkeypatch, lambda start, end, failed_windows=None: [regular])
-    du.fetch_and_store_games(session, window=_window())
-
-    assert session.query(Game).filter(Game.espn_id == "ghost").count() == 1
+    assert _ghost_survives(session)
 
 
 def test_ingest_keeps_an_if_necessary_row_whose_event_failed_to_parse(
@@ -4276,38 +4281,30 @@ def test_ingest_keeps_an_if_necessary_row_whose_event_failed_to_parse(
     """ESPN still lists the game but our parser dropped it (schema drift, an
     unresolvable team name). Parsed absence is not ESPN absence, so the row stays."""
     a_id, b_id = team_ids
-    names = {a_id: "Team A", b_id: "Team B"}
-    _seed_postseason_game(session, a_id, b_id, "unparsed", "2026-10-01", if_necessary=True)
+    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-01", if_necessary=True)
 
     du = _ingest_with(
         monkeypatch,
-        lambda start, end, failed_windows=None: [
-            _espn_postseason_game(names, b_id, a_id, "other-series", "2026-10-01")
-        ],
-        also_listed={"unparsed"},
+        {_SEP: [], _OCT: [_espn_postseason_game("other", "2026-10-01"), "ghost"]},
     )
-    du.fetch_and_store_games(session, window=_window())
+    du.fetch_and_store_games(session, window=_WINDOW)
 
-    assert session.query(Game).filter(Game.espn_id == "unparsed").count() == 1
+    assert _ghost_survives(session)
 
 
-def test_ingest_keeps_rows_in_a_month_with_no_postseason_evidence(
+def test_ingest_keeps_a_row_espn_files_under_the_neighbouring_month(
     session, team_ids, monkeypatch
 ):
-    """Evidence is per month: today's window spans two monthly requests, and an
-    October that comes back 200-but-empty must not be vouched for by a healthy
-    September. Without a postseason game from the row's own month, absence
-    means nothing."""
+    """Absence is checked against EVERY response, not just the row's own
+    window: a late-night 10-01 game ESPN lists only in September's response is
+    still listed."""
     a_id, b_id = team_ids
-    names = {a_id: "Team A", b_id: "Team B"}
-    _seed_postseason_game(session, a_id, b_id, "october", "2026-10-02", if_necessary=True)
+    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-01", if_necessary=True)
 
     du = _ingest_with(
         monkeypatch,
-        lambda start, end, failed_windows=None: [
-            _espn_postseason_game(names, b_id, a_id, "september", "2026-09-30")
-        ],
+        {_SEP: ["ghost"], _OCT: [_espn_postseason_game("other", "2026-10-02")]},
     )
-    du.fetch_and_store_games(session, window=_window())
+    du.fetch_and_store_games(session, window=_WINDOW)
 
-    assert session.query(Game).filter(Game.espn_id == "october").count() == 1
+    assert _ghost_survives(session)
