@@ -198,12 +198,18 @@ def game_detail(espn_id: str):
 
 
 @app.get("/player/{athlete_id}", response_class=HTMLResponse)
-def player_page(athlete_id: str):
+def player_page(athlete_id: str, season: int = Query(default=None)):
     from src.api.routes import render_player_page
 
     session = get_session()
     try:
-        html = render_player_page(session, athlete_id, _get_shot_baseline)
+        if season is None:
+            season = _default_player_season(session, athlete_id)
+        html = (
+            None
+            if season is None
+            else render_player_page(session, athlete_id, season, _get_shot_baseline)
+        )
     finally:
         session.close()
     if html is None:

@@ -252,3 +252,64 @@ def test_player_page_zone_table_shows_pps_and_xpps(client, env):
     # Her one rim attempt is a make: 2 points on 1 FGA.
     rim = re.search(r"Rim</span>(.*?)</div>", table, re.S).group(1)
     assert '<span class="fg">100%</span><span>2.00</span>' in rim
+
+
+def _seed_older_season_shot(env):
+    """One 2025 shot for p-qual, so the fixture holds TWO seasons."""
+    session = get_session()
+    q.upsert_shots(
+        session,
+        "g-2025",
+        2025,
+        [_shot("o1", "p-qual", "Sabrina Ionescu", "1", "NY", x=25, y=1)],
+    )
+    session.close()
+
+
+def _subtitle(body):
+    return re.search(r'<p class="player-sub">(.*?)</p>', body, re.S).group(1)
+
+
+def test_bare_player_link_serves_newest_season_in_offseason(
+    client, env, monkeypatch
+):
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-01-15")
+    _seed_qualified(env)  # 2026
+    _seed_older_season_shot(env)  # 2025
+
+    r = client.get("/player/p-qual")
+    assert r.status_code == 200
+    assert "2026" in _subtitle(r.text)
+
+
+def test_player_link_with_explicit_season(client, env, monkeypatch):
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-01-15")
+    _seed_qualified(env)
+    _seed_older_season_shot(env)
+
+    r = client.get("/player/p-qual?season=2025")
+    assert r.status_code == 200
+    assert "2025" in _subtitle(r.text)
+    # Not on the 2025 board -> sub-threshold branch.
+    assert "Not yet ranked" in r.text
+
+
+def test_player_link_season_without_shots_is_404(client, env):
+    _seed_qualified(env)
+    assert client.get("/player/p-qual?season=2024").status_code == 404
+
+
+def test_player_link_non_integer_season_is_422(client, env):
+    _seed_qualified(env)
+    assert client.get("/player/p-qual?season=abc").status_code == 422
+
+
+def test_player_page_share_tags_pin_the_season(client, env):
+    _seed_qualified(env)
+    body = client.get("/player/p-qual").text
+    assert '/player/p-qual?season=2026"' in body  # og:url
+    assert body.count('/player/p-qual/og.png?season=2026"') == 2  # og + twitter
