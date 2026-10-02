@@ -353,3 +353,67 @@ def test_endpoint_drops_anchors_when_the_season_empties(env, client):
     assert emptied["league_avg_xpps"] is None
     assert emptied["league_avg_pps"] is None
     assert emptied["vs_league_scale"] is None
+
+
+def _seed_split_seasons():
+    """2026: two 'star' shots. 2027: one 'star' shot. Models the early-season
+    split where the board is still on 2026."""
+    from src.db.queries import upsert_shots
+
+    session = get_session()
+    upsert_shots(
+        session,
+        "g26",
+        2026,
+        [_p("a26", "star", "Star Player"), _p("b26", "star", "Star Player")],
+    )
+    upsert_shots(session, "g27", 2027, [_p("a27", "star", "Star Player")])
+    session.close()
+
+
+def test_player_shots_explicit_season_matches_the_board(client, env, monkeypatch):
+    # The leaderboard panel passes the BOARD's season. With the board on 2026
+    # and 'star' already shooting in 2027, the panel must get 2026 shots.
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-05-20")
+    _seed_split_seasons()
+
+    data = client.get("/api/player-shots?athlete_id=star&season=2026").json()
+    assert data["season"] == 2026
+    assert data["fga"] == 2
+
+
+def test_player_shots_default_is_players_newest_season(client, env, monkeypatch):
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-05-20")
+    _seed_split_seasons()
+
+    data = client.get("/api/player-shots?athlete_id=star").json()
+    assert data["season"] == 2027
+    assert data["fga"] == 1
+
+
+def test_player_shots_default_in_offseason(client, env, monkeypatch):
+    import src.data.espn_api as espn_api
+    from src.db.queries import upsert_shots
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-02-01")
+    session = get_session()
+    upsert_shots(session, "g25", 2025, [_p("x25", "star", "Star Player")])
+    upsert_shots(
+        session,
+        "g26",
+        2026,
+        [_p("a26", "star", "Star Player"), _p("b26", "star", "Star Player")],
+    )
+    session.close()
+
+    data = client.get("/api/player-shots?athlete_id=star").json()
+    assert data["season"] == 2026 and data["fga"] == 2
+
+
+def test_player_shots_explicit_season_without_data_is_empty(client, env):
+    data = client.get("/api/player-shots?athlete_id=star&season=2024").json()
+    assert data["season"] == 2024 and data["shots"] == [] and data["fga"] == 0

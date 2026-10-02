@@ -51,6 +51,7 @@ from src.db.queries import (
     get_games_by_date,
     get_latest_calibration_season,
     get_latest_elo_history_season,
+    get_latest_player_shot_season,
     get_latest_playoff_probability_date,
     get_latest_shot_making_season,
     get_playoff_probabilities,
@@ -706,9 +707,18 @@ def _get_shot_baseline(season: int) -> dict:
     return _shot_baseline_cache.get(season, build)
 
 
+def _default_player_season(session, athlete_id: str) -> int | None:
+    """Season a bare player link resolves to: the newest season in which the
+    athlete has shots, not after the clock. None for an unknown athlete."""
+    return get_latest_player_shot_season(session, athlete_id, clock_season())
+
+
 @app.get("/api/player-shots")
-def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
-    """One player's shot chart for the CURRENT season (DB-only). Colors each shot
+def get_player_shots(
+    athlete_id: str = Query(..., min_length=1, max_length=20),
+    season: int = Query(default=None),
+):
+    """One player's shot chart for a season (DB-only). Colors each shot
     by points added vs. the league xPPS baseline; empty for an unknown player.
 
     The panel renders ONLY `shots` + `zones`, so the response deliberately omits
@@ -720,10 +730,15 @@ def get_player_shots(athlete_id: str = Query(..., min_length=1, max_length=20)):
     window (see the /api/player-shots gotcha in src/api/CLAUDE.md). `zones` still
     reflect that same window skew, but only for a just-ingested player and only by
     mentally summing — accepted daily-window known-limitation. Between daily runs
-    the zones tie to the leaderboard exactly (shared build_baseline)."""
-    season = clock_season()
+    the zones tie to the leaderboard exactly (shared build_baseline).
+
+    Defaults to the player's newest season with shots; the leaderboard panel
+    always passes the board's season explicitly, so its chart can never come
+    from a different season than the row it opens under."""
     session = get_session()
     try:
+        if season is None:
+            season = _default_player_season(session, athlete_id) or clock_season()
         rows = get_shots_for_player(session, season, athlete_id)
     finally:
         session.close()
