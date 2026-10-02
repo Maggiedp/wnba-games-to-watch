@@ -4308,3 +4308,32 @@ def test_ingest_keeps_a_row_espn_files_under_the_neighbouring_month(
     du.fetch_and_store_games(session, window=_WINDOW)
 
     assert _ghost_survives(session)
+
+
+def test_a_wrongly_dropped_game_returns_on_the_next_healthy_run(
+    session, team_ids, monkeypatch
+):
+    """The accepted residual: a PARTIAL response (postseason evidence present,
+    one real game missing) is indistinguishable from ESPN dropping it, so the
+    row goes. That costs at most one run, not the game: every dropped field is
+    ESPN-sourced, and `upsert_game` re-inserts the event the next time ESPN
+    lists it (the daily run then rescores it). Codex R3 on the ghost-game PR
+    called this permanent; this pins that it is not."""
+    a_id, b_id = team_ids
+    _seed_postseason_game(session, a_id, b_id, "ghost", "2026-10-11", if_necessary=True)
+
+    partial = {_SEP: [], _OCT: [_espn_postseason_game("other", "2026-10-09")]}
+    _ingest_with(monkeypatch, partial).fetch_and_store_games(session, window=_WINDOW)
+    assert not _ghost_survives(session)
+
+    back = _espn_postseason_game("ghost", "2026-10-11")
+    back.update(team_a="Team A", team_b="Team B", if_necessary=True)
+    healthy = {_SEP: [], _OCT: [_espn_postseason_game("other", "2026-10-09"), back]}
+    _ingest_with(monkeypatch, healthy).fetch_and_store_games(session, window=_WINDOW)
+
+    restored = session.query(Game).filter(Game.espn_id == "ghost").one()
+    assert (restored.date, restored.if_necessary, restored.season_type) == (
+        "2026-10-11",
+        True,
+        3,
+    )
