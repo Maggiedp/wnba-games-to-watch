@@ -273,7 +273,10 @@ def fetch_and_store_games(
     # re-fetches one already-stored day.
     start, end = window if window is not None else daily_fetch_window(date.today())
     failed_windows: list[str] = []
-    games = fetch_games_for_range(start, end, failed_windows=failed_windows)
+    listed_event_ids: set[str] = set()
+    games = fetch_games_for_range(
+        start, end, failed_windows=failed_windows, listed_event_ids=listed_event_ids
+    )
     logger.info(f"Fetched {len(games)} WNBA games for {start}..{end}")
     if not games:
         logger.warning("No games fetched from ESPN")
@@ -326,19 +329,28 @@ def fetch_and_store_games(
         stored += 1
 
     logger.info(f"Upserted {stored} games")
-    _drop_unlisted_if_necessary_games(session, games, failed_windows, start, end)
+    _drop_unlisted_if_necessary_games(
+        session, games, listed_event_ids, failed_windows, start, end
+    )
     return games
 
 
 def _drop_unlisted_if_necessary_games(
-    session, games: list[dict], failed_windows: list[str], start: date, end: date
+    session,
+    games: list[dict],
+    listed_event_ids: set[str],
+    failed_windows: list[str],
+    start: date,
+    end: date,
 ) -> None:
     """Drop "if necessary" postseason rows ESPN stopped listing (series ended early).
 
     An absence only counts as evidence when the fetch is demonstrably whole:
     every month came back, and it carried at least one postseason game. A
     failed or degraded fetch must never read as "the bracket vanished" -- the
-    2026-09-17 outage served nothing at all for two days.
+    2026-09-17 outage served nothing at all for two days. Absence is read from
+    ESPN's RAW event ids, not the parsed games, so an event our parser drops
+    is never mistaken for one ESPN dropped.
     """
     if failed_windows:
         logger.warning(
@@ -347,9 +359,8 @@ def _drop_unlisted_if_necessary_games(
         return
     if not any(g.get("season_type") == 3 for g in games):
         return
-    listed = {g["event_id"] for g in games if g.get("event_id")}
     dropped = delete_unlisted_if_necessary_games(
-        session, listed, start.isoformat(), end.isoformat()
+        session, listed_event_ids, start.isoformat(), end.isoformat()
     )
     for game in dropped:
         logger.info(

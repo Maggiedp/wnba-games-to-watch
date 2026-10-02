@@ -3948,7 +3948,7 @@ def test_fetch_and_store_games_persists_competition_type(
     monkeypatch.setattr(
         du,
         "fetch_games_for_range",
-        lambda start, end, failed_windows=None: [
+        lambda start, end, failed_windows=None, listed_event_ids=None: [
             {
                 "event_id": "401857321",
                 "team_a": names[a_id],
@@ -3995,7 +3995,7 @@ def test_fetch_and_store_games_uses_an_explicit_window_when_given(
     names = {a_id: "Team A", b_id: "Team B"}
     seen = {}
 
-    def fake_range(start, end, failed_windows=None):
+    def fake_range(start, end, failed_windows=None, listed_event_ids=None):
         seen["window"] = (start, end)
         return [
             {
@@ -4166,10 +4166,19 @@ def test_delete_unlisted_if_necessary_games_keeps_regular_season_rows(
     assert session.query(Game).count() == 1
 
 
-def _ingest_with(monkeypatch, fake_range):
+def _ingest_with(monkeypatch, fake_range, also_listed=()):
+    """Stub the ESPN fetch. `fake_range` returns the PARSED games; ESPN's raw
+    listing is those ids plus `also_listed` (events that failed to parse)."""
     import scripts.daily_update as du
 
-    monkeypatch.setattr(du, "fetch_games_for_range", fake_range)
+    def fetch(start, end, failed_windows=None, listed_event_ids=None):
+        games = fake_range(start, end, failed_windows=failed_windows)
+        if listed_event_ids is not None:
+            listed_event_ids.update(g["event_id"] for g in games)
+            listed_event_ids.update(also_listed)
+        return games
+
+    monkeypatch.setattr(du, "fetch_games_for_range", fetch)
     monkeypatch.setattr(du, "fetch_wnba_schedule_broadcasters", lambda _today: {})
     monkeypatch.setattr(du, "enhance_games_with_broadcasters", lambda games, _b: games)
     return du
@@ -4259,3 +4268,24 @@ def test_ingest_keeps_if_necessary_rows_when_no_postseason_game_came_back(
     du.fetch_and_store_games(session, window=_window())
 
     assert session.query(Game).filter(Game.espn_id == "ghost").count() == 1
+
+
+def test_ingest_keeps_an_if_necessary_row_whose_event_failed_to_parse(
+    session, team_ids, monkeypatch
+):
+    """ESPN still lists the game but our parser dropped it (schema drift, an
+    unresolvable team name). Parsed absence is not ESPN absence, so the row stays."""
+    a_id, b_id = team_ids
+    names = {a_id: "Team A", b_id: "Team B"}
+    _seed_postseason_game(session, a_id, b_id, "unparsed", "2026-10-01", if_necessary=True)
+
+    du = _ingest_with(
+        monkeypatch,
+        lambda start, end, failed_windows=None: [
+            _espn_postseason_game(names, b_id, a_id, "other-series", "2026-10-01")
+        ],
+        also_listed={"unparsed"},
+    )
+    du.fetch_and_store_games(session, window=_window())
+
+    assert session.query(Game).filter(Game.espn_id == "unparsed").count() == 1

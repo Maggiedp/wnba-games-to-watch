@@ -329,7 +329,10 @@ def fetch_team_style_stats(season: int) -> list[dict]:
 
 
 def fetch_games_for_range(
-    start: date, end: date, failed_windows: list[str] | None = None
+    start: date,
+    end: date,
+    failed_windows: list[str] | None = None,
+    listed_event_ids: set[str] | None = None,
 ) -> list[dict]:
     """Return all parsed WNBA games between start and end dates (inclusive).
 
@@ -338,6 +341,9 @@ def fetch_games_for_range(
     crash); pass `failed_windows` to have those skipped `YYYYMMDD-YYYYMMDD`
     windows recorded, so a caller needing completeness (the one-shot backfill)
     can detect the gap and fail closed instead of reporting a partial run.
+    Pass `listed_event_ids` to collect every raw event id ESPN returned, before
+    parsing or filtering: the ghost-game cleanup reads absence from it, and an
+    event our parser drops is still one ESPN lists.
 
     **The scoreboard is queried as `dates=YYYYMM`, one whole month per request.
     ESPN began rejecting the `dates=YYYYMMDD-YYYYMMDD` range form with HTTP 400
@@ -383,6 +389,8 @@ def fetch_games_for_range(
 
         for event in data.get("events", []):
             event_id = event.get("id")
+            if listed_event_ids is not None and event_id:
+                listed_event_ids.add(event_id)
             if event_id in seen_ids:
                 continue
             game = _parse_event(event)
