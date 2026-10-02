@@ -313,3 +313,17 @@ def test_player_page_share_tags_pin_the_season(client, env):
     body = client.get("/player/p-qual").text
     assert '/player/p-qual?season=2026"' in body  # og:url
     assert body.count('/player/p-qual/og.png?season=2026"') == 2  # og + twitter
+
+
+def test_pinned_finished_season_headline_names_the_year(client, env, monkeypatch):
+    # Sub-threshold on a finished season: the visible headline and the meta
+    # description must not call 2025 "this season".
+    import src.data.espn_api as espn_api
+
+    monkeypatch.setattr(espn_api, "today_et", lambda: "2027-01-15")
+    _seed_qualified(env)
+    _seed_older_season_shot(env)
+
+    body = client.get("/player/p-qual?season=2025").text
+    assert "this season" not in body
+    assert '<meta name="description" content="1 FGA in 2025">' in body

@@ -295,14 +295,16 @@ def player_headline(
     points_added: float | None,
     rank: int | None,
     total: int | None,
+    season: int,
 ) -> str:
     """Headline stat line for the shareable player page's meta description and OG
     card. ASCII-signed on purpose: it's rasterized into the Pillow OG card and
     Fraunces has no U+2212 glyph (tofu), so use '+'/'-' not the site's Unicode
     minus. When `rank` is None the player is below the leaderboard's FGA cutoff —
-    chart-only, so drop the ranked stats and just state the sample size."""
+    chart-only, so drop the ranked stats and just state the sample size, naming
+    the season (never "this season": the page may show a finished one)."""
     if rank is None:
-        return f"{fga} FGA this season"
+        return f"{fga} FGA in {season}"
     sign = "+" if points_added >= 0 else "-"
     return (
         f"{sign}{abs(points_added):.1f} points added · #{rank} of {total} · {fga} FGA"

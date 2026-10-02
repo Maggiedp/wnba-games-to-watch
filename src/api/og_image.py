@@ -341,7 +341,7 @@ def render_player_card_png(
     if me is not None:
         name = me.athlete_name
         team = me.team_abbr
-        headline = player_headline(me.fga, me.points_added, rank, len(board))
+        headline = player_headline(me.fga, me.points_added, rank, len(board), season)
     else:
         # Not on the board: sub-threshold (has shots but no ranked row) or
         # unknown. Only now fetch the raw shots — needed for the name, the FGA
@@ -358,6 +358,6 @@ def render_player_card_png(
         # card never disagree.
         shot_counts = Counter(r.team_abbr for r in rows)
         team = max(shot_counts, key=lambda t: (shot_counts[t], t))
-        headline = player_headline(len(rows), None, None, None)
+        headline = player_headline(len(rows), None, None, None, season)
 
     return render_player_card(name=name, team=team, headline=headline, season=season)
