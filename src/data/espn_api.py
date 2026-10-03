@@ -653,7 +653,8 @@ def _parse_event(event: dict) -> Optional[dict]:
 def _parse_broadcaster(comp: dict) -> str:
     """Extract broadcaster name from competition data.
 
-    Returns "" (shown as TBD) when ESPN lists no broadcasts at all: that is
+    Returns "" (unknown: the table shows TBD, the detail page, mobile card
+    and OG card omit it) when ESPN lists no broadcasts at all: that is
     a game whose network is not announced yet (the 2026 semifinals were
     published this way), not a League Pass game. Every announced game in
     Jun/Aug/Sep 2026 listed at least one broadcast.
