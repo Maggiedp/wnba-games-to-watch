@@ -105,6 +105,27 @@ def test_upsert_game_preserves_time_when_incoming_empty(session, team_ids):
     assert game.time == "7:00 PM ET"
 
 
+def test_upsert_game_clears_broadcaster_when_espn_no_longer_lists_one(
+    session, team_ids
+):
+    """An empty broadcaster means ESPN has not announced the network. It must
+    replace a stored value, or a row stored as "League Pass" before that rule
+    existed would keep the wrong network until the game is played."""
+    a_id, b_id = team_ids
+    for broadcaster in ("League Pass", ""):
+        upsert_game(
+            session,
+            team_a_id=a_id,
+            team_b_id=b_id,
+            date="2026-10-04",
+            time="",
+            broadcaster=broadcaster,
+        )
+
+    game = session.query(Game).filter_by(date="2026-10-04").one()
+    assert game.broadcaster == ""
+
+
 def test_get_upcoming_rankings_excludes_completed_games(session, team_ids):
     """A ranking whose Game already has a winner must not appear in
     /api/games/upcoming's source query. Same-day finals previously

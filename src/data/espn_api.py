@@ -651,10 +651,20 @@ def _parse_event(event: dict) -> Optional[dict]:
 
 
 def _parse_broadcaster(comp: dict) -> str:
-    """Extract broadcaster name from competition data."""
+    """Extract broadcaster name from competition data.
+
+    Returns "" (shown as TBD) when ESPN lists no broadcasts at all: that is
+    a game whose network is not announced yet (the 2026 semifinals were
+    published this way), not a League Pass game. Every announced game in
+    Jun/Aug/Sep 2026 listed at least one broadcast.
+    """
     from src.constants import BROADCASTER_NORMALIZE, Broadcasters
 
-    for broadcast in comp.get("geoBroadcasts", []) + comp.get("broadcasts", []):
+    listed = comp.get("geoBroadcasts", []) + comp.get("broadcasts", [])
+    if not listed:
+        return ""
+
+    for broadcast in listed:
         names = broadcast.get("names", [])
         media = broadcast.get("media", {}).get("shortName", "")
         for candidate in names + ([media] if media else []):
