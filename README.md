@@ -24,7 +24,7 @@ The **60/40 weighting is an editorial choice, not a fitted parameter** — there
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime deps + pytest/httpx
 
 python main.py          # API at http://localhost:8000
 python -m scripts.daily_update   # populate the database
