@@ -294,8 +294,10 @@ def test_player_link_with_explicit_season(client, env, monkeypatch):
     r = client.get("/player/p-qual?season=2025")
     assert r.status_code == 200
     assert "2025" in _subtitle(r.text)
-    # Not on the 2025 board -> sub-threshold branch.
-    assert "Not yet ranked" in r.text
+    # Not on the 2025 board -> sub-threshold branch. 2025 is finished, so
+    # "not yet" would promise a ranking that can no longer come.
+    assert "Not ranked in 2025." in r.text
+    assert "Not yet ranked" not in r.text
 
 
 def test_player_link_season_without_shots_is_404(client, env):

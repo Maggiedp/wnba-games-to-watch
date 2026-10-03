@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from src.api import blurbs
-from src.data.espn_api import today_et
+from src.data.espn_api import clock_season, today_et
 from src.db.queries import (
     get_game_fields,
     get_head_to_head,
@@ -1568,12 +1568,17 @@ def render_player_page(session, athlete_id, season, get_baseline) -> str | None:
         # branch also covers the transient 6 AM window where a player has 100+
         # raw shots but isn't in the just-being-recomputed shot_making board yet
         # (see the known-limitation in src/api/CLAUDE.md), so a "needs 100 FGA"
-        # claim would be self-contradictory then. "Not yet ranked" is honest in
-        # both the genuinely-sub-threshold and transient cases; the zone table
-        # still renders below, so it also drops the old inaccurate "only".
-        stat_header = (
-            '<p class="degrade-note">Not yet ranked on the shot-making leaderboard.</p>'
-        )
+        # claim would be self-contradictory then. For the current season, "Not
+        # yet ranked" is honest in both the genuinely-sub-threshold and
+        # transient cases; the zone table still renders below, so it also
+        # drops the old inaccurate "only". A finished season (same
+        # clock_season() rule the leaderboard uses) has no recompute left to
+        # rank the player, so it says "Not ranked in YYYY." instead.
+        if season < clock_season():
+            note = f"Not ranked in {season}."
+        else:
+            note = "Not yet ranked on the shot-making leaderboard."
+        stat_header = f'<p class="degrade-note">{note}</p>'
         bridge_html = ""
 
     title = f"{name} — Shot making — {_SITE_TITLE}"
