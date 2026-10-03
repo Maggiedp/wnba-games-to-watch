@@ -3988,8 +3988,6 @@ def test_fetch_and_store_games_persists_competition_type(
             }
         ],
     )
-    monkeypatch.setattr(du, "fetch_wnba_schedule_broadcasters", lambda _today: {})
-    monkeypatch.setattr(du, "enhance_games_with_broadcasters", lambda games, _b: games)
 
     du.fetch_and_store_games(session)
 
@@ -4042,8 +4040,6 @@ def test_fetch_and_store_games_uses_an_explicit_window_when_given(
 
     monkeypatch.setattr(du, "fetch_games_for_range", fake_range)
     monkeypatch.setattr(du, "daily_fetch_window", boom)
-    monkeypatch.setattr(du, "fetch_wnba_schedule_broadcasters", lambda _today: {})
-    monkeypatch.setattr(du, "enhance_games_with_broadcasters", lambda games, _b: games)
 
     window = (date_cls(2026, 9, 17), date_cls(2026, 9, 17))
     du.fetch_and_store_games(session, window=window)
@@ -4213,8 +4209,6 @@ def _ingest_with(monkeypatch, responses):
         return [i for items in responses.values() for i in items if isinstance(i, dict)]
 
     monkeypatch.setattr(du, "fetch_games_for_range", fetch)
-    monkeypatch.setattr(du, "fetch_wnba_schedule_broadcasters", lambda _today: {})
-    monkeypatch.setattr(du, "enhance_games_with_broadcasters", lambda games, _b: games)
     return du
 
 
