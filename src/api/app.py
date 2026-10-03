@@ -15,6 +15,7 @@ from datetime import date as date_cls
 from datetime import datetime, timedelta, timezone
 from secrets import compare_digest
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
@@ -119,6 +120,10 @@ app = FastAPI(
 
 _TRIGGER_SECRET = os.environ.get("TRIGGER_SECRET", "")
 
+# ?season= bounds: the first WNBA season through any 4-digit year. Unbounded,
+# a huge value reached the DB and raised (OverflowError / int out of range) -> 500.
+_SeasonQuery = Annotated[int | None, Query(ge=1997, le=9999)]
+
 
 @app.middleware("http")
 async def security_headers(request, call_next):
@@ -198,7 +203,7 @@ def game_detail(espn_id: str):
 
 
 @app.get("/player/{athlete_id}", response_class=HTMLResponse)
-def player_page(athlete_id: str, season: int = Query(default=None)):
+def player_page(athlete_id: str, season: _SeasonQuery = None):
     from src.api.routes import render_player_page
 
     session = get_session()
@@ -260,7 +265,7 @@ def game_og_image(espn_id: str):
 
 
 @app.api_route("/player/{athlete_id}/og.png", methods=["GET", "HEAD"])
-def player_og_image(athlete_id: str, season: int = Query(default=None)):
+def player_og_image(athlete_id: str, season: _SeasonQuery = None):
     from src.api.og_image import render_player_card_png
 
     session = get_session()
@@ -741,7 +746,7 @@ def _default_player_season(session, athlete_id: str) -> int | None:
 @app.get("/api/player-shots")
 def get_player_shots(
     athlete_id: str = Query(..., min_length=1, max_length=20),
-    season: int = Query(default=None),
+    season: _SeasonQuery = None,
 ):
     """One player's shot chart for a season (DB-only). Colors each shot
     by points added vs. the league xPPS baseline; empty for an unknown player.
@@ -1237,7 +1242,7 @@ def get_playoff_odds(date: str = Query(default=None)):
 
 
 @app.get("/api/elo-history")
-async def get_elo_history_endpoint(season: int = Query(default=None)):
+async def get_elo_history_endpoint(season: _SeasonQuery = None):
     """Per-team Elo trajectory for a season (DB-only; never calls ESPN).
 
     Defaults to the newest POPULATED season (mirrors /api/replay and
@@ -1273,7 +1278,7 @@ async def get_elo_history_endpoint(season: int = Query(default=None)):
 
 
 @app.get("/api/replay")
-async def get_replay_endpoint(season: int = Query(default=None)):
+async def get_replay_endpoint(season: _SeasonQuery = None):
     """Game-shape archive for a season (DB-only; reads game_shapes alone — it's
     self-contained, so no join). Returns the season's games + the list of seasons
     that have data (for the page's season selector). When no season is requested,
@@ -1324,7 +1329,7 @@ async def get_replay_endpoint(season: int = Query(default=None)):
 
 
 @app.get("/api/team-style")
-async def get_team_style_endpoint(season: int = Query(default=None)):
+async def get_team_style_endpoint(season: _SeasonQuery = None):
     """Per-team play-style fingerprints for a season (DB-only). Normalizes the
     raw team_style metrics league-relative and returns axes/chips/descriptor/
     neighbors. Defaults to the newest POPULATED season (mirrors /api/replay).
@@ -1389,7 +1394,7 @@ async def get_team_style_endpoint(season: int = Query(default=None)):
 
 
 @app.get("/api/shot-making")
-async def get_shot_making_endpoint(season: int = Query(default=None)):
+async def get_shot_making_endpoint(season: _SeasonQuery = None):
     """Shot-making leaderboard (DB-only, precomputed). Ranks players by points
     added over expected (actual - xPPS).
 
@@ -1449,7 +1454,7 @@ async def get_shot_making_endpoint(season: int = Query(default=None)):
 
 
 @app.get("/api/calibration")
-async def get_calibration_endpoint(season: int = Query(default=None)):
+async def get_calibration_endpoint(season: _SeasonQuery = None):
     """Win-probability reliability for completed games (DB-only).
 
     Defaults to the newest season that actually yields calibration pairs (see
