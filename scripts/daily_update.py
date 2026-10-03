@@ -29,10 +29,6 @@ from src.data.espn_api import (
     fetch_team_style_stats,
     today_et,
 )
-from src.data.wnba_schedule import (
-    enhance_games_with_broadcasters,
-    fetch_wnba_schedule_broadcasters,
-)
 from src.db.queries import (
     delete_shot_league_avg_season,
     delete_unlisted_if_necessary_games,
@@ -278,11 +274,6 @@ def fetch_and_store_games(
     if not games:
         logger.warning("No games fetched from ESPN")
         return []
-
-    logger.info("Fetching broadcaster info from WNBA.com...")
-    today = today_et()
-    broadcasters = fetch_wnba_schedule_broadcasters(today)
-    games = enhance_games_with_broadcasters(games, broadcasters)
 
     get_cached_team_id = _make_team_id_resolver(session)
     stored = 0
