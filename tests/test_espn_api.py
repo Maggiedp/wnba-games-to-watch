@@ -322,6 +322,23 @@ def test_if_necessary_false_for_a_plain_game_note_or_no_note():
     assert _parse_event(_base_event("2026-06-30T23:00:00Z"))["if_necessary"] is False
 
 
+def test_broadcaster_is_unknown_when_espn_lists_no_broadcasts():
+    """Shape measured 2026-10-02: the semifinals are published with an empty
+    `broadcasts` list until the network is announced. Every announced game
+    in Jun/Aug/Sep 2026 listed at least one, so empty means "not announced",
+    not "League Pass"."""
+    assert _parse_event(_base_event("2026-10-04T04:00:00Z"))["broadcaster"] == ""
+
+
+def test_broadcaster_falls_back_to_league_pass_for_local_only_coverage():
+    """A game listed only on local channels is still a League Pass game."""
+    event = _base_event("2026-06-30T23:00:00Z")
+    event["competitions"][0]["broadcasts"] = [
+        {"market": "home", "names": ["Monumental Sports Network"]}
+    ]
+    assert _parse_event(event)["broadcaster"] == "League Pass"
+
+
 @pytest.mark.parametrize(
     "value",
     [None, "0.5", True, False, float("nan"), float("inf"), float("-inf"), [1.0]],

@@ -651,10 +651,18 @@ def _parse_event(event: dict) -> Optional[dict]:
 
 
 def _parse_broadcaster(comp: dict) -> str:
-    """Extract broadcaster name from competition data."""
+    """Extract broadcaster name from competition data.
+
+    Returns "" when ESPN lists no broadcasts (network not announced yet),
+    and League Pass when only non-national broadcasts are listed.
+    """
     from src.constants import BROADCASTER_NORMALIZE, Broadcasters
 
-    for broadcast in comp.get("geoBroadcasts", []) + comp.get("broadcasts", []):
+    listed = comp.get("geoBroadcasts", []) + comp.get("broadcasts", [])
+    if not listed:
+        return ""
+
+    for broadcast in listed:
         names = broadcast.get("names", [])
         media = broadcast.get("media", {}).get("shortName", "")
         for candidate in names + ([media] if media else []):

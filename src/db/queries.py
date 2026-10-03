@@ -180,8 +180,8 @@ def upsert_game(
             game.winner_id = None
             game.final_score_a = None
             game.final_score_b = None
-        if broadcaster:
-            game.broadcaster = broadcaster
+        # Always overwrite: "" (network not announced) must clear a stale value.
+        game.broadcaster = broadcaster
         # Combined TBD signal: empty `time` + explicit `time_utc=None`.
         # `time` alone preserves (transient ESPN empties; CLAUDE.md gotcha).
         explicit_tbd = time_utc is not _UNSET and time_utc is None and time == ""
