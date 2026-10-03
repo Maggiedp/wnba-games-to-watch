@@ -1568,11 +1568,12 @@ def render_player_page(session, athlete_id, season, get_baseline) -> str | None:
         # branch also covers the transient 6 AM window where a player has 100+
         # raw shots but isn't in the just-being-recomputed shot_making board yet
         # (see the known-limitation in src/api/CLAUDE.md), so a "needs 100 FGA"
-        # claim would be self-contradictory then. "Not yet ranked" is honest in
-        # both the genuinely-sub-threshold and transient cases; the zone table
-        # still renders below, so it also drops the old inaccurate "only".
-        # A finished season (same clock_season() rule the leaderboard uses)
-        # can't rank the player later, so "not yet" would mislead there.
+        # claim would be self-contradictory then. For the current season, "Not
+        # yet ranked" is honest in both the genuinely-sub-threshold and
+        # transient cases; the zone table still renders below, so it also
+        # drops the old inaccurate "only". A finished season (same
+        # clock_season() rule the leaderboard uses) has no recompute left to
+        # rank the player, so it says "Not ranked in YYYY." instead.
         if season < clock_season():
             note = f"Not ranked in {season}."
         else:
