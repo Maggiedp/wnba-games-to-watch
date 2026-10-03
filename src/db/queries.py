@@ -180,8 +180,7 @@ def upsert_game(
             game.winner_id = None
             game.final_score_a = None
             game.final_score_b = None
-        # Always overwrite: "" means ESPN has not announced the network yet,
-        # and it must clear a stale value (e.g. a pre-fix "League Pass").
+        # Always overwrite: "" (network not announced) must clear a stale value.
         game.broadcaster = broadcaster
         # Combined TBD signal: empty `time` + explicit `time_utc=None`.
         # `time` alone preserves (transient ESPN empties; CLAUDE.md gotcha).
